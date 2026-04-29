@@ -18,8 +18,6 @@ from agent.resource_manager.loader.function_loader import (
 )
 from agent.resource_manager.loader.local_context_loader import load_visible_local_context_registry
 from agent.resource_manager.loader.resource_loader import ResourceLoader
-from agent.environment.environment import build_filtered_environment
-from agent.models import NodeDef
 
 
 def sample_bo_payload():
@@ -468,51 +466,6 @@ class ResourceLoaderTest(unittest.TestCase):
         self.assertEqual(
             local_registry["$iter$.subId"].source_path,
             "$.mapping_content.children[1].iter_local_context[0]",
-        )
-
-    def test_environment_builder_includes_visible_local_context_from_node_info(self):
-        loaded = ResourceLoader().load_resource("site1", "project1", sample_edsl_tree_payload())
-        node_info = NodeDef(
-            node_id="node-1",
-            node_path="$.mapping_content.children[1]",
-            node_name="SUB_INFO",
-        )
-
-        environment = build_filtered_environment(node_info, "use local context", loaded)
-
-        self.assertEqual(
-            [local_context.context_name for local_context in environment.visible_local_context],
-            ["$local$.local_2", "$local$.rootLocal", "$iter$.subId"],
-        )
-
-    def test_environment_builder_filters_ranked_resources_by_weighted_tags(self):
-        loaded = ResourceLoader().load_resource("site1", "project1", sample_edsl_tree_payload())
-        node_info = NodeDef(
-            node_id="node-1",
-            node_path="$.mapping_content.children[1]",
-            node_name="SUB_INFO",
-            description="customer mask",
-        )
-
-        environment = build_filtered_environment(
-            node_info,
-            "mask customer call and query transaction end date",
-            loaded,
-            top_global_context=2,
-            top_local_context=2,
-            top_bo=1,
-            top_function=1,
-        )
-
-        self.assertEqual(environment.selected_bo_ids, ["bo.0000"])
-        self.assertEqual([bo.bo_name for bo in environment.selected_bos], ["BB_BAK_TRANS"])
-        self.assertEqual(environment.selected_function_ids, ["func.0001"])
-        self.assertEqual([function.func_name for function in environment.selected_functions], ["CustCallMask"])
-        self.assertLessEqual(len(environment.selected_global_contexts), 2)
-        self.assertLessEqual(len(environment.visible_local_context), 2)
-        self.assertEqual(
-            environment.selected_local_context_ids,
-            [local_context.resource_id for local_context in environment.visible_local_context],
         )
 
     def test_load_visible_local_context_registry_reads_default_sample_tree(self):

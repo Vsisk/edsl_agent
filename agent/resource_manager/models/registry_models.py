@@ -1,5 +1,5 @@
 from enum import Enum
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
@@ -90,4 +90,14 @@ class FunctionRegistry(BaseModel):
     func_class: str = Field(default="", description="Function class")
     param_list: List[ParamTypeTerm] = Field(default_factory=list, description="Parameter list")
     return_type: ReturnTypeTerm = Field(..., description="Return type")
+    tag: list[str] = Field(default_factory=list)
+
+
+class LocalContextRegistry(BaseModel):
+    resource_id: str = Field(...)
+    context_name: str = Field(...)
+    return_type: Optional[ReturnType] = None
+    annotation: str = Field(default="")
+    source_path: str = Field(default="")
+    property_type: str = "local"
     tag: list[str] = Field(default_factory=list)

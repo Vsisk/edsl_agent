@@ -65,3 +65,6 @@ class ResourceLoader:
         if not isinstance(data, dict):
             raise ValueError(f"Resource file must contain a JSON object: {file_path}")
         return data
+
+
+resource_loader = ResourceLoader()

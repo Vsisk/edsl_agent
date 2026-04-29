@@ -1,5 +1,6 @@
 from typing import Any, Dict, List
 
+from agent.resource_manager.loader.tag_utils import build_tags
 from agent.resource_manager.models import BoRegistry
 
 
@@ -14,6 +15,7 @@ def load_bo_registry_from_json(payload: Dict[str, Any]) -> List[BoRegistry]:
                 bo_desc=bo_payload.get("bo_desc") or "",
                 property_list=bo_payload.get("property_list") or [],
                 naming_sql_list=_collect_naming_sql_list(bo_payload),
+                tag=build_tags(bo_payload.get("bo_name"), bo_payload.get("bo_desc")),
             )
         )
 

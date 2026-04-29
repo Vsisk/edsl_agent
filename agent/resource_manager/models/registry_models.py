@@ -67,6 +67,7 @@ class BoRegistry(BaseModel):
     bo_desc: str = Field(..., description="BO description")
     property_list: List[PropertyTerm] = Field(..., description="Property list")
     naming_sql_list: List[NamingSqlDefTerm] = Field(default_factory=list, description="Named SQL list")
+    tag: list[str] = Field(default_factory=list)
 
 
 class ParamTypeTerm(BaseModel):
@@ -89,3 +90,4 @@ class FunctionRegistry(BaseModel):
     func_class: str = Field(default="", description="Function class")
     param_list: List[ParamTypeTerm] = Field(default_factory=list, description="Parameter list")
     return_type: ReturnTypeTerm = Field(..., description="Return type")
+    tag: list[str] = Field(default_factory=list)

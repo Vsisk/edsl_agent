@@ -1,5 +1,6 @@
 from typing import Any, Dict, List
 
+from agent.resource_manager.loader.tag_utils import build_tags
 from agent.resource_manager.models import FunctionRegistry
 
 
@@ -26,6 +27,7 @@ def load_function_registry_from_json(payload: Dict[str, Any]) -> List[FunctionRe
                     func_class=class_name,
                     param_list=function_payload.get("param_list") or [],
                     return_type=function_payload.get("return_type") or DEFAULT_RETURN_TYPE,
+                    tag=build_tags(function_payload.get("func_name"), function_payload.get("func_desc")),
                 )
             )
 

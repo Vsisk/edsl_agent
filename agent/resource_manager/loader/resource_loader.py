@@ -5,7 +5,8 @@ from typing import Dict, Any
 from agent.resource_manager.loader.bo_loader import load_bo_registry_by_json
 from agent.resource_manager.loader.context_loader import load_context_registry_by_json
 from agent.resource_manager.loader.function_loader import load_function_registry_by_json
-from agent.resource_manager.models import BoRegistry, ContextRegistry, FunctionRegistry
+from agent.resource_manager.loader.local_context_loader import load_visible_local_context_registry
+from agent.resource_manager.models import BoRegistry, ContextRegistry, FunctionRegistry, LocalContextRegistry
 
 
 @dataclass(slots=True)
@@ -14,6 +15,12 @@ class LoadedResource:
     bo_registry: Dict[str, BoRegistry]
     function_registry: Dict[str, FunctionRegistry]
     edsl_tree: Dict[str, Any]
+
+    def get_visible_local_context_registry(self, node_path: str) -> Dict[str, LocalContextRegistry]:
+        return {
+            local_context.context_name: local_context
+            for local_context in load_visible_local_context_registry(self.edsl_tree, node_path)
+        }
 
 
 class ResourceLoader:

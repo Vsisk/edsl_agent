@@ -27,7 +27,7 @@ def load_function_registry_from_json(payload: Dict[str, Any]) -> List[FunctionRe
                     func_class=class_name,
                     param_list=function_payload.get("param_list") or [],
                     return_type=function_payload.get("return_type") or DEFAULT_RETURN_TYPE,
-                    tag=build_tags(function_payload.get("func_name"), function_payload.get("func_desc")),
+                    tag=_build_function_tags(function_payload, class_name),
                 )
             )
 
@@ -48,3 +48,27 @@ def _iter_function_classes(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
             if isinstance(item, dict):
                 class_payloads.append(item)
     return class_payloads
+
+
+def _build_function_tags(function_payload: Dict[str, Any], class_name: str) -> List[str]:
+    values: List[str | None] = [
+        function_payload.get("func_name"),
+        function_payload.get("func_desc"),
+        class_name,
+    ]
+
+    for param_payload in function_payload.get("param_list") or []:
+        if not isinstance(param_payload, dict):
+            continue
+        values.extend(
+            [
+                param_payload.get("param_name"),
+                param_payload.get("data_type_name"),
+            ]
+        )
+
+    return_type = function_payload.get("return_type") or DEFAULT_RETURN_TYPE
+    if isinstance(return_type, dict):
+        values.append(return_type.get("data_type_name"))
+
+    return build_tags(*values)

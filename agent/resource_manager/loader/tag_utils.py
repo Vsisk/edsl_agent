@@ -25,6 +25,12 @@ STOP_WORDS = {
 TOKEN_PATTERN = re.compile(r"[A-Z]+(?=[A-Z][a-z]|$)|[A-Z]?[a-z]+|[A-Z]+|\d+|[\u4e00-\u9fff]+")
 
 
+def tokenize_text(text: str | None, filter_stop_words: bool = True) -> List[str]:
+    if not text:
+        return []
+    return _extract_tokens(str(text), filter_stop_words=filter_stop_words)
+
+
 def build_tags(*values: str | None) -> List[str]:
     tags: List[str] = []
     for index, value in enumerate(values):
@@ -35,9 +41,11 @@ def build_tags(*values: str | None) -> List[str]:
             continue
         if index == 0:
             _append_unique(tags, text)
-            _append_unique_many(tags, _extract_tokens(text, filter_stop_words=False))
+            _append_unique_many(tags, tokenize_text(text, filter_stop_words=False))
         else:
-            _append_unique_many(tags, _extract_tokens(text, filter_stop_words=True))
+            if not re.search(r"\s", text):
+                _append_unique(tags, text)
+            _append_unique_many(tags, tokenize_text(text, filter_stop_words=True))
     return tags
 
 

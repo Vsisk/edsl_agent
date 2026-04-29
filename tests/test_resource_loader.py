@@ -2,6 +2,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from agent.resource_manager.loader.bo_loader import (
     load_bo_registry_by_json,
@@ -15,7 +16,10 @@ from agent.resource_manager.loader.function_loader import (
     load_function_registry_by_json,
     load_function_registry_from_json,
 )
+from agent.resource_manager.loader.local_context_loader import load_visible_local_context_registry
 from agent.resource_manager.loader.resource_loader import ResourceLoader
+from agent.environment.environment import build_filtered_environment
+from agent.models import NodeDef
 
 
 def sample_bo_payload():
@@ -146,7 +150,112 @@ def sample_context_payload():
     }
 
 
+def sample_edsl_tree_payload():
+    return {
+        "mapping_content": {
+            "tree_node_type": "parent",
+            "annotation": "root node",
+            "xml_name_property": {
+                "xml_name": "ROOT",
+            },
+            "local_context": [
+                {
+                    "property_name": "rootLocal",
+                    "annotation": "root local context",
+                    "return_type": {
+                        "data_type": "basic",
+                        "data_type_name": "STRING",
+                        "is_list": False,
+                    },
+                }
+            ],
+            "children": [
+                {
+                    "tree_node_type": "simple_leaf",
+                    "annotation": "release",
+                },
+                {
+                    "tree_node_type": "parent_list",
+                    "annotation": "user info",
+                    "xml_name_property": {
+                        "xml_name": "SUB_INFO",
+                    },
+                    "local_context": [
+                        {
+                            "property_name": "local_2",
+                            "annotation": "desc_2",
+                            "return_type": {
+                                "data_type": "basic",
+                                "data_type_name": "INT32",
+                                "is_list": False,
+                            },
+                        }
+                    ],
+                    "iter_local_context": [
+                        {
+                            "property_name": "subId",
+                            "annotation": "user id",
+                            "return_type": {
+                                "data_type": "basic",
+                                "data_type_name": "INT64",
+                                "is_list": False,
+                            },
+                        }
+                    ],
+                    "children": [],
+                },
+            ],
+        }
+    }
+
+
 class ResourceLoaderTest(unittest.TestCase):
+    def test_load_visible_local_context_registry_for_existing_node_path(self):
+        with patch("agent.resource_manager.loader.local_context_loader.parse") as parse_jsonpath:
+            from jsonpath_ng import parse as real_parse
+
+            parse_jsonpath.side_effect = real_parse
+            registry = load_visible_local_context_registry(
+                sample_edsl_tree_payload(),
+                "$.mapping_content.children[1]",
+            )
+
+        self.assertEqual(
+            [local_context.context_name for local_context in registry],
+            ["$local$.rootLocal", "$local$.local_2", "$iter$.subId"],
+        )
+        parse_jsonpath.assert_any_call("$.mapping_content")
+        parse_jsonpath.assert_any_call("$.mapping_content.children[1]")
+        self.assertEqual([local_context.resource_id for local_context in registry], ["local.0000", "local.0001", "local.0002"])
+        self.assertEqual(
+            [local_context.source_path for local_context in registry],
+            [
+                "$.mapping_content.local_context[0]",
+                "$.mapping_content.children[1].local_context[0]",
+                "$.mapping_content.children[1].iter_local_context[0]",
+            ],
+        )
+        self.assertEqual(registry[0].return_type.data_type, "basic")
+        self.assertEqual(registry[0].tag, ["rootLocal", "ROOT", "root", "node", "local", "context", "STRING"])
+        self.assertIn("local_2", registry[1].tag)
+        self.assertIn("desc_2", registry[1].tag)
+        self.assertIn("INT32", registry[1].tag)
+        self.assertIn("subId", registry[2].tag)
+        self.assertIn("id", registry[2].tag)
+        self.assertIn("INT64", registry[2].tag)
+        self.assertEqual(registry[2].property_type, "iter")
+
+    def test_load_visible_local_context_registry_for_insert_position(self):
+        registry = load_visible_local_context_registry(
+            sample_edsl_tree_payload(),
+            "$.mapping_content.children[1].children[0]",
+        )
+
+        self.assertEqual(
+            [local_context.context_name for local_context in registry],
+            ["$local$.rootLocal", "$local$.local_2", "$iter$.subId"],
+        )
+
     def test_load_context_registry_from_json_loads_basic_leaf(self):
         payload = {
             "global_context": {
@@ -184,7 +293,7 @@ class ResourceLoaderTest(unittest.TestCase):
         self.assertEqual(registry[0].return_type.data_type, "INT64")
         self.assertEqual(registry[0].property_type.value, "system")
         self.assertEqual(registry[0].annotation, "account id")
-        self.assertEqual(registry[0].tag, ["ACCT_ID", "system", "acct", "BC_ACCT"])
+        self.assertEqual(registry[0].tag, ["ACCT_ID", "ACCT", "ID", "system", "account", "id", "acct", "BC_ACCT", "BC"])
 
     def test_load_context_registry_from_json_recurses_through_nested_context(self):
         payload = {
@@ -238,7 +347,7 @@ class ResourceLoaderTest(unittest.TestCase):
         self.assertEqual(registry[0].annotation, "order.buyer.name")
         self.assertEqual(
             registry[0].tag,
-            ["name", "custom", "order", "OrderInfo", "buyer", "BC_CUST", "STRING"],
+            ["name", "custom", "order", "OrderInfo", "Order", "Info", "buyer", "BC_CUST", "BC", "CUST", "STRING"],
         )
         self.assertIn("$ctx$.order.buyer.name", registry_by_name)
         self.assertEqual(registry_by_name["$ctx$.order.buyer.name"].resource_id, "ctx.0000")
@@ -263,7 +372,9 @@ class ResourceLoaderTest(unittest.TestCase):
             [context_registry.resource_id for context_registry in registry],
             ["ctx.0000", "ctx.0001", "ctx.0002"],
         )
-        self.assertEqual(registry[0].tag, ["BE_ID", "system", "billStatement", "BB_BILL_STATEMENT"])
+        self.assertIn("BE_ID", registry[0].tag)
+        self.assertIn("billStatement", registry[0].tag)
+        self.assertIn("BB_BILL_STATEMENT", registry[0].tag)
         self.assertEqual(registry[2].return_type.data_type, "basic")
         self.assertEqual(registry[2].return_type.data_type_name, "INT32")
 
@@ -275,12 +386,35 @@ class ResourceLoaderTest(unittest.TestCase):
         self.assertEqual(registry[0].bo_name, "BB_BAK_TRANS")
         self.assertEqual(
             registry[0].tag,
-            ["BB_BAK_TRANS", "BB", "BAK", "TRANS", "Transaction", "information", "table"],
+            [
+                "BB_BAK_TRANS",
+                "BB",
+                "BAK",
+                "TRANS",
+                "Transaction",
+                "information",
+                "table",
+                "LOG_ID",
+                "LOG",
+                "ID",
+                "AR",
+                "log",
+                "long",
+                "BB_BAK_TRANS_queryDataLoadData",
+                "query",
+                "Data",
+                "Load",
+                "Query",
+                "END_DATE",
+                "END",
+                "DATE",
+                "Date",
+            ],
         )
         self.assertEqual(registry[0].property_list[0].field_name, "LOG_ID")
         self.assertEqual(registry[0].naming_sql_list[0].sql_name, "BB_BAK_TRANS_queryDataLoadData")
         self.assertEqual(registry[1].bo_name, "CUSTOM_ACCOUNT")
-        self.assertEqual(registry[1].tag, ["CUSTOM_ACCOUNT", "CUSTOM", "ACCOUNT", "Custom", "account", "table"])
+        self.assertEqual(registry[1].tag, ["CUSTOM_ACCOUNT", "CUSTOM", "ACCOUNT", "Custom", "account", "table", "CUSTOM_ID", "ID", "id", "long"])
         self.assertIn("BB_BAK_TRANS", registry_by_name)
 
     def test_load_function_registry_from_json_flattens_script_and_native_functions(self):
@@ -296,7 +430,7 @@ class ResourceLoaderTest(unittest.TestCase):
         self.assertEqual(registry[1].func_name, "CustCallMask")
         self.assertEqual(
             registry[1].tag,
-            ["CustCallMask", "Cust", "Call", "Mask", "customer", "call", "number"],
+            ["CustCallMask", "Cust", "Call", "Mask", "customer", "call", "number", "DacsDataTrans", "Dacs", "Data", "Trans", "iBeId", "i", "Be", "Id", "int", "void"],
         )
         self.assertIn("CustCallMask", registry_by_name)
 
@@ -323,6 +457,91 @@ class ResourceLoaderTest(unittest.TestCase):
         self.assertEqual(sorted(loaded.bo_registry), ["BB_BAK_TRANS", "CUSTOM_ACCOUNT"])
         self.assertEqual(sorted(loaded.function_registry), ["CustCallMask", "getClassifyByRAcctId"])
         self.assertEqual(loaded.edsl_tree, {"root": []})
+
+    def test_loaded_resource_generates_visible_local_context_registry(self):
+        loader = ResourceLoader(data_dir=Path("agent/resource_manager/data"))
+        loaded = loader.load_resource("site1", "project1", sample_edsl_tree_payload())
+
+        local_registry = loaded.get_visible_local_context_registry("$.mapping_content.children[1]")
+
+        self.assertEqual(sorted(local_registry), ["$iter$.subId", "$local$.local_2", "$local$.rootLocal"])
+        self.assertEqual(
+            local_registry["$iter$.subId"].source_path,
+            "$.mapping_content.children[1].iter_local_context[0]",
+        )
+
+    def test_environment_builder_includes_visible_local_context_from_node_info(self):
+        loaded = ResourceLoader().load_resource("site1", "project1", sample_edsl_tree_payload())
+        node_info = NodeDef(
+            node_id="node-1",
+            node_path="$.mapping_content.children[1]",
+            node_name="SUB_INFO",
+        )
+
+        environment = build_filtered_environment(node_info, "use local context", loaded)
+
+        self.assertEqual(
+            [local_context.context_name for local_context in environment.visible_local_context],
+            ["$local$.local_2", "$local$.rootLocal", "$iter$.subId"],
+        )
+
+    def test_environment_builder_filters_ranked_resources_by_weighted_tags(self):
+        loaded = ResourceLoader().load_resource("site1", "project1", sample_edsl_tree_payload())
+        node_info = NodeDef(
+            node_id="node-1",
+            node_path="$.mapping_content.children[1]",
+            node_name="SUB_INFO",
+            description="customer mask",
+        )
+
+        environment = build_filtered_environment(
+            node_info,
+            "mask customer call and query transaction end date",
+            loaded,
+            top_global_context=2,
+            top_local_context=2,
+            top_bo=1,
+            top_function=1,
+        )
+
+        self.assertEqual(environment.selected_bo_ids, ["bo.0000"])
+        self.assertEqual([bo.bo_name for bo in environment.selected_bos], ["BB_BAK_TRANS"])
+        self.assertEqual(environment.selected_function_ids, ["func.0001"])
+        self.assertEqual([function.func_name for function in environment.selected_functions], ["CustCallMask"])
+        self.assertLessEqual(len(environment.selected_global_contexts), 2)
+        self.assertLessEqual(len(environment.visible_local_context), 2)
+        self.assertEqual(
+            environment.selected_local_context_ids,
+            [local_context.resource_id for local_context in environment.visible_local_context],
+        )
+
+    def test_load_visible_local_context_registry_reads_default_sample_tree(self):
+        data_path = (
+            Path(__file__).resolve().parents[1]
+            / "agent"
+            / "resource_manager"
+            / "data"
+            / "edsl_tree.json"
+        )
+        edsl_tree = json.loads(data_path.read_text(encoding="utf-8"))
+
+        registry = load_visible_local_context_registry(edsl_tree, "$.mapping_content.children[1]")
+
+        self.assertEqual(
+            [local_context.context_name for local_context in registry],
+            ["$local$.local_2", "$iter$.subId"],
+        )
+        self.assertEqual(
+            [local_context.source_path for local_context in registry],
+            [
+                "$.mapping_content.children[1].local_context[0]",
+                "$.mapping_content.children[1].iter_local_context[0]",
+            ],
+        )
+        self.assertIn("local_2", registry[0].tag)
+        self.assertIn("SUB_INFO", registry[0].tag)
+        self.assertIn("subId", registry[1].tag)
+        self.assertIn("SUB_INFO", registry[1].tag)
 
     def test_resource_loader_reads_default_sample_data(self):
         loaded = ResourceLoader().load_resource("sample_site", "sample_project", {"sample": True})

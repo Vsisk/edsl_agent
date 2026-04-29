@@ -1,5 +1,6 @@
 from typing import Any, Dict, Iterable, List, Optional
 
+from agent.resource_manager.loader.tag_utils import build_tags
 from agent.resource_manager.models import ContextRegistry
 
 
@@ -59,7 +60,7 @@ def _collect_context_registry(
         current_tag_parts.append(str(data_type_name))
 
     if return_type and not _is_expandable(data_type):
-        tag_parts_for_leaf = [property_name, property_type, *tag_parts]
+        tag_parts_for_leaf = [property_name, property_type, annotation, *tag_parts]
         if data_type_name:
             tag_parts_for_leaf.append(str(data_type_name))
         registry.append(
@@ -69,7 +70,7 @@ def _collect_context_registry(
                 return_type=return_type,
                 property_type=property_type or "custom",
                 annotation=".".join(current_annotation_parts),
-                tag=_dedupe([str(tag) for tag in tag_parts_for_leaf if tag]),
+                tag=build_tags(*[str(tag) for tag in tag_parts_for_leaf if tag]),
             )
         )
         return

@@ -1,4 +1,6 @@
 import unittest
+import json
+from pathlib import Path
 
 from agent.resource_manager.loader.context_loader import (
     load_context_registry_by_json,
@@ -102,6 +104,27 @@ class ContextLoaderTest(unittest.TestCase):
         )
         self.assertIn("$ctx$.order.buyer.name", registry_by_name)
         self.assertEqual(registry_by_name["$ctx$.order.buyer.name"].resource_id, "ctx.0000")
+
+    def test_loads_default_sample_context_data(self):
+        data_path = (
+            Path(__file__).resolve().parents[1]
+            / "agent"
+            / "resource_manager"
+            / "data"
+            / "context_definition.json"
+        )
+        payload = json.loads(data_path.read_text(encoding="utf-8"))
+
+        registry = load_context_registry_from_json(payload)
+
+        self.assertEqual(
+            [context_registry.context_name for context_registry in registry],
+            ["$ctx$.billStatement.BE_ID", "$ctx$.billStatement.CUST_ID", "$ctx$.bill_id"],
+        )
+        self.assertEqual([context_registry.resource_id for context_registry in registry], ["ctx.0000", "ctx.0001", "ctx.0002"])
+        self.assertEqual(registry[0].tag, ["BE_ID", "system", "billStatement", "BB_BILL_STATEMENT"])
+        self.assertEqual(registry[2].return_type.data_type, "basic")
+        self.assertEqual(registry[2].return_type.data_type_name, "INT32")
 
 
 if __name__ == "__main__":

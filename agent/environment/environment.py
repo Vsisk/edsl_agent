@@ -1,7 +1,8 @@
 from dataclasses import dataclass, field
 from difflib import SequenceMatcher
-from typing import List
+from typing import Any, List
 
+from agent.environment.resource_filter import LLMResourceFilter
 from agent.models import NodeDef
 from agent.resource_manager.loader.resource_loader import LoadedResource
 from agent.resource_manager.loader.tag_utils import tokenize_text
@@ -44,6 +45,8 @@ SUBSTRING_MATCH_SCORE = 0.5
 FUZZY_MATCH_SCORE = 0.3
 FUZZY_MATCH_THRESHOLD = 0.8
 MIN_PARTIAL_MATCH_LENGTH = 3
+CANDIDATE_MULTIPLIER = 5
+MAX_CANDIDATES_PER_GROUP = 30
 
 
 def build_filtered_environment(
@@ -54,29 +57,50 @@ def build_filtered_environment(
     top_local_context: int = 5,
     top_bo: int = 5,
     top_function: int = 5,
+    llm_resource_filter: Any | None = None,
 ) -> FilteredEnvironment:
     visible_local_context = list(registry.get_visible_local_context_registry(node_info.node_path).values())
     weighted_tokens = _build_weighted_tokens(node_info, user_query)
-    selected_global_contexts = _select_top_resources(
-        list(registry.context_registry.values()),
-        weighted_tokens,
-        top_global_context,
+    limits = {
+        "global_context": max(top_global_context, 0),
+        "local_context": max(top_local_context, 0),
+        "bo": max(top_bo, 0),
+        "function": max(top_function, 0),
+    }
+    candidates = {
+        "global_context": _select_top_resources(
+            list(registry.context_registry.values()),
+            weighted_tokens,
+            _candidate_limit(top_global_context),
+        ),
+        "local_context": _select_top_resources(
+            visible_local_context,
+            weighted_tokens,
+            _candidate_limit(top_local_context),
+        ),
+        "bo": _select_top_resources(
+            list(registry.bo_registry.values()),
+            weighted_tokens,
+            _candidate_limit(top_bo),
+        ),
+        "function": _select_top_resources(
+            list(registry.function_registry.values()),
+            weighted_tokens,
+            _candidate_limit(top_function),
+        ),
+    }
+
+    selected_by_group = _apply_llm_filter(
+        node_info=node_info,
+        user_query=user_query,
+        candidates=candidates,
+        limits=limits,
+        llm_resource_filter=llm_resource_filter,
     )
-    selected_local_contexts = _select_top_resources(
-        visible_local_context,
-        weighted_tokens,
-        top_local_context,
-    )
-    selected_bos = _select_top_resources(
-        list(registry.bo_registry.values()),
-        weighted_tokens,
-        top_bo,
-    )
-    selected_functions = _select_top_resources(
-        list(registry.function_registry.values()),
-        weighted_tokens,
-        top_function,
-    )
+    selected_global_contexts = selected_by_group["global_context"]
+    selected_local_contexts = selected_by_group["local_context"]
+    selected_bos = selected_by_group["bo"]
+    selected_functions = selected_by_group["function"]
 
     return FilteredEnvironment(
         selected_global_context_ids=[context.resource_id for context in selected_global_contexts],
@@ -88,6 +112,75 @@ def build_filtered_environment(
         selected_bos=selected_bos,
         selected_functions=selected_functions,
     )
+
+
+def _candidate_limit(top_n: int) -> int:
+    if top_n <= 0:
+        return 0
+    return min(top_n * CANDIDATE_MULTIPLIER, MAX_CANDIDATES_PER_GROUP)
+
+
+def _apply_llm_filter(
+    *,
+    node_info: NodeDef,
+    user_query: str,
+    candidates: dict[str, list],
+    limits: dict[str, int],
+    llm_resource_filter: Any | None,
+) -> dict[str, list]:
+    selections = {group: resources[: limits[group]] for group, resources in candidates.items()}
+    if not any(candidates.values()):
+        return selections
+
+    filter_service = llm_resource_filter
+    if filter_service is None:
+        filter_service = LLMResourceFilter()
+        if not filter_service.is_usable:
+            return selections
+
+    try:
+        llm_result = filter_service.filter_resources(
+            node_info=node_info,
+            user_query=user_query,
+            candidates=candidates,
+            limits=limits,
+        )
+    except Exception:
+        return selections
+
+    return {
+        group: _select_from_llm_result(candidates[group], llm_result.get(group) or [], limits[group])
+        for group in candidates
+    }
+
+
+def _select_from_llm_result(candidates: list, llm_items: list, limit: int) -> list:
+    if limit <= 0:
+        return []
+
+    candidates_by_id = {resource.resource_id: resource for resource in candidates}
+    selected: list = []
+    selected_ids: set[str] = set()
+    for item in llm_items:
+        if isinstance(item, str):
+            resource_id = item
+        elif isinstance(item, dict):
+            resource_id = str(item.get("resource_id") or "")
+        else:
+            continue
+        if resource_id in candidates_by_id and resource_id not in selected_ids:
+            selected.append(candidates_by_id[resource_id])
+            selected_ids.add(resource_id)
+        if len(selected) >= limit:
+            return selected
+
+    for resource in candidates:
+        if resource.resource_id not in selected_ids:
+            selected.append(resource)
+        if len(selected) >= limit:
+            return selected
+
+    return selected
 
 
 def _build_weighted_tokens(node_info: NodeDef, user_query: str) -> dict[str, float]:

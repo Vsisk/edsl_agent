@@ -5,6 +5,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 from agent.resource_manager.loader.bo_loader import (
+    _collect_naming_sql_list,
+    _collect_property_list,
     load_bo_registry_by_json,
     load_bo_registry_from_json,
 )
@@ -18,6 +20,7 @@ from agent.resource_manager.loader.function_loader import (
 )
 from agent.resource_manager.loader.local_context_loader import load_visible_local_context_registry
 from agent.resource_manager.loader.resource_loader import ResourceLoader
+from agent.resource_manager.models import NamingSqlDefTerm, ParamTerm, PropertyTerm
 
 
 def sample_bo_payload():
@@ -410,10 +413,32 @@ class ResourceLoaderTest(unittest.TestCase):
             ],
         )
         self.assertEqual(registry[0].property_list[0].field_name, "LOG_ID")
+        self.assertIsInstance(registry[0].property_list[0], PropertyTerm)
+        self.assertIsInstance(registry[0].naming_sql_list[0], NamingSqlDefTerm)
+        self.assertIsInstance(registry[0].naming_sql_list[0].param_list[0], ParamTerm)
         self.assertEqual(registry[0].naming_sql_list[0].sql_name, "BB_BAK_TRANS_queryDataLoadData")
         self.assertEqual(registry[1].bo_name, "CUSTOM_ACCOUNT")
         self.assertEqual(registry[1].tag, ["CUSTOM_ACCOUNT", "CUSTOM", "ACCOUNT", "Custom", "account", "table", "CUSTOM_ID", "ID", "id", "long"])
         self.assertIn("BB_BAK_TRANS", registry_by_name)
+
+    def test_collect_naming_sql_list_normalizes_terms(self):
+        bo_payload = sample_bo_payload()["sys_bo_list"][0]
+
+        naming_sql_list = _collect_naming_sql_list(bo_payload)
+
+        self.assertEqual(len(naming_sql_list), 1)
+        self.assertIsInstance(naming_sql_list[0], NamingSqlDefTerm)
+        self.assertIsInstance(naming_sql_list[0].param_list[0], ParamTerm)
+        self.assertEqual(naming_sql_list[0].sql_name, "BB_BAK_TRANS_queryDataLoadData")
+
+    def test_collect_property_list_normalizes_terms(self):
+        bo_payload = sample_bo_payload()["sys_bo_list"][0]
+
+        property_list = _collect_property_list(bo_payload)
+
+        self.assertEqual(len(property_list), 1)
+        self.assertIsInstance(property_list[0], PropertyTerm)
+        self.assertEqual(property_list[0].field_name, "LOG_ID")
 
     def test_load_function_registry_from_json_flattens_script_and_native_functions(self):
         registry = load_function_registry_from_json(sample_function_payload())

@@ -1,6 +1,7 @@
 import json
 from typing import Any
 
+from agent.llm.generate_by_llm import generate_by_llm
 from agent.llm.llm_client import LLMClient
 from agent.llm.prompt_manager import PromptManager
 from agent.models import NodeDef
@@ -33,14 +34,17 @@ class LLMResourceFilter:
         if not self.is_usable:
             return {}
 
-        prompt = self.prompt_manager.render(
-            "resource_filter",
+        response = generate_by_llm(
+            prompt_template="resource_filter",
+            llm_name="base",
+            lang="zh",
+            prompt_manager=self.prompt_manager,
+            client=self.client,
             user_requirement=user_query,
             node_info_json=_dump_json(_summarize_node(node_info)),
             limits_json=_dump_json(limits),
             candidates_json=_dump_json(_summarize_candidates(candidates)),
         )
-        response = self.client.complete_json(prompt)
         return _normalize_response(response)
 
 

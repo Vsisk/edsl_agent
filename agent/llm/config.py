@@ -10,21 +10,35 @@ class OpenAISettings:
     enabled: bool
     api_key: str
     base_url: str | None
-    model: str
+    base_model: str
+    vl_model: str
     timeout_seconds: float
 
     @property
     def is_usable(self) -> bool:
         return self.enabled and bool(self.api_key)
 
+    @property
+    def model(self) -> str:
+        return self.base_model
+
+    def model_for(self, llm_name: str) -> str:
+        if llm_name == "base":
+            return self.base_model
+        if llm_name == "vl":
+            return self.vl_model
+        raise ValueError(f"Unsupported llm_name: {llm_name}")
+
 
 def load_openai_settings(env_path: str | Path | None = None) -> OpenAISettings:
     values = _read_env_file(Path(env_path) if env_path else PROJECT_ROOT / ".env")
+    base_model = values.get("OPENAI_BASE_MODEL") or values.get("OPENAI_MODEL", "qwen3.5-35b-a3b")
     return OpenAISettings(
-        enabled=_as_bool(values.get("ENABLE_LLM_RESOURCE_FILTER", "true")),
+        enabled=_as_bool(values.get("ENABLE_LLM", values.get("ENABLE_LLM_RESOURCE_FILTER", "true"))),
         api_key=values.get("OPENAI_API_KEY", ""),
         base_url=values.get("OPENAI_BASE_URL") or None,
-        model=values.get("OPENAI_MODEL", "qwen3.5-35b-a3b"),
+        base_model=base_model,
+        vl_model=values.get("OPENAI_VL_MODEL", base_model),
         timeout_seconds=_as_float(values.get("OPENAI_TIMEOUT_SECONDS"), default=30.0),
     )
 

@@ -38,3 +38,6 @@ class PromptManager:
         if self._prompts is None:
             self._prompts = json.loads(self.prompt_path.read_text(encoding="utf-8"))
         return self._prompts
+
+
+prompt_manager = PromptManager()

@@ -1,3 +1,3 @@
-from agent.environment.resource_filter import LLMResourceFilter
+from agent.llm.generate_by_llm import generate_by_llm
 
-__all__ = ["LLMResourceFilter"]
+__all__ = ["generate_by_llm"]

@@ -2,7 +2,7 @@ from pathlib import Path
 import unittest
 
 from agent.resource_manager import models
-from agent.resource_manager.models.registry_models import (
+from agent.resource_manager.loader.registry_models import (
     BoRegistry,
     ContextRegistry,
     DataTypeEnum,

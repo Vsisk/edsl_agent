@@ -6,7 +6,7 @@ from agent.resource_manager.loader.bo_loader import load_bo_registry_by_json
 from agent.resource_manager.loader.context_loader import load_context_registry_by_json
 from agent.resource_manager.loader.function_loader import load_function_registry_by_json
 from agent.resource_manager.loader.local_context_loader import load_visible_local_context_registry
-from agent.resource_manager.models import BoRegistry, ContextRegistry, FunctionRegistry, LocalContextRegistry
+from agent.resource_manager.loader.registry_models import BoRegistry, ContextRegistry, FunctionRegistry, LocalContextRegistry
 
 
 @dataclass(slots=True)

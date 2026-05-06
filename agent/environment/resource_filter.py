@@ -3,7 +3,6 @@ from typing import Any
 
 from agent.llm.generate_by_llm import generate_by_llm
 from agent.llm.llm_client import LLMClient
-from agent.llm.prompt_manager import PromptManager
 from agent.models import NodeDef
 
 
@@ -14,10 +13,8 @@ class LLMResourceFilter:
     def __init__(
         self,
         client: LLMClient | None = None,
-        prompt_manager: PromptManager | None = None,
     ):
         self.client = client or LLMClient()
-        self.prompt_manager = prompt_manager or PromptManager()
 
     @property
     def is_usable(self) -> bool:
@@ -38,7 +35,6 @@ class LLMResourceFilter:
             prompt_template="resource_filter",
             llm_name="base",
             lang="zh",
-            prompt_manager=self.prompt_manager,
             client=self.client,
             user_requirement=user_query,
             node_info_json=_dump_json(_summarize_node(node_info)),

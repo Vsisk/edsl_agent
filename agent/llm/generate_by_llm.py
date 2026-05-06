@@ -2,7 +2,7 @@ from typing import Any
 
 from agent.llm.llm_client import LLMClient
 from agent.llm.llm_post_processor import parse_json_response
-from agent.llm.prompt_manager import prompt_manager
+from agent.llm.prompt_manager import prompt_manager as default_prompt_manager
 
 
 def generate_by_llm(
@@ -17,7 +17,7 @@ def generate_by_llm(
     if not llm_client.is_usable:
         raise RuntimeError("LLM settings are not usable")
 
-    manager = prompt_manager
+    manager = default_prompt_manager
     prompt_variables = dict(kwargs)
     image_base64 = prompt_variables.pop("image_base64", None)
     image_mime_type = prompt_variables.pop("image_mime_type", "image/png")

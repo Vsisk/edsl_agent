@@ -9,9 +9,21 @@ PLACEHOLDER_PATTERN = re.compile(r"{{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*}}")
 
 
 class PromptManager:
+    _default_instance: "PromptManager | None" = None
+
+    def __new__(cls, prompt_path: str | Path | None = None):
+        if prompt_path is not None:
+            return super().__new__(cls)
+        if cls._default_instance is None:
+            cls._default_instance = super().__new__(cls)
+        return cls._default_instance
+
     def __init__(self, prompt_path: str | Path | None = None):
+        if prompt_path is None and getattr(self, "_initialized", False):
+            return
         self.prompt_path = Path(prompt_path) if prompt_path else PROJECT_ROOT / "prompt.json"
         self._prompts: dict | None = None
+        self._initialized = True
 
     def render(self, prompt_key: str, lang: str = "zh", **variables: str) -> str:
         template = self._get_template(prompt_key, lang)

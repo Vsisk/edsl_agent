@@ -6,7 +6,7 @@ from agent.environment.resource_filter import LLMResourceFilter
 from agent.models import NodeDef
 from agent.resource_manager.loader.resource_loader import LoadedResource
 from agent.resource_manager.loader.tag_utils import tokenize_text
-from agent.resource_manager.models.registry_models import (
+from agent.resource_manager.loader.registry_models import (
     BoRegistry,
     ContextRegistry,
     FunctionRegistry,

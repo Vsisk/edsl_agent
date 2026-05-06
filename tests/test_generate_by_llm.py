@@ -4,15 +4,7 @@ from tempfile import TemporaryDirectory
 
 from agent.llm.config import load_openai_settings
 from agent.llm.generate_by_llm import generate_by_llm
-
-
-class FakePromptManager:
-    def __init__(self):
-        self.calls = []
-
-    def render(self, prompt_key: str, lang: str = "zh", **variables: str) -> str:
-        self.calls.append((prompt_key, lang, variables))
-        return f"{prompt_key}:{lang}:{variables['user_query']}"
+from agent.llm.prompt_manager import PromptManager, prompt_manager
 
 
 class FakeClient:
@@ -34,36 +26,39 @@ class FakeSettings:
 
 
 class GenerateByLLMTest(unittest.TestCase):
+    def setUp(self):
+        self.original_prompts = prompt_manager._prompts
+        prompt_manager._prompts = {
+            "resource_filter": {"zh": "resource_filter:zh:{{user_query}}"},
+            "image_extract": {"zh": "image_extract:zh:{{user_query}}"},
+        }
+
+    def tearDown(self):
+        prompt_manager._prompts = self.original_prompts
+
     def test_base_llm_renders_template_and_returns_dict(self):
-        prompt_manager = FakePromptManager()
         client = FakeClient('{"selected": ["ctx.1"]}')
 
         result = generate_by_llm(
             prompt_template="resource_filter",
             llm_name="base",
             lang="zh",
-            prompt_manager=prompt_manager,
             client=client,
             user_query="mask phone",
         )
 
         self.assertEqual(result, {"selected": ["ctx.1"]})
-        self.assertEqual(prompt_manager.calls[0][0], "resource_filter")
-        self.assertEqual(prompt_manager.calls[0][1], "zh")
-        self.assertEqual(prompt_manager.calls[0][2], {"user_query": "mask phone"})
         self.assertEqual(client.calls[0]["llm_name"], "base")
         self.assertEqual(client.calls[0]["model"], "base-model")
         self.assertEqual(client.calls[0]["prompt"], "resource_filter:zh:mask phone")
         self.assertNotIn("image_url", client.calls[0])
 
     def test_vl_llm_converts_image_base64_to_data_url(self):
-        prompt_manager = FakePromptManager()
         client = FakeClient()
 
         result = generate_by_llm(
             prompt_template="image_extract",
             llm_name="vl",
-            prompt_manager=prompt_manager,
             client=client,
             image_base64="abc123",
             image_mime_type="image/jpeg",
@@ -80,7 +75,6 @@ class GenerateByLLMTest(unittest.TestCase):
             generate_by_llm(
                 prompt_template="image_extract",
                 llm_name="vl",
-                prompt_manager=FakePromptManager(),
                 client=FakeClient(),
                 user_query="read screen",
             )
@@ -89,10 +83,12 @@ class GenerateByLLMTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "resource_filter.*base"):
             generate_by_llm(
                 prompt_template="resource_filter",
-                prompt_manager=FakePromptManager(),
                 client=FakeClient("not json"),
                 user_query="mask phone",
             )
+
+    def test_default_prompt_manager_is_singleton(self):
+        self.assertIs(PromptManager(), prompt_manager)
 
     def test_settings_support_base_and_vl_models_with_legacy_fallback(self):
         with TemporaryDirectory() as tmp:

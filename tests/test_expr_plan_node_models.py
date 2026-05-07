@@ -3,6 +3,7 @@ import unittest
 from pydantic import TypeAdapter, ValidationError
 
 from agent.planner.models import (
+    CallExprPlanNode,
     CompareExprPlanNode,
     DefExprPlanNode,
     EXPR_PLAN_NODE_SCHEMA,
@@ -64,7 +65,9 @@ class ExprPlanNodeModelsTest(unittest.TestCase):
 
         self.assertIn("$defs", schema)
         self.assertIn("oneOf", schema)
+        self.assertIn("CallExprPlanNode", schema["$defs"])
         self.assertIn("CompareExprPlanNode", schema["$defs"])
+        self.assertIn("generic function call", schema["$defs"]["CallExprPlanNode"]["description"])
         self.assertEqual(
             schema["$defs"]["CompareExprPlanNode"]["properties"]["op"]["enum"],
             ["==", "!=", ">", ">=", "<", "<="],
@@ -90,6 +93,27 @@ class ExprPlanNodeModelsTest(unittest.TestCase):
 
     def test_planner_models_export_schema_dict(self):
         self.assertEqual(EXPR_PLAN_NODE_SCHEMA, TypeAdapter(ExprPlanNode).json_schema())
+
+    def test_call_expr_plan_node_supports_recursive_args(self):
+        node = TypeAdapter(ExprPlanNode).validate_python(
+            {
+                "type": "call",
+                "name": "IF",
+                "args": [
+                    {
+                        "type": "compare",
+                        "op": "==",
+                        "left": {"type": "context_path", "path": "$ctx$.a.b"},
+                        "right": {"type": "literal", "value": 2},
+                    },
+                    {"type": "literal", "value": ""},
+                    {"type": "context_path", "path": "$ctx$.c.d"},
+                ],
+            }
+        )
+
+        self.assertIsInstance(node, CallExprPlanNode)
+        self.assertIsInstance(node.args[0], CompareExprPlanNode)
 
 
 if __name__ == "__main__":

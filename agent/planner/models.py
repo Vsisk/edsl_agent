@@ -43,6 +43,16 @@ class LogicalExprPlanNode(_ExprPlanBaseModel):
     items: list[ExprPlanNode] = Field(min_length=2)
 
 
+class CallExprPlanNode(_ExprPlanBaseModel):
+    """A generic function call expression, such as IF(condition, then_value, else_value)."""
+
+    type: Literal["call"]
+    name: str = Field(description="Function name to call, for example IF, NVL, CONCAT, FORMAT_DATE.")
+    args: list[ExprPlanNode] = Field(
+        description="Ordered function arguments. Each argument is a recursive ExprPlanNode."
+    )
+
+
 class SelectExprPlanNode(_ExprPlanBaseModel):
     type: Literal["select"]
     bo: str
@@ -88,6 +98,7 @@ ExprPlanNode: TypeAlias = Annotated[
     | DefExprPlanNode
     | CompareExprPlanNode
     | LogicalExprPlanNode
+    | CallExprPlanNode
     | SelectExprPlanNode
     | SelectOneExprPlanNode
     | FetchExprPlanNode
@@ -104,6 +115,7 @@ _EXPR_PLAN_TYPES = {
 DefExprPlanNode.model_rebuild(_types_namespace=_EXPR_PLAN_TYPES)
 CompareExprPlanNode.model_rebuild(_types_namespace=_EXPR_PLAN_TYPES)
 LogicalExprPlanNode.model_rebuild(_types_namespace=_EXPR_PLAN_TYPES)
+CallExprPlanNode.model_rebuild(_types_namespace=_EXPR_PLAN_TYPES)
 SelectExprPlanNode.model_rebuild(_types_namespace=_EXPR_PLAN_TYPES)
 SelectOneExprPlanNode.model_rebuild(_types_namespace=_EXPR_PLAN_TYPES)
 FetchParam.model_rebuild(_types_namespace=_EXPR_PLAN_TYPES)

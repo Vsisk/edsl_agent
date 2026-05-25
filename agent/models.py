@@ -1,5 +1,6 @@
+from typing import Any, Literal
+
 from pydantic import BaseModel, Field
-from typing import Dict, Any
 
 
 class NodeDef(BaseModel):
@@ -11,15 +12,26 @@ class NodeDef(BaseModel):
     ab_data_source: dict = Field(default_factory=dict)
 
 
-class GenerateDSLRequest(BaseModel):
-    user_requirement: str = Field(...)
-    node: NodeDef = Field(...)
-    site_id: str = Field(...)
-    project_id: str = Field(...)
-    edsl_tree: Dict[str, Any]
+class ValueLogicRequest(BaseModel):
+    site_id: str
+    project_id: str
+    node_path: str
+    node: dict[str, Any]
+    parent_node: dict[str, Any] | None = None
+    query: str
 
 
-class GenerateDSLResponse(BaseModel):
-    success: bool
-    dsl: str = ""
-    failure_reason: str = ""
+class ValueLogicSource(BaseModel):
+    source_type: Literal["plan", "bo", "detail_field"]
+    bo_name: str | None = None
+    bo_field: str | None = None
+    detail_field: str | None = None
+    summary_type: Literal["sum", "count"] | None = None
+
+
+class ValueLogicResult(BaseModel):
+    node_id: str | None = None
+    logic_type: Literal["expression", "bo_field_mapping", "summary"]
+    expression: str | None = None
+    source: ValueLogicSource
+    diagnostics: list[str] = Field(default_factory=list)

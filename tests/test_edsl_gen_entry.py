@@ -1,10 +1,10 @@
 import unittest
 
-from agent.edsl_gen_entry import DSLAgent
-from agent.models import GenerateDSLRequest, NodeDef
+from agent.edsl_gen_entry import ValueLogicGenerator
+from agent.models import ValueLogicRequest
 from agent.planner.models import Plan
 from agent.resource_manager.loader.resource_loader import ResourceLoader
-from tests.test_environment import FakeResourceFilter, sample_edsl_tree_payload
+from tests.test_environment import FakeResourceFilter
 
 
 class FakePlanner:
@@ -41,9 +41,9 @@ class FakePlanner:
 
 
 class EDSLGenEntryTest(unittest.TestCase):
-    def test_generate_dsl_runs_from_request_to_expression(self):
+    def test_generate_value_logic_runs_from_request_to_expression(self):
         planner = FakePlanner()
-        agent = DSLAgent(
+        generator = ValueLogicGenerator(
             resource_loader=ResourceLoader(),
             llm_resource_filter=FakeResourceFilter(
                 {
@@ -56,51 +56,48 @@ class EDSLGenEntryTest(unittest.TestCase):
             llm_planner=planner,
         )
 
-        response = agent.generate_dsl(
-            GenerateDSLRequest(
-                user_requirement="query one prep sub by id",
-                node=NodeDef(
-                    node_id="node-1",
-                    node_path="$.mapping_content.children[1]",
-                    node_name="SUB_INFO",
-                ),
+        result = generator.generate(
+            ValueLogicRequest(
                 site_id="site1",
                 project_id="project1",
-                edsl_tree=sample_edsl_tree_payload(),
+                node_path="$.mapping_content.children[1]",
+                node={
+                    "node_id": "node-1",
+                    "tree_node_type": "simple_leaf",
+                    "xml_name_property": {"xml_name": "SUB_INFO"},
+                },
+                query="query one prep sub by id",
             )
         )
 
-        self.assertTrue(response.success)
-        self.assertEqual(response.dsl, "select_one(BB_PREP_SUB, it.ID == $ctx$.id)")
-        self.assertEqual(response.failure_reason, "")
+        self.assertEqual(result.logic_type, "expression")
+        self.assertEqual(result.expression, "select_one(BB_PREP_SUB, it.ID == $ctx$.id)")
+        self.assertEqual(result.source.source_type, "plan")
         self.assertEqual(planner.calls[0]["node_info"].node_id, "node-1")
         self.assertEqual(planner.calls[0]["user_query"], "query one prep sub by id")
         self.assertEqual(planner.calls[0]["filtered_env"].selected_bo_ids, ["bo.0000"])
 
-    def test_generate_dsl_returns_failure_response_when_generation_fails(self):
-        agent = DSLAgent(
+    def test_generate_value_logic_raises_when_generation_fails(self):
+        generator = ValueLogicGenerator(
             resource_loader=ResourceLoader(),
             llm_resource_filter=FakeResourceFilter({}),
             llm_planner=FailingPlanner(),
         )
 
-        response = agent.generate_dsl(
-            GenerateDSLRequest(
-                user_requirement="will fail",
-                node=NodeDef(
-                    node_id="node-1",
+        with self.assertRaisesRegex(RuntimeError, "planner exploded"):
+            generator.generate(
+                ValueLogicRequest(
+                    site_id="site1",
+                    project_id="project1",
                     node_path="$.mapping_content.children[1]",
-                    node_name="SUB_INFO",
-                ),
-                site_id="site1",
-                project_id="project1",
-                edsl_tree=sample_edsl_tree_payload(),
+                    node={
+                        "node_id": "node-1",
+                        "tree_node_type": "simple_leaf",
+                        "xml_name_property": {"xml_name": "SUB_INFO"},
+                    },
+                    query="will fail",
+                )
             )
-        )
-
-        self.assertFalse(response.success)
-        self.assertEqual(response.dsl, "")
-        self.assertIn("expression generation failed", response.failure_reason)
 
 
 class FailingPlanner:

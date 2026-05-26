@@ -19,6 +19,8 @@ class ValueLogicRequest(BaseModel):
     node: dict[str, Any]
     parent_node: dict[str, Any] | None = None
     query: str
+    is_ab: bool = False
+    edsl_tree: dict[str, Any] | None = None
 
 
 class ValueLogicSource(BaseModel):
@@ -34,4 +36,3 @@ class ValueLogicResult(BaseModel):
     logic_type: Literal["expression", "bo_field_mapping", "summary"]
     expression: str | None = None
     source: ValueLogicSource
-    diagnostics: list[str] = Field(default_factory=list)

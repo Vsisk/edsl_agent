@@ -134,7 +134,14 @@ class ValueLogicGeneratorTest(unittest.TestCase):
                 parent_node={
                     "node_id": "ab-parent",
                     "is_ab": True,
-                    "source_type": "sql",
+                    "ab_content": {
+                        "data_source": {
+                            "data_source_type": "sql",
+                            "sql_query": {
+                                "bo_name": "BB_BAK_TRANS",
+                            },
+                        },
+                    },
                 },
                 query="map or derive log id",
             )
@@ -145,6 +152,68 @@ class ValueLogicGeneratorTest(unittest.TestCase):
         self.assertEqual(result.expression, "select_one(BB_PREP_SUB, it.ID == $ctx$.id)")
         self.assertEqual(len(planner.calls), 1)
         self.assertTrue(any("BO field mapping" in item for item in result.diagnostics))
+        self.assertTrue(any("BB_BAK_TRANS" in item for item in result.diagnostics))
+
+    def test_ab_non_sql_field_does_not_read_nested_bo_name(self):
+        planner = FakePlanner()
+        generator = ValueLogicGenerator(
+            resource_loader=ResourceLoader(),
+            llm_resource_filter=FakeResourceFilter({}),
+            llm_planner=planner,
+        )
+
+        result = generator.generate(
+            ValueLogicRequest(
+                site_id="site1",
+                project_id="project1",
+                node_path="$.mapping_content.children[1].fields[1]",
+                node={
+                    "node_id": "normal-field",
+                    "tree_node_type": "field",
+                    "xml_name_property": {"xml_name": "LOG_ID"},
+                },
+                parent_node={
+                    "node_id": "ab-parent",
+                    "is_ab": True,
+                    "ab_content": {
+                        "data_source": {
+                            "data_source_type": "expression",
+                            "sql_query": {
+                                "bo_name": "SHOULD_NOT_BE_USED",
+                            },
+                        },
+                    },
+                },
+                query="derive log id",
+            )
+        )
+
+        self.assertEqual(result.logic_type, "expression")
+        self.assertEqual(result.source.source_type, "plan")
+        self.assertEqual(len(planner.calls), 1)
+        self.assertFalse(any("BO field mapping" in item for item in result.diagnostics))
+        self.assertFalse(any("SHOULD_NOT_BE_USED" in item for item in result.diagnostics))
+
+    def test_unsupported_node_type_raises(self):
+        generator = ValueLogicGenerator(
+            resource_loader=ResourceLoader(),
+            llm_resource_filter=FakeResourceFilter({}),
+            llm_planner=FakePlanner(),
+        )
+
+        with self.assertRaisesRegex(ValueError, "Unsupported node type"):
+            generator.generate(
+                ValueLogicRequest(
+                    site_id="site1",
+                    project_id="project1",
+                    node_path="$.mapping_content.children[1]",
+                    node={
+                        "node_id": "unsupported",
+                        "tree_node_type": "parent",
+                    },
+                    query="derive value",
+                )
+            )
 
 
 if __name__ == "__main__":

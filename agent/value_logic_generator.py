@@ -22,11 +22,9 @@ class ResourceContext:
 @dataclass(slots=True)
 class GenerationContext:
     resources: ResourceContext
-    local_ctx: list[dict[str, Any]]
     node: dict[str, Any]
     parent_node: dict[str, Any] | None
     query: str
-    diagnostics: list[str] = field(default_factory=list)
 
 
 class ValueLogicGenerator:
@@ -42,40 +40,24 @@ class ValueLogicGenerator:
         self.llm_planner = llm_planner or LLMPlanner()
 
     def generate(self, request: ValueLogicRequest) -> ValueLogicResult:
-        resources = self._load_resource_context(request.site_id, request.project_id)
-        local_ctx = self._load_local_context(request.node_path, resources)
+        resources = ResourceContext(
+            loaded=self.resource_loader.load_resource(
+                request.site_id,
+                request.project_id,
+                request.edsl_tree,
+            )
+        )
         ctx = GenerationContext(
             resources=resources,
-            local_ctx=local_ctx,
             node=request.node,
             parent_node=request.parent_node,
             query=request.query,
         )
 
-        if self._is_simple_leaf(request.node):
+        if not request.is_ab:
             return self._generate_simple_leaf_expression(request, ctx)
-
-        if self._is_field(request.node):
+        else:
             return self._generate_field_logic(request, ctx)
-
-        raise ValueError("Unsupported node type for value logic generation")
-
-    def _load_resource_context(self, site_id: str, project_id: str) -> ResourceContext:
-        edsl_tree = self._load_project_edsl_tree()
-        return ResourceContext(
-            loaded=self.resource_loader.load_resource(
-                site_id,
-                project_id,
-                edsl_tree,
-            )
-        )
-
-    @staticmethod
-    def _load_local_context(node_path: str, resources: ResourceContext) -> list[dict[str, Any]]:
-        return [
-            local_context.model_dump()
-            for local_context in resources.loaded.get_visible_local_context_registry(node_path).values()
-        ]
 
     def _load_project_edsl_tree(self) -> dict[str, Any]:
         tree_path = self.resource_loader.data_dir / "edsl_tree.json"
@@ -86,12 +68,6 @@ class ValueLogicGenerator:
         if not isinstance(payload, dict):
             raise ValueError(f"EDSL tree resource must contain a JSON object: {tree_path}")
         return payload
-
-    def _is_simple_leaf(self, node: dict[str, Any]) -> bool:
-        return self._node_type(node) == "simple_leaf"
-
-    def _is_field(self, node: dict[str, Any]) -> bool:
-        return self._node_type(node) == "field"
 
     def _is_summary_field(self, node: dict[str, Any]) -> bool:
         if self._normalize_text(node.get("field_type")) == "summary":
@@ -117,12 +93,6 @@ class ValueLogicGenerator:
     def _generate_summary_field_logic(self, request: ValueLogicRequest, ctx: GenerationContext) -> ValueLogicResult:
         summary_type = self._extract_summary_type(request.node)
         detail_field = self._extract_detail_field(request.node)
-        diagnostics = list(ctx.diagnostics)
-        diagnostics.append("TODO: summary expression generation is not implemented yet.")
-        if summary_type is None:
-            diagnostics.append("Unable to identify summary_type as sum or count from node metadata.")
-        if detail_field is None:
-            diagnostics.append("Unable to identify detail_field from node metadata.")
 
         return ValueLogicResult(
             node_id=self._node_id(request.node),
@@ -132,32 +102,18 @@ class ValueLogicGenerator:
                 source_type="detail_field",
                 detail_field=detail_field,
                 summary_type=summary_type,
-            ),
-            diagnostics=diagnostics,
+            )
         )
 
     def _generate_normal_field_logic(self, request: ValueLogicRequest, ctx: GenerationContext) -> ValueLogicResult:
-        if request.parent_node and self._is_ab_parent(request.parent_node):
+        if request.parent_node :
             if self._is_sql_source(request.parent_node):
-                mapping_result = self._try_generate_bo_field_mapping(request, ctx)
-                if mapping_result is not None:
-                    return mapping_result
-
+                bo_name = self._extract_parent_sql_bo_name(request.parent_node)
                 return self._generate_expression_by_plan(request, ctx)
 
             return self._generate_expression_by_plan(request, ctx)
 
         return self._generate_expression_by_plan(request, ctx)
-
-    def _try_generate_bo_field_mapping(
-        self,
-        request: ValueLogicRequest,
-        ctx: GenerationContext,
-    ) -> ValueLogicResult | None:
-        # TODO: Add BO property matching inside this branch when the project has
-        # a stable source-to-BO mapping contract for AB SQL parents.
-        ctx.diagnostics.append("TODO: BO field mapping is not implemented yet; falling back to plan expression generation.")
-        return None
 
     def _generate_expression_by_plan(self, request: ValueLogicRequest, ctx: GenerationContext) -> ValueLogicResult:
         node_info = self._to_node_def(request.node, request.node_path)
@@ -180,8 +136,7 @@ class ValueLogicGenerator:
             node_id=self._node_id(request.node),
             logic_type="expression",
             expression=expression,
-            source=ValueLogicSource(source_type="plan"),
-            diagnostics=list(ctx.diagnostics),
+            source=ValueLogicSource(source_type="plan")
         )
 
     def _to_node_def(self, node: dict[str, Any], node_path: str) -> NodeDef:
@@ -190,12 +145,8 @@ class ValueLogicGenerator:
             node_path=node_path,
             node_name=self._node_name(node),
             description=str(node.get("description") or node.get("annotation") or ""),
-            is_ab=bool(node.get("is_ab")),
-            ab_data_source=node.get("ab_data_source") if isinstance(node.get("ab_data_source"), dict) else {},
+            is_ab=bool(node.get("is_ab"))
         )
-
-    def _is_ab_parent(self, parent_node: dict[str, Any]) -> bool:
-        return bool(parent_node.get("is_ab"))
 
     def _is_sql_source(self, parent_node: dict[str, Any]) -> bool:
         source_values = [
@@ -218,7 +169,37 @@ class ValueLogicGenerator:
                     data_source.get("data_source_type"),
                 ]
             )
+        ab_content = parent_node.get("ab_content")
+        if isinstance(ab_content, dict):
+            ab_data_source = ab_content.get("data_source")
+            if isinstance(ab_data_source, dict):
+                source_values.extend(
+                    [
+                        ab_data_source.get("source_type"),
+                        ab_data_source.get("data_source_type"),
+                    ]
+                )
         return any(self._normalize_text(value) == "sql" for value in source_values)
+
+    def _extract_parent_sql_bo_name(self, parent_node: dict[str, Any] | None) -> str | None:
+        if not parent_node or not self._is_sql_source(parent_node):
+            return None
+
+        ab_content = parent_node.get("ab_content")
+        if not isinstance(ab_content, dict):
+            return None
+        data_source = ab_content.get("data_source")
+        if not isinstance(data_source, dict):
+            return None
+        if self._normalize_text(data_source.get("data_source_type")) != "sql":
+            return None
+        sql_query = data_source.get("sql_query")
+        if not isinstance(sql_query, dict):
+            return None
+        bo_name = sql_query.get("bo_name")
+        if bo_name is None or not str(bo_name).strip():
+            return None
+        return str(bo_name).strip()
 
     def _extract_summary_type(self, node: dict[str, Any]) -> str | None:
         summary = node.get("summary") or node.get("summary_config")

@@ -2,6 +2,7 @@ import unittest
 
 from agent.expression_generation.ast.builder import build_ast
 from agent.expression_generation.ast.nodes import (
+    CallNode,
     CompareNode,
     ContextPathNode,
     FetchNode,
@@ -97,6 +98,24 @@ class ExpressionValidatorTest(unittest.TestCase):
         )
 
         with self.assertRaisesRegex(ValueError, "context path"):
+            validate_ast(ast)
+
+    def test_exists_call_requires_one_argument(self):
+        ast = ProgramNode(
+            type="program",
+            body=[
+                CallNode(
+                    type="call",
+                    name="exists",
+                    args=[
+                        LiteralNode(type="literal", value="left"),
+                        LiteralNode(type="literal", value="right"),
+                    ],
+                )
+            ],
+        )
+
+        with self.assertRaisesRegex(ValueError, "exists"):
             validate_ast(ast)
 
 

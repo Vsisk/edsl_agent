@@ -46,6 +46,8 @@ def _validate_node(node) -> None:
     if isinstance(node, CallNode):
         if not node.name.strip():
             raise ValueError("call name must not be empty")
+        if node.name == "exists" and len(node.args) != 1:
+            raise ValueError("exists call must contain exactly one argument")
         for arg in node.args:
             _validate_node(arg)
         return

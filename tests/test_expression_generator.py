@@ -150,6 +150,38 @@ class ExpressionGeneratorTest(unittest.TestCase):
             'IF($ctx$.a.b == 2, "", $ctx$.c.d)',
         )
 
+    def test_generate_exists_call_for_bo_list(self):
+        ast = build_ast(
+            {
+                "nodes": [
+                    {
+                        "type": "return",
+                        "value": {
+                            "type": "call",
+                            "name": "exists",
+                            "args": [
+                                {
+                                    "type": "select",
+                                    "bo": "BB_PREP_SUB",
+                                    "filter": {
+                                        "type": "compare",
+                                        "op": "==",
+                                        "left": {"type": "context_path", "path": "it.ID"},
+                                        "right": {"type": "context_path", "path": "$ctx$.id"},
+                                    },
+                                }
+                            ],
+                        },
+                    }
+                ]
+            }
+        )
+
+        self.assertEqual(
+            generate_expression(ast),
+            "exists(select(BB_PREP_SUB, it.ID == $ctx$.id))",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

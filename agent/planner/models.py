@@ -47,7 +47,7 @@ class CallExprPlanNode(_ExprPlanBaseModel):
     """A generic function call expression, such as IF(condition, then_value, else_value)."""
 
     type: Literal["call"]
-    name: str = Field(description="Function name to call, for example IF, NVL, CONCAT, FORMAT_DATE.")
+    name: str = Field(description="Function name to call, for example IF, NVL, CONCAT, FORMAT_DATE, exists.")
     args: list[ExprPlanNode] = Field(
         description="Ordered function arguments. Each argument is a recursive ExprPlanNode."
     )

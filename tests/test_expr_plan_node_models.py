@@ -68,6 +68,7 @@ class ExprPlanNodeModelsTest(unittest.TestCase):
         self.assertIn("CallExprPlanNode", schema["$defs"])
         self.assertIn("CompareExprPlanNode", schema["$defs"])
         self.assertIn("generic function call", schema["$defs"]["CallExprPlanNode"]["description"])
+        self.assertIn("exists", schema["$defs"]["CallExprPlanNode"]["properties"]["name"]["description"])
         self.assertEqual(
             schema["$defs"]["CompareExprPlanNode"]["properties"]["op"]["enum"],
             ["==", "!=", ">", ">=", "<", "<="],

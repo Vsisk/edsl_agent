@@ -10,6 +10,7 @@ from agent.expression_generation.ast.builder import build_ast
 from agent.expression_generation.ast.generator import generate_expression
 from agent.expression_generation.ast.validator import validate_ast
 from agent.models import NodeDef, ValueLogicRequest, ValueLogicResult, ValueLogicSource
+from agent.planner.difficulty_router import LLMDifficultyRouter
 from agent.planner.llm_planner import LLMPlanner
 from agent.resource_manager.loader.resource_loader import LoadedResource, ResourceLoader, resource_loader as default_resource_loader
 
@@ -33,10 +34,12 @@ class ValueLogicGenerator:
         *,
         resource_loader: ResourceLoader | None = None,
         llm_resource_filter: Any | None = None,
+        llm_difficulty_router: Any | None = None,
         llm_planner: LLMPlanner | None = None,
     ):
         self.resource_loader = resource_loader or default_resource_loader
         self.llm_resource_filter = llm_resource_filter or LLMResourceFilter()
+        self.llm_difficulty_router = llm_difficulty_router or LLMDifficultyRouter()
         self.llm_planner = llm_planner or LLMPlanner()
 
     def generate(self, request: ValueLogicRequest) -> ValueLogicResult:
@@ -109,20 +112,69 @@ class ValueLogicGenerator:
         if request.parent_node :
             if self._is_sql_source(request.parent_node):
                 bo_name = self._extract_parent_sql_bo_name(request.parent_node)
+                mapping_result = self._try_generate_bo_field_mapping(request, ctx, bo_name)
+                if mapping_result is not None:
+                    return mapping_result
                 return self._generate_expression_by_plan(request, ctx)
 
             return self._generate_expression_by_plan(request, ctx)
 
         return self._generate_expression_by_plan(request, ctx)
 
+    def _try_generate_bo_field_mapping(
+        self,
+        request: ValueLogicRequest,
+        ctx: GenerationContext,
+        bo_name: str | None,
+    ) -> ValueLogicResult | None:
+        if not self._should_try_bo_field_mapping(request):
+            return None
+
+        if not bo_name:
+            return None
+
+        bo_registry = ctx.resources.loaded.bo_registry.get(bo_name)
+        if bo_registry is None:
+            return None
+
+        target_field_name = self._node_name(request.node)
+        if not target_field_name:
+            return None
+
+        for bo_property in bo_registry.property_list:
+            bo_field = bo_property.field_name
+            if self._normalize_field_name(bo_field) == self._normalize_field_name(target_field_name):
+                return ValueLogicResult(
+                    node_id=self._node_id(request.node),
+                    logic_type="bo_field_mapping",
+                    expression=bo_field,
+                    source=ValueLogicSource(
+                        source_type="bo",
+                        bo_name=bo_name,
+                        bo_field=bo_field,
+                    ),
+                )
+
+        return None
+
     def _generate_expression_by_plan(self, request: ValueLogicRequest, ctx: GenerationContext) -> ValueLogicResult:
         node_info = self._to_node_def(request.node, request.node_path)
-        filtered_env = build_filtered_environment(
-            node_info=node_info,
-            user_query=request.query,
-            registry=ctx.resources.loaded,
-            llm_resource_filter=self.llm_resource_filter,
-        )
+        if self._can_plan_with_context_only(node_info, request.query):
+            filtered_env = build_filtered_environment(
+                node_info=node_info,
+                user_query=request.query,
+                registry=ctx.resources.loaded,
+                top_bo=0,
+                top_function=0,
+                llm_resource_filter=self.llm_resource_filter,
+            )
+        else:
+            filtered_env = build_filtered_environment(
+                node_info=node_info,
+                user_query=request.query,
+                registry=ctx.resources.loaded,
+                llm_resource_filter=self.llm_resource_filter,
+            )
         plan = self.llm_planner.plan(
             node_info=node_info,
             user_query=request.query,
@@ -138,6 +190,17 @@ class ValueLogicGenerator:
             expression=expression,
             source=ValueLogicSource(source_type="plan")
         )
+
+    def _can_plan_with_context_only(self, node_info: NodeDef, user_query: str) -> bool:
+        try:
+            return bool(
+                self.llm_difficulty_router.can_plan_with_context_only(
+                    node_info=node_info,
+                    user_query=user_query,
+                )
+            )
+        except Exception:
+            return False
 
     def _to_node_def(self, node: dict[str, Any], node_path: str) -> NodeDef:
         return NodeDef(
@@ -252,3 +315,51 @@ class ValueLogicGenerator:
 
     def _normalize_text(self, value: Any) -> str:
         return str(value or "").strip().lower()
+
+    def _normalize_field_name(self, value: Any) -> str:
+        return self._normalize_text(value).replace("_", "")
+
+    def _should_try_bo_field_mapping(self, request: ValueLogicRequest) -> bool:
+        query = self._normalize_text(request.query)
+        if not query:
+            return False
+
+        expression_intent_terms = (
+            "derive",
+            "calculate",
+            "compute",
+            "format",
+            "fallback",
+            "default",
+            "mask",
+            "concat",
+            "combine",
+            "if ",
+            "when ",
+            "判断",
+            "计算",
+            "加工",
+            "格式",
+            "默认",
+            "拼接",
+            "掩码",
+            "脱敏",
+        )
+        if any(term in query for term in expression_intent_terms):
+            return False
+
+        mapping_intent_terms = (
+            "direct",
+            "directly",
+            "map",
+            "mapping",
+            "table field",
+            "bo field",
+            "field mapping",
+            "字段映射",
+            "直接取",
+            "直接映射",
+            "取字段",
+            "表字段",
+        )
+        return any(term in query for term in mapping_intent_terms)

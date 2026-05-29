@@ -29,6 +29,18 @@ class PlannerPromptTest(unittest.TestCase):
         self.assertIn('exists(select(', prompt)
         self.assertIn('"name":"exists"', prompt)
 
+    def test_planner_prompt_requires_class_qualified_function_resource_calls(self):
+        prompt = prompt_manager.render(
+            "planner",
+            user_requirement="mask phone",
+            node_info_json="{}",
+            resources_json='{"function":[{"name":"DacsDataTrans.CustCallMask"}]}',
+            plan_schema_json="{}",
+        )
+
+        self.assertIn("Function resources must be called with their provided name", prompt)
+        self.assertIn("DacsDataTrans.CustCallMask", prompt)
+
 
 if __name__ == "__main__":
     unittest.main()

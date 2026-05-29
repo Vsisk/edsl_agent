@@ -80,6 +80,33 @@ class LLMPlannerTest(unittest.TestCase):
         self.assertIsInstance(plan.nodes[0], ReturnExprPlanNode)
         self.assertIn("$ctx$.prepareId", client.calls[0]["prompt"])
 
+    def test_plan_exposes_function_resource_name_as_class_qualified_call_name(self):
+        client = FakeClient(
+            [
+                '{"nodes":[{"type":"return","value":{"type":"call","name":"DacsDataTrans.CustCallMask","args":[{"type":"context_path","path":"$ctx$.phone"}]}}]}',
+            ]
+        )
+
+        LLMPlanner(client=client).plan(
+            node_info=_node_info(),
+            user_query="mask phone",
+            filtered_env=FilteredEnvironment(
+                selected_functions=[
+                    Resource(
+                        resource_id="func.1",
+                        func_name="CustCallMask",
+                        func_class="DacsDataTrans",
+                        func_desc="mask customer call number",
+                        param_list=[Resource(param_name="phone", data_type_name="String")],
+                        return_type=Resource(data_type_name="String"),
+                    )
+                ],
+            ),
+        )
+
+        self.assertIn('"name":"DacsDataTrans.CustCallMask"', client.calls[0]["prompt"])
+        self.assertIn('"class":"DacsDataTrans"', client.calls[0]["prompt"])
+
     def test_plan_repairs_once_when_initial_output_fails_pydantic_validation(self):
         client = FakeClient(
             [

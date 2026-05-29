@@ -40,19 +40,25 @@ class FakePlanner:
         )
 
 
+class FakeResourceRoute:
+    def __init__(self, *, use_bo: bool, use_function: bool):
+        self.use_bo = use_bo
+        self.use_function = use_function
+
+
 class FakeDifficultyRouter:
-    def __init__(self, is_simple: bool):
-        self.is_simple = is_simple
+    def __init__(self, route: FakeResourceRoute):
+        self.route = route
         self.calls = []
 
-    def can_plan_with_context_only(self, *, node_info, user_query):
+    def route_resources(self, *, node_info, user_query):
         self.calls.append(
             {
                 "node_info": node_info,
                 "user_query": user_query,
             }
         )
-        return self.is_simple
+        return self.route
 
 
 class ValueLogicGeneratorTest(unittest.TestCase):
@@ -94,7 +100,7 @@ class ValueLogicGeneratorTest(unittest.TestCase):
         self.assertEqual(planner.calls[0]["node_info"].node_name, "SUB_INFO")
         self.assertEqual(planner.calls[0]["user_query"], "query one prep sub by id")
 
-    def test_simple_context_only_requirement_filters_context_without_bo_or_functions(self):
+    def test_context_only_route_filters_context_without_bo_or_functions(self):
         planner = FakePlanner()
         resource_filter = FakeResourceFilter(
             {
@@ -104,7 +110,7 @@ class ValueLogicGeneratorTest(unittest.TestCase):
                 "global_context": [{"resource_id": "ctx.0001"}],
             }
         )
-        difficulty_router = FakeDifficultyRouter(is_simple=True)
+        difficulty_router = FakeDifficultyRouter(FakeResourceRoute(use_bo=False, use_function=False))
         generator = ValueLogicGenerator(
             resource_loader=ResourceLoader(),
             llm_resource_filter=resource_filter,
@@ -141,6 +147,92 @@ class ValueLogicGeneratorTest(unittest.TestCase):
         self.assertEqual(filtered_env.selected_global_context_ids[0], "ctx.0001")
         self.assertEqual(filtered_env.selected_bo_ids, [])
         self.assertEqual(filtered_env.selected_function_ids, [])
+
+    def test_bo_only_route_filters_bo_and_context_without_functions(self):
+        planner = FakePlanner()
+        resource_filter = FakeResourceFilter(
+            {
+                "bo": [{"resource_id": "bo.0000"}],
+                "function": [{"resource_id": "func.0001"}],
+                "local_context": [{"resource_id": "local.0002"}],
+                "global_context": [{"resource_id": "ctx.0001"}],
+            }
+        )
+        generator = ValueLogicGenerator(
+            resource_loader=ResourceLoader(),
+            llm_resource_filter=resource_filter,
+            llm_difficulty_router=FakeDifficultyRouter(FakeResourceRoute(use_bo=True, use_function=False)),
+            llm_planner=planner,
+        )
+
+        generator.generate(
+            ValueLogicRequest(
+                site_id="site1",
+                project_id="project1",
+                node_path="$.mapping_content.children[1]",
+                node={
+                    "node_id": "node-1",
+                    "tree_node_type": "simple_leaf",
+                    "xml_name_property": {"xml_name": "SUB_INFO"},
+                    "annotation": "user information node",
+                },
+                query="lookup BO by CUST_ID",
+                edsl_tree=sample_edsl_tree_payload(),
+            )
+        )
+
+        filtered_env = planner.calls[0]["filtered_env"]
+        self.assertEqual(resource_filter.calls[0]["limits"]["bo"], 5)
+        self.assertEqual(resource_filter.calls[0]["limits"]["function"], 0)
+        self.assertNotEqual(resource_filter.calls[0]["candidates"]["bo"], [])
+        self.assertEqual(resource_filter.calls[0]["candidates"]["function"], [])
+        self.assertEqual(filtered_env.selected_bo_ids, ["bo.0000"])
+        self.assertEqual(filtered_env.selected_function_ids, [])
+        self.assertEqual(filtered_env.selected_local_context_ids[0], "local.0002")
+        self.assertEqual(filtered_env.selected_global_context_ids[0], "ctx.0001")
+
+    def test_function_only_route_filters_function_and_context_without_bo(self):
+        planner = FakePlanner()
+        resource_filter = FakeResourceFilter(
+            {
+                "bo": [{"resource_id": "bo.0000"}],
+                "function": [{"resource_id": "func.0001"}],
+                "local_context": [{"resource_id": "local.0002"}],
+                "global_context": [{"resource_id": "ctx.0001"}],
+            }
+        )
+        generator = ValueLogicGenerator(
+            resource_loader=ResourceLoader(),
+            llm_resource_filter=resource_filter,
+            llm_difficulty_router=FakeDifficultyRouter(FakeResourceRoute(use_bo=False, use_function=True)),
+            llm_planner=planner,
+        )
+
+        generator.generate(
+            ValueLogicRequest(
+                site_id="site1",
+                project_id="project1",
+                node_path="$.mapping_content.children[1]",
+                node={
+                    "node_id": "node-1",
+                    "tree_node_type": "simple_leaf",
+                    "xml_name_property": {"xml_name": "SUB_INFO"},
+                    "annotation": "user information node",
+                },
+                query="mask CUST_ID with function",
+                edsl_tree=sample_edsl_tree_payload(),
+            )
+        )
+
+        filtered_env = planner.calls[0]["filtered_env"]
+        self.assertEqual(resource_filter.calls[0]["limits"]["bo"], 0)
+        self.assertEqual(resource_filter.calls[0]["limits"]["function"], 5)
+        self.assertEqual(resource_filter.calls[0]["candidates"]["bo"], [])
+        self.assertNotEqual(resource_filter.calls[0]["candidates"]["function"], [])
+        self.assertEqual(filtered_env.selected_bo_ids, [])
+        self.assertEqual(filtered_env.selected_function_ids[0], "func.0001")
+        self.assertEqual(filtered_env.selected_local_context_ids[0], "local.0002")
+        self.assertEqual(filtered_env.selected_global_context_ids[0], "ctx.0001")
 
     def test_summary_field_returns_summary_result_without_calling_plan(self):
         planner = FakePlanner()

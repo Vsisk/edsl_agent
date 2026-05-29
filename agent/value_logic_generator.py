@@ -10,7 +10,7 @@ from agent.expression_generation.ast.builder import build_ast
 from agent.expression_generation.ast.generator import generate_expression
 from agent.expression_generation.ast.validator import validate_ast
 from agent.models import NodeDef, ValueLogicRequest, ValueLogicResult, ValueLogicSource
-from agent.planner.difficulty_router import LLMDifficultyRouter
+from agent.planner.difficulty_router import LLMDifficultyRouter, ResourceRoute
 from agent.planner.llm_planner import LLMPlanner
 from agent.resource_manager.loader.resource_loader import LoadedResource, ResourceLoader, resource_loader as default_resource_loader
 
@@ -159,22 +159,15 @@ class ValueLogicGenerator:
 
     def _generate_expression_by_plan(self, request: ValueLogicRequest, ctx: GenerationContext) -> ValueLogicResult:
         node_info = self._to_node_def(request.node, request.node_path)
-        if self._can_plan_with_context_only(node_info, request.query):
-            filtered_env = build_filtered_environment(
-                node_info=node_info,
-                user_query=request.query,
-                registry=ctx.resources.loaded,
-                top_bo=0,
-                top_function=0,
-                llm_resource_filter=self.llm_resource_filter,
-            )
-        else:
-            filtered_env = build_filtered_environment(
-                node_info=node_info,
-                user_query=request.query,
-                registry=ctx.resources.loaded,
-                llm_resource_filter=self.llm_resource_filter,
-            )
+        route = self._route_resources(node_info, request.query)
+        filtered_env = build_filtered_environment(
+            node_info=node_info,
+            user_query=request.query,
+            registry=ctx.resources.loaded,
+            top_bo=5 if route.use_bo else 0,
+            top_function=5 if route.use_function else 0,
+            llm_resource_filter=self.llm_resource_filter,
+        )
         plan = self.llm_planner.plan(
             node_info=node_info,
             user_query=request.query,
@@ -191,16 +184,18 @@ class ValueLogicGenerator:
             source=ValueLogicSource(source_type="plan")
         )
 
-    def _can_plan_with_context_only(self, node_info: NodeDef, user_query: str) -> bool:
+    def _route_resources(self, node_info: NodeDef, user_query: str) -> ResourceRoute:
         try:
-            return bool(
-                self.llm_difficulty_router.can_plan_with_context_only(
-                    node_info=node_info,
-                    user_query=user_query,
-                )
+            route = self.llm_difficulty_router.route_resources(
+                node_info=node_info,
+                user_query=user_query,
+            )
+            return ResourceRoute(
+                use_bo=bool(getattr(route, "use_bo", True)),
+                use_function=bool(getattr(route, "use_function", True)),
             )
         except Exception:
-            return False
+            return ResourceRoute()
 
     def _to_node_def(self, node: dict[str, Any], node_path: str) -> NodeDef:
         return NodeDef(

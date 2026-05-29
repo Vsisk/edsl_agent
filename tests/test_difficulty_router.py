@@ -2,7 +2,7 @@ import unittest
 
 from agent.llm.prompt_manager import prompt_manager
 from agent.models import NodeDef
-from agent.planner.difficulty_router import LLMDifficultyRouter
+from agent.planner.difficulty_router import LLMDifficultyRouter, ResourceRoute
 
 
 class FakeSettings:
@@ -35,38 +35,48 @@ class LLMDifficultyRouterTest(unittest.TestCase):
     def tearDown(self):
         prompt_manager._prompts = self.original_prompts
 
-    def test_context_only_decision_returns_true(self):
+    def test_context_only_decision_disables_bo_and_function(self):
         client = FakeClient('{"decision":"context_only","reason":"direct context assignment"}')
 
-        result = LLMDifficultyRouter(client=client).can_plan_with_context_only(
+        result = LLMDifficultyRouter(client=client).route_resources(
             node_info=_node_info(),
             user_query="directly assign from context",
         )
 
-        self.assertTrue(result)
+        self.assertEqual(result, ResourceRoute(use_bo=False, use_function=False))
         self.assertIn("directly assign from context", client.calls[0]["prompt"])
         self.assertIn('"node_name":"Name"', client.calls[0]["prompt"])
 
-    def test_resource_filter_decision_returns_false(self):
-        client = FakeClient('{"decision":"resource_filter","reason":"needs table lookup"}')
+    def test_bo_only_decision_enables_bo_without_function(self):
+        client = FakeClient('{"decision":"bo_only","reason":"needs table lookup"}')
 
-        result = LLMDifficultyRouter(client=client).can_plan_with_context_only(
+        result = LLMDifficultyRouter(client=client).route_resources(
             node_info=_node_info(),
             user_query="lookup from table",
         )
 
-        self.assertFalse(result)
+        self.assertEqual(result, ResourceRoute(use_bo=True, use_function=False))
 
-    def test_unusable_client_returns_false_without_llm_call(self):
+    def test_function_only_decision_enables_function_without_bo(self):
+        client = FakeClient('{"required_resources":["function","context"],"reason":"needs function"}')
+
+        result = LLMDifficultyRouter(client=client).route_resources(
+            node_info=_node_info(),
+            user_query="mask phone",
+        )
+
+        self.assertEqual(result, ResourceRoute(use_bo=False, use_function=True))
+
+    def test_unusable_client_uses_conservative_full_route_without_llm_call(self):
         client = FakeClient('{"decision":"context_only"}')
         client.is_usable = False
 
-        result = LLMDifficultyRouter(client=client).can_plan_with_context_only(
+        result = LLMDifficultyRouter(client=client).route_resources(
             node_info=_node_info(),
             user_query="directly assign from context",
         )
 
-        self.assertFalse(result)
+        self.assertEqual(result, ResourceRoute(use_bo=True, use_function=True))
         self.assertEqual(client.calls, [])
 
 

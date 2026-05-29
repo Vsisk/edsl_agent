@@ -43,6 +43,29 @@ class LLMResourceFilter:
         )
         return _normalize_response(response)
 
+    def plan_resource_search_commands(
+        self,
+        *,
+        node_info: NodeDef,
+        user_query: str,
+        search_space: dict[str, list[str]],
+        limits: dict[str, int],
+    ) -> dict[str, list[dict[str, str]]]:
+        if not self.is_usable:
+            return {"commands": []}
+
+        response = generate_by_llm(
+            prompt_template="resource_search_tool_trigger",
+            llm_name="base",
+            lang="zh",
+            client=self.client,
+            user_requirement=user_query,
+            node_info_json=_dump_json(_summarize_node(node_info)),
+            limits_json=_dump_json(limits),
+            search_space_json=_dump_json(search_space),
+        )
+        return _normalize_search_commands(response)
+
 
 def _summarize_node(node_info: NodeDef) -> dict[str, Any]:
     return {
@@ -138,6 +161,30 @@ def _normalize_response(response: dict[str, Any]) -> dict[str, list[dict[str, st
                 normalized_items.append(normalized_item)
         normalized[group] = normalized_items
     return normalized
+
+
+def _normalize_search_commands(response: dict[str, Any]) -> dict[str, list[dict[str, str]]]:
+    commands = response.get("commands") or []
+    if not isinstance(commands, list):
+        return {"commands": []}
+
+    normalized_commands: list[dict[str, str]] = []
+    for command in commands:
+        if not isinstance(command, dict):
+            continue
+        tool = str(command.get("tool") or "").strip()
+        group = str(command.get("group") or "").strip()
+        keyword = str(command.get("keyword") or "").strip()
+        if tool != "resource_keyword_search" or group not in RESOURCE_GROUPS or not keyword:
+            continue
+        normalized_commands.append(
+            {
+                "tool": tool,
+                "group": group,
+                "keyword": keyword,
+            }
+        )
+    return {"commands": normalized_commands}
 
 
 def _normalize_item(item: Any) -> dict[str, str]:

@@ -3,6 +3,7 @@ from difflib import SequenceMatcher
 from typing import Any, List
 
 from agent.environment.resource_filter import LLMResourceFilter
+from agent.environment.resource_search_tool import ResourceKeywordSearchTool
 from agent.models import NodeDef
 from agent.resource_manager.loader.resource_loader import LoadedResource
 from agent.resource_manager.loader.tag_utils import tokenize_text
@@ -90,13 +91,21 @@ def build_filtered_environment(
         ),
     }
 
-    selected_by_group = _apply_llm_filter(
+    selected_by_group = _apply_llm_tool_search(
         node_info=node_info,
         user_query=user_query,
         candidates=candidates,
         limits=limits,
         llm_resource_filter=llm_resource_filter,
     )
+    if selected_by_group is None:
+        selected_by_group = _apply_llm_filter(
+            node_info=node_info,
+            user_query=user_query,
+            candidates=candidates,
+            limits=limits,
+            llm_resource_filter=llm_resource_filter,
+        )
     selected_global_contexts = selected_by_group["global_context"]
     selected_local_contexts = selected_by_group["local_context"]
     selected_bos = selected_by_group["bo"]
@@ -118,6 +127,102 @@ def _candidate_limit(top_n: int) -> int:
     if top_n <= 0:
         return 0
     return min(top_n * CANDIDATE_MULTIPLIER, MAX_CANDIDATES_PER_GROUP)
+
+
+def _apply_llm_tool_search(
+    *,
+    node_info: NodeDef,
+    user_query: str,
+    candidates: dict[str, list],
+    limits: dict[str, int],
+    llm_resource_filter: Any | None,
+) -> dict[str, list] | None:
+    if not any(candidates.values()):
+        return None
+
+    filter_service = llm_resource_filter
+    if filter_service is None:
+        filter_service = LLMResourceFilter()
+        if not filter_service.is_usable:
+            return None
+
+    search_space = _build_resource_search_space(candidates)
+    try:
+        command_result = filter_service.plan_resource_search_commands(
+            node_info=node_info,
+            user_query=user_query,
+            search_space=search_space,
+            limits=limits,
+        )
+    except Exception:
+        return None
+
+    return _execute_resource_search_commands(
+        candidates=candidates,
+        search_space=search_space,
+        limits=limits,
+        command_result=command_result,
+    )
+
+
+def _build_resource_search_space(candidates: dict[str, list]) -> dict[str, list[str]]:
+    return {
+        group: [_resource_search_text(resource, group) for resource in resources]
+        for group, resources in candidates.items()
+    }
+
+
+def _execute_resource_search_commands(
+    *,
+    candidates: dict[str, list],
+    search_space: dict[str, list[str]],
+    limits: dict[str, int],
+    command_result: dict[str, list[dict[str, str]]],
+) -> dict[str, list] | None:
+    search_tool = ResourceKeywordSearchTool()
+    selected_by_group: dict[str, list] = {}
+    selected_ids_by_group: dict[str, set[str]] = {}
+    for group in candidates:
+        selected_by_group[group] = []
+        selected_ids_by_group[group] = set()
+
+    found_any = False
+    for command in command_result.get("commands") or []:
+        if not isinstance(command, dict):
+            continue
+        tool = str(command.get("tool") or "")
+        group = str(command.get("group") or "")
+        keyword = str(command.get("keyword") or "")
+        if tool != search_tool.name or group not in candidates or not keyword:
+            continue
+
+        for index in search_tool.search(search_space[group], keyword):
+            if index < 0 or index >= len(candidates[group]):
+                continue
+            resource = candidates[group][index]
+            resource_id = getattr(resource, "resource_id", "")
+            if resource_id in selected_ids_by_group[group]:
+                continue
+            selected_by_group[group].append(resource)
+            selected_ids_by_group[group].add(resource_id)
+            found_any = True
+            if len(selected_by_group[group]) >= limits[group]:
+                break
+
+    if not found_any:
+        return None
+    return selected_by_group
+
+
+def _resource_search_text(resource: object, group: str) -> str:
+    if group == "bo":
+        keywords = [getattr(resource, "bo_name", "")]
+        keywords.extend(item.sql_name for item in getattr(resource, "naming_sql_list", []) or [])
+    elif group == "function":
+        keywords = [getattr(resource, "func_name", "")]
+    else:
+        keywords = [getattr(resource, "context_name", "")]
+    return " ".join(str(keyword) for keyword in keywords if keyword)
 
 
 def _apply_llm_filter(

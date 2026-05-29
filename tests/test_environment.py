@@ -151,6 +151,78 @@ class EnvironmentBuilderTest(unittest.TestCase):
         self.assertEqual(llm_filter.calls[0]["limits"]["bo"], 1)
         self.assertLessEqual(len(llm_filter.calls[0]["candidates"]["bo"]), 5)
 
+    def test_llm_tool_search_selects_bo_by_naming_sql_name_before_semantic_filter(self):
+        loaded = ResourceLoader().load_resource("site1", "project1", sample_edsl_tree_payload())
+        node_info = NodeDef(
+            node_id="node-1",
+            node_path="$.mapping_content.children[1]",
+            node_name="SUB_INFO",
+        )
+        llm_filter = FakeResourceFilter(
+            {},
+            search_commands={
+                "commands": [
+                    {
+                        "tool": "resource_keyword_search",
+                        "group": "bo",
+                        "keyword": "BB_BAK_TRANS_queryDataLoadData",
+                    }
+                ]
+            },
+        )
+
+        environment = build_filtered_environment(
+            node_info,
+            "use BB_BAK_TRANS_queryDataLoadData to query data",
+            loaded,
+            top_bo=1,
+            llm_resource_filter=llm_filter,
+        )
+
+        self.assertEqual(environment.selected_bo_ids, ["bo.0000"])
+        self.assertEqual([bo.bo_name for bo in environment.selected_bos], ["BB_BAK_TRANS"])
+        self.assertEqual(len(llm_filter.search_calls), 1)
+        self.assertEqual(llm_filter.calls, [])
+
+    def test_llm_tool_search_selects_function_and_context_by_resource_name(self):
+        loaded = ResourceLoader().load_resource("site1", "project1", sample_edsl_tree_payload())
+        node_info = NodeDef(
+            node_id="node-1",
+            node_path="$.mapping_content.children[1]",
+            node_name="SUB_INFO",
+        )
+        llm_filter = FakeResourceFilter(
+            {},
+            search_commands={
+                "commands": [
+                    {
+                        "tool": "resource_keyword_search",
+                        "group": "global_context",
+                        "keyword": "$ctx$.billStatement.CUST_ID",
+                    },
+                    {
+                        "tool": "resource_keyword_search",
+                        "group": "function",
+                        "keyword": "CustCallMask",
+                    },
+                ]
+            },
+        )
+
+        environment = build_filtered_environment(
+            node_info,
+            "set value from $ctx$.billStatement.CUST_ID then call CustCallMask",
+            loaded,
+            top_global_context=1,
+            top_function=1,
+            llm_resource_filter=llm_filter,
+        )
+
+        self.assertEqual(environment.selected_global_context_ids, ["ctx.0001"])
+        self.assertEqual(environment.selected_function_ids, ["func.0001"])
+        self.assertEqual(len(llm_filter.search_calls), 1)
+        self.assertEqual(llm_filter.calls, [])
+
     def test_falls_back_to_string_ranked_candidates_for_invalid_llm_ids(self):
         loaded = ResourceLoader().load_resource("site1", "project1", sample_edsl_tree_payload())
         node_info = NodeDef(
@@ -180,9 +252,22 @@ class EnvironmentBuilderTest(unittest.TestCase):
 
 
 class FakeResourceFilter:
-    def __init__(self, result):
+    def __init__(self, result, search_commands=None):
         self.result = result
+        self.search_commands = search_commands or {"commands": []}
         self.calls = []
+        self.search_calls = []
+
+    def plan_resource_search_commands(self, *, node_info, user_query, search_space, limits):
+        self.search_calls.append(
+            {
+                "node_info": node_info,
+                "user_query": user_query,
+                "search_space": search_space,
+                "limits": limits,
+            }
+        )
+        return self.search_commands
 
     def filter_resources(self, *, node_info, user_query, candidates, limits):
         self.calls.append(

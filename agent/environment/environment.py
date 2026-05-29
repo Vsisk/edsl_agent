@@ -36,6 +36,12 @@ class _ScoredResource:
     index: int
 
 
+@dataclass(frozen=True, slots=True)
+class _ToolSearchResult:
+    selected_by_group: dict[str, list]
+    matched_groups: set[str]
+
+
 SOURCE_WEIGHTS = (
     ("user_requirement", 3.0),
     ("node_name", 2.0),
@@ -91,21 +97,24 @@ def build_filtered_environment(
         ),
     }
 
-    selected_by_group = _apply_llm_tool_search(
+    tool_search_result = _apply_llm_tool_search(
         node_info=node_info,
         user_query=user_query,
         candidates=candidates,
         limits=limits,
         llm_resource_filter=llm_resource_filter,
     )
-    if selected_by_group is None:
-        selected_by_group = _apply_llm_filter(
-            node_info=node_info,
-            user_query=user_query,
-            candidates=candidates,
-            limits=limits,
-            llm_resource_filter=llm_resource_filter,
-        )
+    fallback_selected_by_group = _apply_llm_filter(
+        node_info=node_info,
+        user_query=user_query,
+        candidates=candidates,
+        limits=limits,
+        llm_resource_filter=llm_resource_filter,
+    )
+    selected_by_group = _merge_tool_search_and_fallback(
+        tool_search_result=tool_search_result,
+        fallback_selected_by_group=fallback_selected_by_group,
+    )
     selected_global_contexts = selected_by_group["global_context"]
     selected_local_contexts = selected_by_group["local_context"]
     selected_bos = selected_by_group["bo"]
@@ -136,7 +145,7 @@ def _apply_llm_tool_search(
     candidates: dict[str, list],
     limits: dict[str, int],
     llm_resource_filter: Any | None,
-) -> dict[str, list] | None:
+) -> _ToolSearchResult | None:
     if not any(candidates.values()):
         return None
 
@@ -178,10 +187,11 @@ def _execute_resource_search_commands(
     search_space: dict[str, list[str]],
     limits: dict[str, int],
     command_result: dict[str, list[dict[str, str]]],
-) -> dict[str, list] | None:
+) -> _ToolSearchResult | None:
     search_tool = ResourceKeywordSearchTool()
     selected_by_group: dict[str, list] = {}
     selected_ids_by_group: dict[str, set[str]] = {}
+    matched_groups: set[str] = set()
     for group in candidates:
         selected_by_group[group] = []
         selected_ids_by_group[group] = set()
@@ -195,6 +205,8 @@ def _execute_resource_search_commands(
         keyword = str(command.get("keyword") or "")
         if tool != search_tool.name or group not in candidates or not keyword:
             continue
+        if limits[group] <= 0:
+            continue
 
         for index in search_tool.search(search_space[group], keyword):
             if index < 0 or index >= len(candidates[group]):
@@ -206,12 +218,31 @@ def _execute_resource_search_commands(
             selected_by_group[group].append(resource)
             selected_ids_by_group[group].add(resource_id)
             found_any = True
+            matched_groups.add(group)
             if len(selected_by_group[group]) >= limits[group]:
                 break
 
     if not found_any:
         return None
-    return selected_by_group
+    return _ToolSearchResult(selected_by_group=selected_by_group, matched_groups=matched_groups)
+
+
+def _merge_tool_search_and_fallback(
+    *,
+    tool_search_result: _ToolSearchResult | None,
+    fallback_selected_by_group: dict[str, list],
+) -> dict[str, list]:
+    if tool_search_result is None:
+        return fallback_selected_by_group
+
+    return {
+        group: (
+            tool_search_result.selected_by_group[group]
+            if group in tool_search_result.matched_groups
+            else fallback_selected_by_group[group]
+        )
+        for group in fallback_selected_by_group
+    }
 
 
 def _resource_search_text(resource: object, group: str) -> str:

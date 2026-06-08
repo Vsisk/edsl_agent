@@ -410,6 +410,88 @@ class EnvironmentBuilderTest(unittest.TestCase):
         self.assertEqual(len(llm_filter.search_calls), 1)
         self.assertEqual(len(llm_filter.calls), 1)
 
+    def test_broad_context_keyword_search_preserves_specific_fallback_selection(self):
+        loaded = StaticResourceLoader(bill_statement_context_payload()).load_resource(
+            "site1",
+            "project1",
+            sample_edsl_tree_payload(),
+        )
+        node_info = NodeDef(node_id="node-1", node_path="$.mapping_content.children[1]", node_name="SUB_INFO")
+        llm_filter = FakeResourceFilter(
+            {
+                "global_context": [{"resource_id": "ctx.0003", "reason": "specific fallback"}],
+                "local_context": [],
+                "bo": [],
+                "function": [],
+            },
+            search_commands={
+                "commands": [
+                    {
+                        "tool": "resource_keyword_search",
+                        "group": "global_context",
+                        "keyword": "billStatement",
+                    }
+                ]
+            },
+        )
+
+        environment = build_filtered_environment(
+            node_info,
+            "use billStatement fromDate as namingSql query condition",
+            loaded,
+            top_global_context=1,
+            top_local_context=0,
+            top_bo=0,
+            top_function=0,
+            llm_resource_filter=llm_filter,
+        )
+
+        self.assertEqual(
+            [context.context_name for context in environment.selected_global_contexts],
+            ["$ctx$.billStatement.FROM_DATE"],
+        )
+
+    def test_exact_context_keyword_search_remains_deterministic(self):
+        loaded = StaticResourceLoader(bill_statement_context_payload()).load_resource(
+            "site1",
+            "project1",
+            sample_edsl_tree_payload(),
+        )
+        node_info = NodeDef(node_id="node-1", node_path="$.mapping_content.children[1]", node_name="SUB_INFO")
+        llm_filter = FakeResourceFilter(
+            {
+                "global_context": [{"resource_id": "ctx.0000", "reason": "fallback should lose to exact path"}],
+                "local_context": [],
+                "bo": [],
+                "function": [],
+            },
+            search_commands={
+                "commands": [
+                    {
+                        "tool": "resource_keyword_search",
+                        "group": "global_context",
+                        "keyword": "$ctx$.billStatement.FROM_DATE",
+                    }
+                ]
+            },
+        )
+
+        environment = build_filtered_environment(
+            node_info,
+            "use $ctx$.billStatement.FROM_DATE",
+            loaded,
+            top_global_context=1,
+            top_local_context=0,
+            top_bo=0,
+            top_function=0,
+            llm_resource_filter=llm_filter,
+        )
+
+        self.assertEqual(
+            [context.context_name for context in environment.selected_global_contexts],
+            ["$ctx$.billStatement.FROM_DATE"],
+        )
+
     def test_tool_search_falls_back_per_resource_group_when_only_function_matches(self):
         loaded = ResourceLoader().load_resource("site1", "project1", sample_edsl_tree_payload())
         node_info = NodeDef(

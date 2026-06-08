@@ -4,7 +4,7 @@
 - [x] 1.2 Add value logic generator tests that verify route resource count hints change filtering limits while disabled BO/function groups remain zero.
 - [x] 1.3 Add environment filtering tests for a `billStatement.fromDate` context used as a naming SQL parameter without a full `$ctx$` path.
 - [x] 1.4 Add environment filtering tests for mixed natural-language/resource-name tokenization around `billStatement` and `fromDate`.
-- [ ] 1.5 Add keyword search merge tests showing broad `billStatement` matches preserve a more specific fallback-selected field, while exact full-path matches remain deterministic.
+- [x] 1.5 Add keyword search merge tests showing broad `billStatement` matches preserve a more specific fallback-selected field, while exact full-path matches remain deterministic.
 
 ## 2. Difficulty Routing
 
@@ -30,9 +30,9 @@
 
 ## 5. Keyword Search Merge Behavior
 
-- [ ] 5.1 Distinguish exact full-path context keyword matches from broad parent-area context keyword matches.
-- [ ] 5.2 Merge broad context keyword-search results with fallback selections instead of replacing the whole group.
-- [ ] 5.3 Preserve current deterministic override behavior for exact BO names, naming SQL names, function names, and full context paths.
+- [x] 5.1 Distinguish exact full-path context keyword matches from broad parent-area context keyword matches.
+- [x] 5.2 Merge broad context keyword-search results with fallback selections instead of replacing the whole group.
+- [x] 5.3 Preserve current deterministic override behavior for exact BO names, naming SQL names, function names, and full context paths.
 
 ## 6. Verification
 

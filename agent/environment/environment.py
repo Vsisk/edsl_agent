@@ -41,6 +41,7 @@ class _ScoredResource:
 class _ToolSearchResult:
     selected_by_group: dict[str, list]
     matched_groups: set[str]
+    broad_match_groups: set[str]
 
 
 SOURCE_WEIGHTS = (
@@ -201,6 +202,7 @@ def _execute_resource_search_commands(
     selected_by_group: dict[str, list] = {}
     selected_ids_by_group: dict[str, set[str]] = {}
     matched_groups: set[str] = set()
+    broad_match_groups: set[str] = set()
     for group in candidates:
         selected_by_group[group] = []
         selected_ids_by_group[group] = set()
@@ -217,6 +219,8 @@ def _execute_resource_search_commands(
         if limits[group] <= 0:
             continue
 
+        is_broad_context_match = _is_broad_context_keyword(group, keyword, search_space[group])
+        command_found = False
         for index in search_tool.search(search_space[group], keyword):
             if index < 0 or index >= len(candidates[group]):
                 continue
@@ -228,12 +232,19 @@ def _execute_resource_search_commands(
             selected_ids_by_group[group].add(resource_id)
             found_any = True
             matched_groups.add(group)
+            command_found = True
             if len(selected_by_group[group]) >= limits[group]:
                 break
+        if command_found and is_broad_context_match:
+            broad_match_groups.add(group)
 
     if not found_any:
         return None
-    return _ToolSearchResult(selected_by_group=selected_by_group, matched_groups=matched_groups)
+    return _ToolSearchResult(
+        selected_by_group=selected_by_group,
+        matched_groups=matched_groups,
+        broad_match_groups=broad_match_groups,
+    )
 
 
 def _merge_tool_search_and_fallback(
@@ -244,14 +255,45 @@ def _merge_tool_search_and_fallback(
     if tool_search_result is None:
         return fallback_selected_by_group
 
-    return {
-        group: (
-            tool_search_result.selected_by_group[group]
-            if group in tool_search_result.matched_groups
-            else fallback_selected_by_group[group]
-        )
-        for group in fallback_selected_by_group
-    }
+    merged: dict[str, list] = {}
+    for group, fallback_resources in fallback_selected_by_group.items():
+        if group not in tool_search_result.matched_groups:
+            merged[group] = fallback_resources
+            continue
+        if group in tool_search_result.broad_match_groups:
+            limit = len(fallback_resources) or len(tool_search_result.selected_by_group[group])
+            merged[group] = _merge_resource_lists(
+                fallback_resources,
+                tool_search_result.selected_by_group[group],
+                limit=limit,
+            )
+            continue
+        merged[group] = tool_search_result.selected_by_group[group]
+    return merged
+
+
+def _is_broad_context_keyword(group: str, keyword: str, items: list[str]) -> bool:
+    if group not in {"global_context", "local_context"}:
+        return False
+    normalized = keyword.strip().lower()
+    if normalized.startswith(("$ctx$.", "$local$.", "$iter$.")):
+        return False
+    matches = ResourceKeywordSearchTool().search(items, keyword)
+    return len(matches) > 1
+
+
+def _merge_resource_lists(primary: list, secondary: list, *, limit: int) -> list:
+    selected: list = []
+    selected_ids: set[str] = set()
+    for resource in [*primary, *secondary]:
+        resource_id = getattr(resource, "resource_id", "")
+        if resource_id in selected_ids:
+            continue
+        selected.append(resource)
+        selected_ids.add(resource_id)
+        if len(selected) >= limit:
+            break
+    return selected
 
 
 def _resource_search_text(resource: object, group: str) -> str:

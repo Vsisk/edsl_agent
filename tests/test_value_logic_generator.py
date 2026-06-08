@@ -8,25 +8,8 @@ from tests.test_environment import FakeResourceFilter, sample_edsl_tree_payload
 
 
 class FakePlanner:
-    def __init__(self, plan_payload=None):
+    def __init__(self):
         self.calls = []
-        self.plan_payload = plan_payload or {
-            "nodes": [
-                {
-                    "type": "return",
-                    "value": {
-                        "type": "select_one",
-                        "bo": "BB_PREP_SUB",
-                        "filter": {
-                            "type": "compare",
-                            "op": "==",
-                            "left": {"type": "context_path", "path": "it.ID"},
-                            "right": {"type": "context_path", "path": "$ctx$.id"},
-                        },
-                    },
-                }
-            ]
-        }
 
     def plan(self, *, node_info, user_query, filtered_env):
         self.calls.append(
@@ -36,7 +19,25 @@ class FakePlanner:
                 "filtered_env": filtered_env,
             }
         )
-        return Plan.model_validate(self.plan_payload)
+        return Plan.model_validate(
+            {
+                "nodes": [
+                    {
+                        "type": "return",
+                        "value": {
+                            "type": "select_one",
+                            "bo": "BB_PREP_SUB",
+                            "filter": {
+                                "type": "compare",
+                                "op": "==",
+                                "left": {"type": "context_path", "path": "it.ID"},
+                                "right": {"type": "context_path", "path": "$ctx$.id"},
+                            },
+                        },
+                    }
+                ]
+            }
+        )
 
 
 class FakeResourceRoute:
@@ -313,53 +314,6 @@ class ValueLogicGeneratorTest(unittest.TestCase):
         self.assertEqual(resource_filter.calls[0]["limits"]["local_context"], 12)
         self.assertEqual(resource_filter.calls[0]["limits"]["bo"], 0)
         self.assertEqual(resource_filter.calls[0]["limits"]["function"], 0)
-
-    def test_function_call_expression_is_qualified_by_selected_function_class_in_code(self):
-        planner = FakePlanner(
-            {
-                "nodes": [
-                    {
-                        "type": "return",
-                        "value": {
-                            "type": "call",
-                            "name": "CustCallMask",
-                            "args": [{"type": "context_path", "path": "$ctx$.billStatement.CUST_ID"}],
-                        },
-                    }
-                ]
-            }
-        )
-        generator = ValueLogicGenerator(
-            resource_loader=ResourceLoader(),
-            llm_resource_filter=FakeResourceFilter(
-                {
-                    "bo": [],
-                    "function": [{"resource_id": "func.0001"}],
-                    "local_context": [],
-                    "global_context": [{"resource_id": "ctx.0001"}],
-                }
-            ),
-            llm_difficulty_router=FakeDifficultyRouter(FakeResourceRoute(use_bo=False, use_function=True)),
-            llm_planner=planner,
-        )
-
-        result = generator.generate(
-            ValueLogicRequest(
-                site_id="site1",
-                project_id="project1",
-                node_path="$.mapping_content.children[1]",
-                node={
-                    "node_id": "node-1",
-                    "tree_node_type": "simple_leaf",
-                    "xml_name_property": {"xml_name": "SUB_INFO"},
-                    "annotation": "user information node",
-                },
-                query="mask CUST_ID with CustCallMask",
-                edsl_tree=sample_edsl_tree_payload(),
-            )
-        )
-
-        self.assertEqual(result.expression, "DacsDataTrans.CustCallMask($ctx$.billStatement.CUST_ID)")
 
     def test_summary_field_returns_summary_result_without_calling_plan(self):
         planner = FakePlanner()

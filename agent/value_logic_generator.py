@@ -12,7 +12,6 @@ from agent.expression_generation.ast.validator import validate_ast
 from agent.models import NodeDef, ValueLogicRequest, ValueLogicResult, ValueLogicSource
 from agent.planner.difficulty_router import LLMDifficultyRouter, ResourceRoute
 from agent.planner.llm_planner import LLMPlanner
-from agent.planner.models import Plan
 from agent.resource_manager.loader.resource_loader import LoadedResource, ResourceLoader, resource_loader as default_resource_loader
 
 
@@ -180,7 +179,6 @@ class ValueLogicGenerator:
             user_query=request.query,
             filtered_env=filtered_env,
         )
-        plan = _qualify_function_resource_calls(plan, filtered_env)
         ast = build_ast(plan)
         validate_ast(ast)
         expression = generate_expression(ast)
@@ -398,55 +396,3 @@ def _resource_limits_from_route(route: ResourceRoute) -> dict[str, int]:
         "top_bo": resource_limit if route.use_bo else 0,
         "top_function": resource_limit if route.use_function else 0,
     }
-
-
-def _qualify_function_resource_calls(plan: Plan, filtered_env) -> Plan:
-    call_name_map = _build_function_call_name_map(filtered_env.selected_functions)
-    if not call_name_map:
-        return plan
-
-    plan_payload = plan.model_dump(mode="python")
-    for node_payload in plan_payload.get("nodes", []):
-        _qualify_call_node_payload(node_payload, call_name_map)
-    return Plan.model_validate(plan_payload)
-
-
-def _build_function_call_name_map(selected_functions: list[Any]) -> dict[str, str]:
-    candidates_by_name: dict[str, set[str]] = {}
-    for function in selected_functions:
-        func_name = str(getattr(function, "func_name", "") or "").strip()
-        func_class = str(getattr(function, "func_class", "") or "").strip()
-        if not func_name or not func_class:
-            continue
-        candidates_by_name.setdefault(func_name, set()).add(f"{func_class}.{func_name}")
-
-    return {
-        func_name: next(iter(qualified_names))
-        for func_name, qualified_names in candidates_by_name.items()
-        if len(qualified_names) == 1
-    }
-
-
-def _qualify_call_node_payload(node_payload: Any, call_name_map: dict[str, str]) -> None:
-    if not isinstance(node_payload, dict):
-        return
-
-    if node_payload.get("type") == "call":
-        call_name = str(node_payload.get("name") or "")
-        if "." not in call_name and call_name in call_name_map:
-            node_payload["name"] = call_name_map[call_name]
-
-    for child_key in ("value", "left", "right", "filter"):
-        _qualify_call_node_payload(node_payload.get(child_key), call_name_map)
-
-    for child_key in ("args", "items", "nodes"):
-        children = node_payload.get(child_key)
-        if isinstance(children, list):
-            for child in children:
-                _qualify_call_node_payload(child, call_name_map)
-
-    params = node_payload.get("params")
-    if isinstance(params, list):
-        for param in params:
-            if isinstance(param, dict):
-                _qualify_call_node_payload(param.get("value"), call_name_map)

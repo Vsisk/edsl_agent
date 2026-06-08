@@ -43,11 +43,11 @@ def build_tags(*values: str | None) -> List[str]:
             continue
         if index == 0:
             _append_unique(tags, text)
-            _append_unique_many(tags, tokenize_text(text, filter_stop_words=False))
+            _append_unique_many(tags, tokenize_text(text, filter_stop_words=False, include_aliases=False))
         else:
             if not re.search(r"\s", text):
                 _append_unique(tags, text)
-            _append_unique_many(tags, tokenize_text(text, filter_stop_words=True))
+            _append_unique_many(tags, tokenize_text(text, filter_stop_words=True, include_aliases=False))
     return tags
 
 
@@ -56,7 +56,7 @@ def _extract_tokens(text: str, filter_stop_words: bool, include_aliases: bool) -
     for raw_segment in text.split():
         normalized_segment = re.sub(r"[_\-.]+", " ", raw_segment)
         for segment in normalized_segment.split():
-            if _should_preserve_compound_token(segment):
+            if include_aliases and _should_preserve_compound_token(segment):
                 tokens.append(segment)
             tokens.extend(TOKEN_PATTERN.findall(segment))
             if include_aliases:

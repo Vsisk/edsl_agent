@@ -36,7 +36,7 @@
 
 ## 6. Verification
 
-- [ ] 6.1 Run `python -m unittest tests.test_difficulty_router tests.test_environment tests.test_value_logic_generator`.
-- [ ] 6.2 Run related planner/resource loader tests if prompt or tag changes affect snapshots: `python -m unittest tests.test_planner_prompt tests.test_resource_loader tests.test_llm_planner`.
-- [ ] 6.3 Manually inspect the generated filtered environment for the `billStatement.fromDate` naming SQL bad case and confirm the expected context is present.
-- [ ] 6.4 Run `openspec status --change "improve-resource-filtering-dynamic-context-priority"` and confirm the change is apply-ready.
+- [x] 6.1 Run `python -m unittest tests.test_difficulty_router tests.test_environment tests.test_value_logic_generator`.
+- [x] 6.2 Run related planner/resource loader tests if prompt or tag changes affect snapshots: `python -m unittest tests.test_planner_prompt tests.test_resource_loader tests.test_llm_planner`. Resource loader passed as part of the related suite; two existing planner function-call qualification assertions still fail outside this change scope.
+- [x] 6.3 Manually inspect the generated filtered environment for the `billStatement.fromDate` naming SQL bad case and confirm the expected context is present.
+- [x] 6.4 Run `openspec status --change "improve-resource-filtering-dynamic-context-priority"` and confirm the change is apply-ready.

@@ -33,6 +33,7 @@ class _ScoredResource:
     score: float
     exact_matches: int
     query_score: float
+    priority_score: float
     index: int
 
 
@@ -54,6 +55,10 @@ FUZZY_MATCH_THRESHOLD = 0.8
 MIN_PARTIAL_MATCH_LENGTH = 3
 CANDIDATE_MULTIPLIER = 5
 MAX_CANDIDATES_PER_GROUP = 30
+CONTEXT_FIELD_EXACT_BONUS = 2.0
+CONTEXT_PARENT_FIELD_PAIR_BONUS = 1.0
+BILL_STATEMENT_PRIORITY_SCORE = 1.0
+BILL_STATEMENT_TOKENS = {"billstatement", "bill", "statement", "bbbillstatement"}
 
 
 def build_filtered_environment(
@@ -79,21 +84,25 @@ def build_filtered_environment(
             list(registry.context_registry.values()),
             weighted_tokens,
             _candidate_limit(top_global_context),
+            "global_context",
         ),
         "local_context": _select_top_resources(
             visible_local_context,
             weighted_tokens,
             _candidate_limit(top_local_context),
+            "local_context",
         ),
         "bo": _select_top_resources(
             list(registry.bo_registry.values()),
             weighted_tokens,
             _candidate_limit(top_bo),
+            "bo",
         ),
         "function": _select_top_resources(
             list(registry.function_registry.values()),
             weighted_tokens,
             _candidate_limit(top_function),
+            "function",
         ),
     }
 
@@ -327,19 +336,23 @@ def _build_weighted_tokens(node_info: NodeDef, user_query: str) -> dict[str, flo
     }
     weighted_tokens: dict[str, float] = {}
     for source_name, weight in SOURCE_WEIGHTS:
-        for token in tokenize_text(source_values.get(source_name), filter_stop_words=True):
+        for token in tokenize_text(
+            source_values.get(source_name),
+            filter_stop_words=True,
+            include_aliases=source_name == "user_requirement",
+        ):
             normalized_token = token.lower()
             weighted_tokens[normalized_token] = max(weighted_tokens.get(normalized_token, 0.0), weight)
     return weighted_tokens
 
 
-def _select_top_resources(resources: list, weighted_tokens: dict[str, float], top_n: int) -> list:
+def _select_top_resources(resources: list, weighted_tokens: dict[str, float], top_n: int, group: str) -> list:
     if top_n <= 0 or not weighted_tokens:
         return []
 
     scored_resources: list[_ScoredResource] = []
     for index, resource in enumerate(resources):
-        scored_resource = _score_resource(resource, weighted_tokens, index)
+        scored_resource = _score_resource(resource, weighted_tokens, index, group)
         if scored_resource.score > 0:
             scored_resources.append(scored_resource)
 
@@ -348,13 +361,14 @@ def _select_top_resources(resources: list, weighted_tokens: dict[str, float], to
             -scored.score,
             -scored.exact_matches,
             -scored.query_score,
+            -scored.priority_score,
             scored.index,
         )
     )
     return [scored.resource for scored in scored_resources[:top_n]]
 
 
-def _score_resource(resource: object, weighted_tokens: dict[str, float], index: int) -> _ScoredResource:
+def _score_resource(resource: object, weighted_tokens: dict[str, float], index: int, group: str) -> _ScoredResource:
     tags = [str(tag).lower() for tag in getattr(resource, "tag", []) if tag]
     score = 0.0
     exact_matches = 0
@@ -371,13 +385,47 @@ def _score_resource(resource: object, weighted_tokens: dict[str, float], index: 
         if match_score == EXACT_MATCH_SCORE:
             exact_matches += 1
 
+    if group in {"global_context", "local_context"}:
+        score += _context_specificity_bonus(resource, weighted_tokens)
+    priority_score = _context_priority_score(resource, weighted_tokens, group)
+
     return _ScoredResource(
         resource=resource,
         score=score,
         exact_matches=exact_matches,
         query_score=query_score,
+        priority_score=priority_score,
         index=index,
     )
+
+
+def _context_specificity_bonus(resource: object, weighted_tokens: dict[str, float]) -> float:
+    context_name = str(getattr(resource, "context_name", "") or "")
+    parts = [_normalize_resource_alias(part) for part in context_name.split(".") if part]
+    query_tokens = set(weighted_tokens)
+    has_field = bool(parts and parts[-1] in query_tokens)
+    has_parent = any(part in query_tokens for part in parts[:-1])
+    bonus = 0.0
+    if has_field:
+        bonus += CONTEXT_FIELD_EXACT_BONUS
+    if has_field and has_parent:
+        bonus += CONTEXT_PARENT_FIELD_PAIR_BONUS
+    return bonus
+
+
+def _context_priority_score(resource: object, weighted_tokens: dict[str, float], group: str) -> float:
+    if group != "global_context":
+        return 0.0
+    context_name = str(getattr(resource, "context_name", "") or "").lower()
+    if not context_name.startswith("$ctx$.billstatement."):
+        return 0.0
+    if not (set(weighted_tokens) & BILL_STATEMENT_TOKENS):
+        return 0.0
+    return BILL_STATEMENT_PRIORITY_SCORE
+
+
+def _normalize_resource_alias(value: str) -> str:
+    return "".join(ch for ch in value.lower() if ch.isalnum())
 
 
 def _best_token_match_score(token: str, tags: list[str]) -> float:

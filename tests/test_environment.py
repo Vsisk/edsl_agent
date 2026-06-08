@@ -64,6 +64,76 @@ def sample_edsl_tree_payload():
     }
 
 
+def bill_statement_context_payload():
+    return {
+        "context": {
+            "global_context": {
+                "property_name": "$ctx$",
+                "sub_properties": [
+                    {
+                        "property_name": "billStatement",
+                        "property_type": "system",
+                        "return_type": {
+                            "data_type": "bo",
+                            "data_type_name": "BB_BILL_STATEMENT",
+                            "is_list": False,
+                        },
+                        "children": [
+                            {
+                                "property_name": "TO_DATE",
+                                "annotation": "to date",
+                                "return_type": {"data_type": "basic", "data_type_name": "STRING", "is_list": False},
+                            },
+                            {
+                                "property_name": "START_DATE",
+                                "annotation": "start date",
+                                "return_type": {"data_type": "basic", "data_type_name": "STRING", "is_list": False},
+                            },
+                            {
+                                "property_name": "END_DATE",
+                                "annotation": "end date",
+                                "return_type": {"data_type": "basic", "data_type_name": "STRING", "is_list": False},
+                            },
+                            {
+                                "property_name": "FROM_DATE",
+                                "annotation": "from date",
+                                "return_type": {"data_type": "basic", "data_type_name": "STRING", "is_list": False},
+                            },
+                        ],
+                    },
+                    {
+                        "property_name": "order",
+                        "property_type": "system",
+                        "return_type": {
+                            "data_type": "bo",
+                            "data_type_name": "ORDER",
+                            "is_list": False,
+                        },
+                        "children": [
+                            {
+                                "property_name": "ORDER_ID",
+                                "annotation": "order id",
+                                "return_type": {"data_type": "basic", "data_type_name": "STRING", "is_list": False},
+                            }
+                        ],
+                    },
+                ],
+            }
+        },
+        "bo": {},
+        "function": {},
+    }
+
+
+class StaticResourceLoader(ResourceLoader):
+    def __init__(self, payload):
+        super().__init__()
+        self.payload = payload
+
+    def get_resource_data(self, site_id, project_id):
+        return self.payload
+
+
 class EnvironmentBuilderTest(unittest.TestCase):
     def test_includes_ranked_visible_local_context_from_node_info(self):
         loaded = ResourceLoader().load_resource("site1", "project1", sample_edsl_tree_payload())
@@ -114,6 +184,123 @@ class EnvironmentBuilderTest(unittest.TestCase):
         self.assertEqual(
             environment.selected_local_context_ids,
             [local_context.resource_id for local_context in environment.visible_local_context],
+        )
+
+    def test_filters_camel_case_resource_name_with_stop_word_prefix(self):
+        payload = sample_edsl_tree_payload()
+        payload["mapping_content"]["local_context"] = [
+            {
+                "property_name": "toDate",
+                "annotation": "date value",
+                "return_type": {
+                    "data_type": "basic",
+                    "data_type_name": "STRING",
+                    "is_list": False,
+                },
+            },
+            {
+                "property_name": "fromDate",
+                "annotation": "date value",
+                "return_type": {
+                    "data_type": "basic",
+                    "data_type_name": "STRING",
+                    "is_list": False,
+                },
+            },
+        ]
+        loaded = ResourceLoader().load_resource("site1", "project1", payload)
+        node_info = NodeDef(
+            node_id="node-1",
+            node_path="$.mapping_content.children[0]",
+            node_name="DATE_NODE",
+        )
+
+        environment = build_filtered_environment(
+            node_info,
+            "use fromDate",
+            loaded,
+            top_global_context=0,
+            top_local_context=1,
+            top_bo=0,
+            top_function=0,
+            llm_resource_filter=FailingResourceFilter(),
+        )
+
+        self.assertEqual(
+            [local_context.context_name for local_context in environment.visible_local_context],
+            ["$local$.fromDate"],
+        )
+
+    def test_recalls_bill_statement_from_date_without_full_context_path(self):
+        loaded = StaticResourceLoader(bill_statement_context_payload()).load_resource(
+            "site1",
+            "project1",
+            sample_edsl_tree_payload(),
+        )
+        node_info = NodeDef(node_id="node-1", node_path="$.mapping_content.children[1]", node_name="SUB_INFO")
+
+        environment = build_filtered_environment(
+            node_info,
+            "use billStatement fromDate as namingSql query condition",
+            loaded,
+            top_global_context=1,
+            top_local_context=0,
+            top_bo=0,
+            top_function=0,
+            llm_resource_filter=FailingResourceFilter(),
+        )
+
+        self.assertEqual(
+            [context.context_name for context in environment.selected_global_contexts],
+            ["$ctx$.billStatement.FROM_DATE"],
+        )
+
+    def test_recalls_mixed_natural_language_resource_name_tokens(self):
+        loaded = StaticResourceLoader(bill_statement_context_payload()).load_resource(
+            "site1",
+            "project1",
+            sample_edsl_tree_payload(),
+        )
+        node_info = NodeDef(node_id="node-1", node_path="$.mapping_content.children[1]", node_name="SUB_INFO")
+
+        environment = build_filtered_environment(
+            node_info,
+            "使用billStatement里的fromDate作为namingSql查询条件",
+            loaded,
+            top_global_context=1,
+            top_local_context=0,
+            top_bo=0,
+            top_function=0,
+            llm_resource_filter=FailingResourceFilter(),
+        )
+
+        self.assertEqual(
+            [context.context_name for context in environment.selected_global_contexts],
+            ["$ctx$.billStatement.FROM_DATE"],
+        )
+
+    def test_non_bill_statement_exact_match_can_outrank_bill_statement_priority(self):
+        loaded = StaticResourceLoader(bill_statement_context_payload()).load_resource(
+            "site1",
+            "project1",
+            sample_edsl_tree_payload(),
+        )
+        node_info = NodeDef(node_id="node-1", node_path="$.mapping_content.children[1]", node_name="SUB_INFO")
+
+        environment = build_filtered_environment(
+            node_info,
+            "use order ORDER_ID",
+            loaded,
+            top_global_context=1,
+            top_local_context=0,
+            top_bo=0,
+            top_function=0,
+            llm_resource_filter=FailingResourceFilter(),
+        )
+
+        self.assertEqual(
+            [context.context_name for context in environment.selected_global_contexts],
+            ["$ctx$.order.ORDER_ID"],
         )
 
     def test_uses_llm_resource_filter_to_rerank_candidates(self):
@@ -182,7 +369,7 @@ class EnvironmentBuilderTest(unittest.TestCase):
         self.assertEqual(environment.selected_bo_ids, ["bo.0000"])
         self.assertEqual([bo.bo_name for bo in environment.selected_bos], ["BB_BAK_TRANS"])
         self.assertEqual(len(llm_filter.search_calls), 1)
-        self.assertEqual(llm_filter.calls, [])
+        self.assertEqual(len(llm_filter.calls), 1)
 
     def test_llm_tool_search_selects_function_and_context_by_resource_name(self):
         loaded = ResourceLoader().load_resource("site1", "project1", sample_edsl_tree_payload())
@@ -221,7 +408,51 @@ class EnvironmentBuilderTest(unittest.TestCase):
         self.assertEqual(environment.selected_global_context_ids, ["ctx.0001"])
         self.assertEqual(environment.selected_function_ids, ["func.0001"])
         self.assertEqual(len(llm_filter.search_calls), 1)
-        self.assertEqual(llm_filter.calls, [])
+        self.assertEqual(len(llm_filter.calls), 1)
+
+    def test_tool_search_falls_back_per_resource_group_when_only_function_matches(self):
+        loaded = ResourceLoader().load_resource("site1", "project1", sample_edsl_tree_payload())
+        node_info = NodeDef(
+            node_id="node-1",
+            node_path="$.mapping_content.children[1]",
+            node_name="SUB_INFO",
+            description="customer mask",
+        )
+        llm_filter = FakeResourceFilter(
+            {
+                "bo": [{"resource_id": "bo.0000", "reason": "semantic BO match"}],
+                "function": [{"resource_id": "func.0000", "reason": "semantic function should be ignored"}],
+                "local_context": [{"resource_id": "local.0002", "reason": "semantic local context"}],
+                "global_context": [{"resource_id": "ctx.0001", "reason": "semantic global context"}],
+            },
+            search_commands={
+                "commands": [
+                    {
+                        "tool": "resource_keyword_search",
+                        "group": "function",
+                        "keyword": "CustCallMask",
+                    }
+                ]
+            },
+        )
+
+        environment = build_filtered_environment(
+            node_info,
+            "mask customer call with CustCallMask and query transaction end date",
+            loaded,
+            top_global_context=1,
+            top_local_context=1,
+            top_bo=1,
+            top_function=1,
+            llm_resource_filter=llm_filter,
+        )
+
+        self.assertEqual(environment.selected_function_ids, ["func.0001"])
+        self.assertEqual(environment.selected_bo_ids, ["bo.0000"])
+        self.assertEqual(environment.selected_local_context_ids, ["local.0002"])
+        self.assertEqual(environment.selected_global_context_ids, ["ctx.0001"])
+        self.assertEqual(len(llm_filter.search_calls), 1)
+        self.assertEqual(len(llm_filter.calls), 1)
 
     def test_falls_back_to_string_ranked_candidates_for_invalid_llm_ids(self):
         loaded = ResourceLoader().load_resource("site1", "project1", sample_edsl_tree_payload())

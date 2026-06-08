@@ -2,8 +2,8 @@
 
 - [x] 1.1 Add difficulty router tests for parsing a valid resource count hint and falling back when the hint is missing or invalid.
 - [x] 1.2 Add value logic generator tests that verify route resource count hints change filtering limits while disabled BO/function groups remain zero.
-- [ ] 1.3 Add environment filtering tests for a `billStatement.fromDate` context used as a naming SQL parameter without a full `$ctx$` path.
-- [ ] 1.4 Add environment filtering tests for mixed natural-language/resource-name tokenization around `billStatement` and `fromDate`.
+- [x] 1.3 Add environment filtering tests for a `billStatement.fromDate` context used as a naming SQL parameter without a full `$ctx$` path.
+- [x] 1.4 Add environment filtering tests for mixed natural-language/resource-name tokenization around `billStatement` and `fromDate`.
 - [ ] 1.5 Add keyword search merge tests showing broad `billStatement` matches preserve a more specific fallback-selected field, while exact full-path matches remain deterministic.
 
 ## 2. Difficulty Routing
@@ -22,11 +22,11 @@
 
 ## 4. Candidate Recall Improvements
 
-- [ ] 4.1 Improve token normalization so camel-case, all-lowercase, and underscore forms like `fromDate`, `fromdate`, and `FROM_DATE` can match each other.
-- [ ] 4.2 Preserve mixed natural-language/resource-name tokens without breaking existing stop-word filtering behavior.
-- [ ] 4.3 Add context scoring support for recognizing parent-area plus child-field mentions such as `billStatement` plus `fromDate`.
-- [ ] 4.4 Add a deterministic `billStatement` global context priority boost or tie-breaker that only applies when bill statement context is relevant.
-- [ ] 4.5 Ensure a stronger exact match outside `billStatement` can still outrank the `billStatement` priority boost.
+- [x] 4.1 Improve token normalization so camel-case, all-lowercase, and underscore forms like `fromDate`, `fromdate`, and `FROM_DATE` can match each other.
+- [x] 4.2 Preserve mixed natural-language/resource-name tokens without breaking existing stop-word filtering behavior.
+- [x] 4.3 Add context scoring support for recognizing parent-area plus child-field mentions such as `billStatement` plus `fromDate`.
+- [x] 4.4 Add a deterministic `billStatement` global context priority boost or tie-breaker that only applies when bill statement context is relevant.
+- [x] 4.5 Ensure a stronger exact match outside `billStatement` can still outrank the `billStatement` priority boost.
 
 ## 5. Keyword Search Merge Behavior
 

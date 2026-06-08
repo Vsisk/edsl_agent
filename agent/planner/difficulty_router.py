@@ -8,10 +8,22 @@ from agent.models import NodeDef
 from agent.planner.llm_planner import _summarize_node
 
 
+DEFAULT_RESOURCE_COUNT_HINT = 5
+MIN_RESOURCE_COUNT_HINT = 1
+MAX_RESOURCE_COUNT_HINT = 20
+RESOURCE_COUNT_KEYS = (
+    "resource_count_hint",
+    "resource_count",
+    "estimated_resource_count",
+    "mentioned_resource_count",
+)
+
+
 @dataclass(frozen=True, slots=True)
 class ResourceRoute:
     use_bo: bool = True
     use_function: bool = True
+    resource_count_hint: int = DEFAULT_RESOURCE_COUNT_HINT
 
 
 class LLMDifficultyRouter:
@@ -46,6 +58,7 @@ class LLMDifficultyRouter:
 
 
 def _route_from_response(response: dict[str, Any]) -> ResourceRoute:
+    resource_count_hint = _resource_count_hint_from_response(response)
     decision = str(
         response.get("decision")
         or response.get("difficulty")
@@ -53,27 +66,28 @@ def _route_from_response(response: dict[str, Any]) -> ResourceRoute:
         or ""
     ).strip().lower()
     if decision in {"context_only", "simple", "easy", "local_global_context", "context"}:
-        return ResourceRoute(use_bo=False, use_function=False)
+        return ResourceRoute(use_bo=False, use_function=False, resource_count_hint=resource_count_hint)
     if decision in {"bo_only", "bo", "table_lookup", "need_bo"}:
-        return ResourceRoute(use_bo=True, use_function=False)
+        return ResourceRoute(use_bo=True, use_function=False, resource_count_hint=resource_count_hint)
     if decision in {"function_only", "function", "func_only", "func", "need_function"}:
-        return ResourceRoute(use_bo=False, use_function=True)
+        return ResourceRoute(use_bo=False, use_function=True, resource_count_hint=resource_count_hint)
     if decision in {"resource_filter", "complex", "full", "all", "need_resources", "bo_function"}:
-        return ResourceRoute()
+        return ResourceRoute(resource_count_hint=resource_count_hint)
 
     required_resources = _normalize_required_resources(response.get("required_resources"))
     if required_resources:
         return ResourceRoute(
             use_bo=bool({"bo", "table"} & required_resources),
             use_function=bool({"function", "func"} & required_resources),
+            resource_count_hint=resource_count_hint,
         )
 
     value = response.get("context_only")
     if isinstance(value, bool):
-        return ResourceRoute(use_bo=not value, use_function=not value)
+        return ResourceRoute(use_bo=not value, use_function=not value, resource_count_hint=resource_count_hint)
     value = response.get("can_plan_with_context_only")
     if isinstance(value, bool):
-        return ResourceRoute(use_bo=not value, use_function=not value)
+        return ResourceRoute(use_bo=not value, use_function=not value, resource_count_hint=resource_count_hint)
 
     use_bo = response.get("use_bo")
     use_function = response.get("use_function")
@@ -81,9 +95,29 @@ def _route_from_response(response: dict[str, Any]) -> ResourceRoute:
         return ResourceRoute(
             use_bo=True if use_bo is None else bool(use_bo),
             use_function=True if use_function is None else bool(use_function),
+            resource_count_hint=resource_count_hint,
         )
 
     return ResourceRoute()
+
+
+def _resource_count_hint_from_response(response: dict[str, Any]) -> int:
+    for key in RESOURCE_COUNT_KEYS:
+        if key in response:
+            return _normalize_resource_count_hint(response.get(key))
+    return DEFAULT_RESOURCE_COUNT_HINT
+
+
+def _normalize_resource_count_hint(value: Any) -> int:
+    if isinstance(value, bool):
+        return DEFAULT_RESOURCE_COUNT_HINT
+    try:
+        count = int(value)
+    except (TypeError, ValueError):
+        return DEFAULT_RESOURCE_COUNT_HINT
+    if count < MIN_RESOURCE_COUNT_HINT:
+        return DEFAULT_RESOURCE_COUNT_HINT
+    return min(count, MAX_RESOURCE_COUNT_HINT)
 
 
 def _normalize_required_resources(value: Any) -> set[str]:

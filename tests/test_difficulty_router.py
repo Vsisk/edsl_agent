@@ -67,6 +67,46 @@ class LLMDifficultyRouterTest(unittest.TestCase):
 
         self.assertEqual(result, ResourceRoute(use_bo=False, use_function=True))
 
+    def test_parses_resource_count_hint_from_llm_response(self):
+        client = FakeClient('{"decision":"bo_only","resource_count_hint":8,"reason":"needs resources"}')
+
+        result = LLMDifficultyRouter(client=client).route_resources(
+            node_info=_node_info(),
+            user_query="use naming sql with billStatement fromDate",
+        )
+
+        self.assertEqual(result, ResourceRoute(use_bo=True, use_function=False, resource_count_hint=8))
+
+    def test_parses_compatible_resource_count_aliases(self):
+        client = FakeClient('{"required_resources":["context","function"],"estimated_resource_count":"9"}')
+
+        result = LLMDifficultyRouter(client=client).route_resources(
+            node_info=_node_info(),
+            user_query="call two functions with context",
+        )
+
+        self.assertEqual(result, ResourceRoute(use_bo=False, use_function=True, resource_count_hint=9))
+
+    def test_invalid_resource_count_hint_uses_default(self):
+        client = FakeClient('{"decision":"context_only","resource_count_hint":"many"}')
+
+        result = LLMDifficultyRouter(client=client).route_resources(
+            node_info=_node_info(),
+            user_query="direct context assignment",
+        )
+
+        self.assertEqual(result, ResourceRoute(use_bo=False, use_function=False))
+
+    def test_resource_count_hint_is_clamped(self):
+        client = FakeClient('{"decision":"full","resource_count_hint":999}')
+
+        result = LLMDifficultyRouter(client=client).route_resources(
+            node_info=_node_info(),
+            user_query="many explicit resources",
+        )
+
+        self.assertEqual(result.resource_count_hint, 20)
+
     def test_unusable_client_uses_conservative_full_route_without_llm_call(self):
         client = FakeClient('{"decision":"context_only"}')
         client.is_usable = False

@@ -8,8 +8,25 @@ from tests.test_environment import FakeResourceFilter, sample_edsl_tree_payload
 
 
 class FakePlanner:
-    def __init__(self):
+    def __init__(self, plan_payload=None):
         self.calls = []
+        self.plan_payload = plan_payload or {
+            "nodes": [
+                {
+                    "type": "return",
+                    "value": {
+                        "type": "select_one",
+                        "bo": "BB_PREP_SUB",
+                        "filter": {
+                            "type": "compare",
+                            "op": "==",
+                            "left": {"type": "context_path", "path": "it.ID"},
+                            "right": {"type": "context_path", "path": "$ctx$.id"},
+                        },
+                    },
+                }
+            ]
+        }
 
     def plan(self, *, node_info, user_query, filtered_env):
         self.calls.append(
@@ -19,31 +36,14 @@ class FakePlanner:
                 "filtered_env": filtered_env,
             }
         )
-        return Plan.model_validate(
-            {
-                "nodes": [
-                    {
-                        "type": "return",
-                        "value": {
-                            "type": "select_one",
-                            "bo": "BB_PREP_SUB",
-                            "filter": {
-                                "type": "compare",
-                                "op": "==",
-                                "left": {"type": "context_path", "path": "it.ID"},
-                                "right": {"type": "context_path", "path": "$ctx$.id"},
-                            },
-                        },
-                    }
-                ]
-            }
-        )
+        return Plan.model_validate(self.plan_payload)
 
 
 class FakeResourceRoute:
-    def __init__(self, *, use_bo: bool, use_function: bool):
+    def __init__(self, *, use_bo: bool, use_function: bool, resource_count_hint: int = 5):
         self.use_bo = use_bo
         self.use_function = use_function
+        self.resource_count_hint = resource_count_hint
 
 
 class FakeDifficultyRouter:
@@ -233,6 +233,133 @@ class ValueLogicGeneratorTest(unittest.TestCase):
         self.assertEqual(filtered_env.selected_function_ids[0], "func.0001")
         self.assertEqual(filtered_env.selected_local_context_ids[0], "local.0002")
         self.assertEqual(filtered_env.selected_global_context_ids[0], "ctx.0001")
+
+    def test_resource_count_hint_expands_filter_limits(self):
+        planner = FakePlanner()
+        resource_filter = FakeResourceFilter(
+            {
+                "bo": [{"resource_id": "bo.0000"}],
+                "function": [{"resource_id": "func.0001"}],
+                "local_context": [{"resource_id": "local.0002"}],
+                "global_context": [{"resource_id": "ctx.0001"}],
+            }
+        )
+        generator = ValueLogicGenerator(
+            resource_loader=ResourceLoader(),
+            llm_resource_filter=resource_filter,
+            llm_difficulty_router=FakeDifficultyRouter(
+                FakeResourceRoute(use_bo=True, use_function=True, resource_count_hint=9)
+            ),
+            llm_planner=planner,
+        )
+
+        generator.generate(
+            ValueLogicRequest(
+                site_id="site1",
+                project_id="project1",
+                node_path="$.mapping_content.children[1]",
+                node={
+                    "node_id": "node-1",
+                    "tree_node_type": "simple_leaf",
+                    "xml_name_property": {"xml_name": "SUB_INFO"},
+                    "annotation": "user information node",
+                },
+                query="use several resources",
+                edsl_tree=sample_edsl_tree_payload(),
+            )
+        )
+
+        self.assertEqual(resource_filter.calls[0]["limits"]["global_context"], 9)
+        self.assertEqual(resource_filter.calls[0]["limits"]["local_context"], 9)
+        self.assertEqual(resource_filter.calls[0]["limits"]["bo"], 9)
+        self.assertEqual(resource_filter.calls[0]["limits"]["function"], 9)
+
+    def test_resource_count_hint_keeps_disabled_groups_zero(self):
+        planner = FakePlanner()
+        resource_filter = FakeResourceFilter(
+            {
+                "bo": [{"resource_id": "bo.0000"}],
+                "function": [{"resource_id": "func.0001"}],
+                "local_context": [{"resource_id": "local.0002"}],
+                "global_context": [{"resource_id": "ctx.0001"}],
+            }
+        )
+        generator = ValueLogicGenerator(
+            resource_loader=ResourceLoader(),
+            llm_resource_filter=resource_filter,
+            llm_difficulty_router=FakeDifficultyRouter(
+                FakeResourceRoute(use_bo=False, use_function=False, resource_count_hint=12)
+            ),
+            llm_planner=planner,
+        )
+
+        generator.generate(
+            ValueLogicRequest(
+                site_id="site1",
+                project_id="project1",
+                node_path="$.mapping_content.children[1]",
+                node={
+                    "node_id": "node-1",
+                    "tree_node_type": "simple_leaf",
+                    "xml_name_property": {"xml_name": "SUB_INFO"},
+                    "annotation": "user information node",
+                },
+                query="context only but many mentions",
+                edsl_tree=sample_edsl_tree_payload(),
+            )
+        )
+
+        self.assertEqual(resource_filter.calls[0]["limits"]["global_context"], 12)
+        self.assertEqual(resource_filter.calls[0]["limits"]["local_context"], 12)
+        self.assertEqual(resource_filter.calls[0]["limits"]["bo"], 0)
+        self.assertEqual(resource_filter.calls[0]["limits"]["function"], 0)
+
+    def test_function_call_expression_is_qualified_by_selected_function_class_in_code(self):
+        planner = FakePlanner(
+            {
+                "nodes": [
+                    {
+                        "type": "return",
+                        "value": {
+                            "type": "call",
+                            "name": "CustCallMask",
+                            "args": [{"type": "context_path", "path": "$ctx$.billStatement.CUST_ID"}],
+                        },
+                    }
+                ]
+            }
+        )
+        generator = ValueLogicGenerator(
+            resource_loader=ResourceLoader(),
+            llm_resource_filter=FakeResourceFilter(
+                {
+                    "bo": [],
+                    "function": [{"resource_id": "func.0001"}],
+                    "local_context": [],
+                    "global_context": [{"resource_id": "ctx.0001"}],
+                }
+            ),
+            llm_difficulty_router=FakeDifficultyRouter(FakeResourceRoute(use_bo=False, use_function=True)),
+            llm_planner=planner,
+        )
+
+        result = generator.generate(
+            ValueLogicRequest(
+                site_id="site1",
+                project_id="project1",
+                node_path="$.mapping_content.children[1]",
+                node={
+                    "node_id": "node-1",
+                    "tree_node_type": "simple_leaf",
+                    "xml_name_property": {"xml_name": "SUB_INFO"},
+                    "annotation": "user information node",
+                },
+                query="mask CUST_ID with CustCallMask",
+                edsl_tree=sample_edsl_tree_payload(),
+            )
+        )
+
+        self.assertEqual(result.expression, "DacsDataTrans.CustCallMask($ctx$.billStatement.CUST_ID)")
 
     def test_summary_field_returns_summary_result_without_calling_plan(self):
         planner = FakePlanner()

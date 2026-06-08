@@ -1,7 +1,7 @@
 ## 1. Regression Coverage
 
 - [x] 1.1 Add difficulty router tests for parsing a valid resource count hint and falling back when the hint is missing or invalid.
-- [ ] 1.2 Add value logic generator tests that verify route resource count hints change filtering limits while disabled BO/function groups remain zero.
+- [x] 1.2 Add value logic generator tests that verify route resource count hints change filtering limits while disabled BO/function groups remain zero.
 - [ ] 1.3 Add environment filtering tests for a `billStatement.fromDate` context used as a naming SQL parameter without a full `$ctx$` path.
 - [ ] 1.4 Add environment filtering tests for mixed natural-language/resource-name tokenization around `billStatement` and `fromDate`.
 - [ ] 1.5 Add keyword search merge tests showing broad `billStatement` matches preserve a more specific fallback-selected field, while exact full-path matches remain deterministic.
@@ -15,10 +15,10 @@
 
 ## 3. Dynamic Filtering Limits
 
-- [ ] 3.1 Add a small helper in `ValueLogicGenerator` to convert `resource_count_hint` into `top_global_context`, `top_local_context`, `top_bo`, and `top_function` values.
-- [ ] 3.2 Thread dynamic context limits into `build_filtered_environment()` instead of relying on fixed default context limits.
-- [ ] 3.3 Keep disabled BO/function groups at zero regardless of the resource count hint.
-- [ ] 3.4 Bound all dynamic limits to avoid unbounded prompt growth.
+- [x] 3.1 Add a small helper in `ValueLogicGenerator` to convert `resource_count_hint` into `top_global_context`, `top_local_context`, `top_bo`, and `top_function` values.
+- [x] 3.2 Thread dynamic context limits into `build_filtered_environment()` instead of relying on fixed default context limits.
+- [x] 3.3 Keep disabled BO/function groups at zero regardless of the resource count hint.
+- [x] 3.4 Bound all dynamic limits to avoid unbounded prompt growth.
 
 ## 4. Candidate Recall Improvements
 

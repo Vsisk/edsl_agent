@@ -3,3 +3,5 @@ agent/resource_manager/data/context_definition.json
 agent/resource_manager/data/edsl_func.json
 agent/resource_manager/data/edsl_tree.json
 .env
+__pycache__/
+.worktrees/

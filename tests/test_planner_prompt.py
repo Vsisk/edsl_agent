@@ -41,6 +41,21 @@ class PlannerPromptTest(unittest.TestCase):
         self.assertIn("Function resources must be called with their provided name", prompt)
         self.assertIn("DacsDataTrans.CustCallMask", prompt)
 
+    def test_resource_filter_target_prompt_explains_root_context_domain(self):
+        prompt = prompt_manager.render(
+            "resource_filter_target",
+            query="使用上下文 bill_id",
+            ctx_domains='["bill_id"]',
+            bo_domains="[]",
+            func_domains="[]",
+            namingsql_domains="[]",
+            resource_count_summary="{}",
+        )
+
+        self.assertIn("$ctx$.xxx", prompt)
+        self.assertIn("domain=xxx", prompt)
+        self.assertIn("source_type=context", prompt)
+
 
 if __name__ == "__main__":
     unittest.main()

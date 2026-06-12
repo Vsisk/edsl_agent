@@ -536,6 +536,7 @@ class ResourceLoaderTest(unittest.TestCase):
         self.assertEqual(sorted(loaded.function_registry), ["CustCallMask", "getClassifyByRAcctId"])
         self.assertIn("Transaction", loaded.bo_registry["BB_BAK_TRANS"].tag)
         self.assertIn("Mask", loaded.function_registry["CustCallMask"].tag)
+        self.assertEqual(loaded.domain_registry.ctx_domains, ["billStatement", "bill_id"])
         self.assertEqual(loaded.bo_registry["BB_BAK_TRANS"].property_list[0].field_name, "LOG_ID")
         self.assertEqual(
             loaded.bo_registry["BB_BAK_TRANS"].naming_sql_list[0].param_list[0].param_name,

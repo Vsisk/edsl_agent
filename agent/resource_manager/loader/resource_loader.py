@@ -107,7 +107,7 @@ def _build_domain_registry(
 
 def _context_domain(context_name: str) -> str:
     parts = [part for part in str(context_name or "").split(".") if part]
-    if len(parts) >= 3 and parts[0] == "$ctx$":
+    if len(parts) >= 2 and parts[0] == "$ctx$":
         return parts[1]
     return ""
 

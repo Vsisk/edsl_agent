@@ -2,7 +2,7 @@ from dataclasses import dataclass, field
 from difflib import SequenceMatcher
 from typing import Any, List
 
-from agent.environment.resource_filter import LLMResourceFilter
+from agent.environment.resource_filter import BOFilter, ContextFilter, FunctionFilter, LLMResourceFilter, NamingSQLFilter
 from agent.environment.resource_search_tool import ResourceKeywordSearchTool
 from agent.models import NodeDef
 from agent.resource_manager.loader.resource_loader import LoadedResource
@@ -10,8 +10,10 @@ from agent.resource_manager.loader.tag_utils import tokenize_text
 from agent.resource_manager.loader.registry_models import (
     BoRegistry,
     ContextRegistry,
+    FilterTarget,
     FunctionRegistry,
     LocalContextRegistry,
+    SourceType,
 )
 
 
@@ -25,6 +27,7 @@ class FilteredEnvironment:
     visible_local_context: List[LocalContextRegistry] = field(default_factory=list)
     selected_bos: List[BoRegistry] = field(default_factory=list)
     selected_functions: List[FunctionRegistry] = field(default_factory=list)
+    selection_trace: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,6 +45,126 @@ class _ToolSearchResult:
     selected_by_group: dict[str, list]
     matched_groups: set[str]
     broad_match_groups: set[str]
+
+
+def filter_resources(
+    *,
+    targets: list[FilterTarget],
+    loaded_resource: LoadedResource,
+    resource_limits: dict[str, int],
+) -> FilteredEnvironment:
+    if not targets:
+        return FilteredEnvironment(selection_trace=[{"reason": "FILTER_TARGET_EMPTY"}])
+
+    context_targets = [target for target in targets if target.source_type == SourceType.CONTEXT]
+    bo_targets = [target for target in targets if target.source_type == SourceType.BO]
+    function_targets = [target for target in targets if target.source_type == SourceType.FUNCTION]
+    namingsql_targets = [target for target in targets if target.source_type == SourceType.NAMING_SQL]
+
+    context_resources = ContextFilter().filter(
+        context_targets,
+        loaded_resource.context_registry,
+        resource_limits.get("context_count", resource_limits.get("top_global_context", 20)),
+    )
+    bo_resources = BOFilter().filter(
+        bo_targets,
+        loaded_resource.bo_registry,
+        resource_limits.get("bo_count", resource_limits.get("top_bo", 10)),
+    )
+    function_resources = FunctionFilter().filter(
+        function_targets,
+        loaded_resource.function_registry,
+        resource_limits.get("function_count", resource_limits.get("top_function", 10)),
+    )
+    namingsql_resources = NamingSQLFilter().filter(
+        namingsql_targets,
+        loaded_resource.bo_registry,
+        resource_limits.get("namingsql_count", resource_limits.get("top_bo", 10)),
+    )
+    selected_bos = _merge_filtered_bo_resources(bo_resources, namingsql_resources)
+    selection_trace = [
+        {
+            "target": {
+                "source_type": target.source_type.value,
+                "domain": target.domain,
+                "source_name": target.source_name,
+            },
+            "matched_domain": target.domain,
+            "matched_count": _matched_count_for_target(
+                target,
+                context_resources=context_resources,
+                bo_resources=selected_bos,
+                function_resources=function_resources,
+            ),
+        }
+        for target in targets
+    ]
+
+    return FilteredEnvironment(
+        selected_global_context_ids=[context.resource_id for context in context_resources],
+        selected_bo_ids=[bo.resource_id for bo in selected_bos],
+        selected_function_ids=[function.resource_id for function in function_resources],
+        selected_global_contexts=context_resources,
+        selected_bos=selected_bos,
+        selected_functions=function_resources,
+        selection_trace=selection_trace,
+    )
+
+
+def _merge_filtered_bo_resources(bo_resources: list[BoRegistry], namingsql_resources: list[BoRegistry]) -> list[BoRegistry]:
+    by_name: dict[str, BoRegistry] = {}
+    for bo in [*bo_resources, *namingsql_resources]:
+        existing = by_name.get(bo.bo_name)
+        if existing is None:
+            by_name[bo.bo_name] = bo
+            continue
+        properties = _merge_by_attr([*existing.property_list, *bo.property_list], "field_name")
+        naming_sql = _merge_by_attr([*existing.naming_sql_list, *bo.naming_sql_list], "sql_name")
+        by_name[bo.bo_name] = existing.model_copy(
+            update={"property_list": properties, "naming_sql_list": naming_sql},
+            deep=True,
+        )
+    return list(by_name.values())
+
+
+def _merge_by_attr(items: list[Any], attr: str) -> list[Any]:
+    result: list[Any] = []
+    seen: set[str] = set()
+    for item in items:
+        key = str(getattr(item, attr, "") or "")
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        result.append(item)
+    return result
+
+
+def _matched_count_for_target(
+    target: FilterTarget,
+    *,
+    context_resources: list[Any],
+    bo_resources: list[Any],
+    function_resources: list[Any],
+) -> int:
+    if target.source_type == SourceType.CONTEXT:
+        prefix = f"$ctx$.{target.domain}."
+        normalized = target.source_name.lower()
+        return sum(
+            1
+            for resource in context_resources
+            if str(getattr(resource, "context_name", "")).startswith(prefix)
+            and str(getattr(resource, "context_name", "")).split(".")[-1].lower() == normalized
+        )
+    if target.source_type in {SourceType.BO, SourceType.NAMING_SQL}:
+        return sum(1 for resource in bo_resources if getattr(resource, "bo_name", "") == target.domain)
+    if target.source_type == SourceType.FUNCTION:
+        return sum(
+            1
+            for resource in function_resources
+            if getattr(resource, "func_class", "") == target.domain
+            and getattr(resource, "func_name", "") == target.source_name
+        )
+    return 0
 
 
 SOURCE_WEIGHTS = (
@@ -71,7 +194,20 @@ def build_filtered_environment(
     top_bo: int = 5,
     top_function: int = 5,
     llm_resource_filter: Any | None = None,
+    targets: list[FilterTarget] | None = None,
 ) -> FilteredEnvironment:
+    if targets is not None:
+        return filter_resources(
+            targets=targets,
+            loaded_resource=registry,
+            resource_limits={
+                "context_count": max(top_global_context, top_local_context, 0),
+                "bo_count": max(top_bo, 0),
+                "function_count": max(top_function, 0),
+                "namingsql_count": max(top_bo, 0),
+            },
+        )
+
     visible_local_context = list(registry.get_visible_local_context_registry(node_info.node_path).values())
     weighted_tokens = _build_weighted_tokens(node_info, user_query)
     limits = {

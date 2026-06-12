@@ -3,6 +3,8 @@ from agent.resource_manager.loader.registry_models import (
     BoReturnField,
     ContextRegistry,
     DataTypeEnum,
+    DomainRegistry,
+    FilterTarget,
     FunctionRegistry,
     LocalContextRegistry,
     NamingSqlDefTerm,
@@ -12,6 +14,7 @@ from agent.resource_manager.loader.registry_models import (
     PropertyTypeEnum,
     ReturnType,
     ReturnTypeTerm,
+    SourceType,
 )
 
 __all__ = [
@@ -19,6 +22,8 @@ __all__ = [
     "BoReturnField",
     "ContextRegistry",
     "DataTypeEnum",
+    "DomainRegistry",
+    "FilterTarget",
     "FunctionRegistry",
     "LocalContextRegistry",
     "NamingSqlDefTerm",
@@ -28,4 +33,5 @@ __all__ = [
     "PropertyTypeEnum",
     "ReturnType",
     "ReturnTypeTerm",
+    "SourceType",
 ]

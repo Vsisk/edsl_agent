@@ -2,6 +2,7 @@ import unittest
 
 from agent.models import ValueLogicRequest
 from agent.planner.models import Plan
+from agent.resource_manager.loader.registry_models import FilterTarget, SourceType
 from agent.resource_manager.loader.resource_loader import ResourceLoader
 from agent.value_logic_generator import ValueLogicGenerator
 from tests.test_environment import FakeResourceFilter, sample_edsl_tree_payload
@@ -40,6 +41,51 @@ class FakePlanner:
         )
 
 
+class FailingDifficultyRouter:
+    def route_resources(self, *, node_info, user_query):
+        raise AssertionError("difficulty router must not be called on the default resource filter path")
+
+
+class FailingLegacyResourceFilter(FakeResourceFilter):
+    def __init__(self):
+        super().__init__({})
+
+    def plan_resource_search_commands(self, *, node_info, user_query, search_space, limits):
+        raise AssertionError("legacy resource search must not be called on the default path")
+
+    def filter_resources(self, *, node_info, user_query, candidates, limits):
+        raise AssertionError("legacy tag selector must not be called on the default path")
+
+
+class FakeExpressionSpecGenerator:
+    def __init__(self, nl):
+        self.nl = nl
+        self.calls = []
+
+    def generate(self, *, request, node_info):
+        self.calls.append({"request": request, "node_info": node_info})
+        from agent.value_logic_generator import ExpressionSpec
+
+        return ExpressionSpec(nl=self.nl)
+
+
+class FakeTargetGenerator:
+    def __init__(self, targets):
+        self.targets = targets
+        self.calls = []
+        self.selection_trace = []
+
+    def generate(self, *, query, domain_registry, resource_count_summary=None):
+        self.calls.append(
+            {
+                "query": query,
+                "domain_registry": domain_registry,
+                "resource_count_summary": resource_count_summary,
+            }
+        )
+        return self.targets
+
+
 class FakeResourceRoute:
     def __init__(self, *, use_bo: bool, use_function: bool, resource_count_hint: int = 5):
         self.use_bo = use_bo
@@ -63,6 +109,72 @@ class FakeDifficultyRouter:
 
 
 class ValueLogicGeneratorTest(unittest.TestCase):
+    def test_default_path_uses_expression_spec_nl_and_does_not_call_legacy_filtering(self):
+        planner = FakePlanner()
+        expression_spec_generator = FakeExpressionSpecGenerator("上下文 billStatement 的 CUST_ID")
+        target_generator = FakeTargetGenerator(
+            [FilterTarget(SourceType.CONTEXT, "billStatement", "CUST_ID")]
+        )
+        generator = ValueLogicGenerator(
+            resource_loader=ResourceLoader(),
+            llm_resource_filter=FailingLegacyResourceFilter(),
+            llm_difficulty_router=FailingDifficultyRouter(),
+            llm_planner=planner,
+            expression_spec_generator=expression_spec_generator,
+            resource_filter_target_generator=target_generator,
+        )
+
+        result = generator.generate(
+            ValueLogicRequest(
+                site_id="site1",
+                project_id="project1",
+                node_path="$.mapping_content.children[1]",
+                node={
+                    "node_id": "node-1",
+                    "tree_node_type": "simple_leaf",
+                    "xml_name_property": {"xml_name": "SUB_INFO"},
+                    "annotation": "user information node",
+                },
+                query="raw query should not be used for resource filtering",
+                edsl_tree=sample_edsl_tree_payload(),
+            )
+        )
+
+        self.assertEqual(result.logic_type, "expression")
+        self.assertEqual(target_generator.calls[0]["query"], "上下文 billStatement 的 CUST_ID")
+        self.assertEqual(planner.calls[0]["filtered_env"].selected_global_context_ids, ["ctx.0001"])
+        self.assertEqual(planner.calls[0]["user_query"], "raw query should not be used for resource filtering")
+
+    def test_empty_targets_use_empty_filtered_environment_by_default(self):
+        planner = FakePlanner()
+        generator = ValueLogicGenerator(
+            resource_loader=ResourceLoader(),
+            llm_resource_filter=FailingLegacyResourceFilter(),
+            llm_difficulty_router=FailingDifficultyRouter(),
+            llm_planner=planner,
+            expression_spec_generator=FakeExpressionSpecGenerator("no resource"),
+            resource_filter_target_generator=FakeTargetGenerator([]),
+        )
+
+        generator.generate(
+            ValueLogicRequest(
+                site_id="site1",
+                project_id="project1",
+                node_path="$.mapping_content.children[1]",
+                node={
+                    "node_id": "node-1",
+                    "tree_node_type": "simple_leaf",
+                    "xml_name_property": {"xml_name": "SUB_INFO"},
+                },
+                query="anything",
+                edsl_tree=sample_edsl_tree_payload(),
+            )
+        )
+
+        filtered_env = planner.calls[0]["filtered_env"]
+        self.assertEqual(filtered_env.selected_global_context_ids, [])
+        self.assertEqual(filtered_env.selection_trace[-1]["reason"], "FILTER_TARGET_EMPTY")
+
     def test_simple_leaf_generates_expression_by_existing_plan(self):
         planner = FakePlanner()
         generator = ValueLogicGenerator(
@@ -117,6 +229,7 @@ class ValueLogicGeneratorTest(unittest.TestCase):
             llm_resource_filter=resource_filter,
             llm_difficulty_router=difficulty_router,
             llm_planner=planner,
+            enable_legacy_filter_fallback=True,
         )
 
         result = generator.generate(
@@ -164,6 +277,7 @@ class ValueLogicGeneratorTest(unittest.TestCase):
             llm_resource_filter=resource_filter,
             llm_difficulty_router=FakeDifficultyRouter(FakeResourceRoute(use_bo=True, use_function=False)),
             llm_planner=planner,
+            enable_legacy_filter_fallback=True,
         )
 
         generator.generate(
@@ -207,6 +321,7 @@ class ValueLogicGeneratorTest(unittest.TestCase):
             llm_resource_filter=resource_filter,
             llm_difficulty_router=FakeDifficultyRouter(FakeResourceRoute(use_bo=False, use_function=True)),
             llm_planner=planner,
+            enable_legacy_filter_fallback=True,
         )
 
         generator.generate(
@@ -252,6 +367,7 @@ class ValueLogicGeneratorTest(unittest.TestCase):
                 FakeResourceRoute(use_bo=True, use_function=True, resource_count_hint=9)
             ),
             llm_planner=planner,
+            enable_legacy_filter_fallback=True,
         )
 
         generator.generate(
@@ -292,6 +408,7 @@ class ValueLogicGeneratorTest(unittest.TestCase):
                 FakeResourceRoute(use_bo=False, use_function=False, resource_count_hint=12)
             ),
             llm_planner=planner,
+            enable_legacy_filter_fallback=True,
         )
 
         generator.generate(

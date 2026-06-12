@@ -6,7 +6,13 @@ from agent.resource_manager.loader.bo_loader import load_bo_registry_by_json
 from agent.resource_manager.loader.context_loader import load_context_registry_by_json
 from agent.resource_manager.loader.function_loader import load_function_registry_by_json
 from agent.resource_manager.loader.local_context_loader import load_visible_local_context_registry
-from agent.resource_manager.loader.registry_models import BoRegistry, ContextRegistry, FunctionRegistry, LocalContextRegistry
+from agent.resource_manager.loader.registry_models import (
+    BoRegistry,
+    ContextRegistry,
+    DomainRegistry,
+    FunctionRegistry,
+    LocalContextRegistry,
+)
 
 
 @dataclass(slots=True)
@@ -15,6 +21,7 @@ class LoadedResource:
     bo_registry: Dict[str, BoRegistry]
     function_registry: Dict[str, FunctionRegistry]
     edsl_tree: Dict[str, Any]
+    domain_registry: DomainRegistry
 
     def get_visible_local_context_registry(self, node_path: str) -> Dict[str, LocalContextRegistry]:
         return {
@@ -52,6 +59,11 @@ class ResourceLoader:
             bo_registry=self.bo_registry_cache[source_key],
             function_registry=self.function_registry_cache[source_key],
             edsl_tree=edsl_tree,
+            domain_registry=_build_domain_registry(
+                context_registry=self.context_registry_cache[source_key],
+                bo_registry=self.bo_registry_cache[source_key],
+                function_registry=self.function_registry_cache[source_key],
+            ),
         )
 
     def get_resource_data(self, site_id: str, project_id: str) -> Dict[str, Any]:
@@ -75,3 +87,38 @@ class ResourceLoader:
 
 
 resource_loader = ResourceLoader()
+
+
+def _build_domain_registry(
+    *,
+    context_registry: Dict[str, ContextRegistry],
+    bo_registry: Dict[str, BoRegistry],
+    function_registry: Dict[str, FunctionRegistry],
+) -> DomainRegistry:
+    return DomainRegistry(
+        ctx_domains=_dedupe_sorted(_context_domain(name) for name in context_registry),
+        bo_domains=_dedupe_sorted(bo.bo_name for bo in bo_registry.values()),
+        func_domains=_dedupe_sorted(function.func_class for function in function_registry.values()),
+        namingsql_domains=_dedupe_sorted(
+            bo.bo_name for bo in bo_registry.values() if getattr(bo, "naming_sql_list", None)
+        ),
+    )
+
+
+def _context_domain(context_name: str) -> str:
+    parts = [part for part in str(context_name or "").split(".") if part]
+    if len(parts) >= 3 and parts[0] == "$ctx$":
+        return parts[1]
+    return ""
+
+
+def _dedupe_sorted(values) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        normalized = str(value or "").strip()
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        result.append(normalized)
+    return sorted(result)

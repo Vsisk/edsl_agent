@@ -144,11 +144,14 @@ def _summarize_bo(resource: Any) -> dict[str, Any]:
 
 def _summarize_function(resource: Any) -> dict[str, Any]:
     return_type = getattr(resource, "return_type", None)
+    func_name = getattr(resource, "func_name", "")
+    func_class = getattr(resource, "func_class", "")
+    qualified_name = f"{func_class}.{func_name}" if func_class and func_name else func_name
     return {
         "resource_id": getattr(resource, "resource_id", ""),
-        "name": getattr(resource, "func_name", ""),
+        "name": qualified_name,
         "description": getattr(resource, "func_desc", ""),
-        "class": getattr(resource, "func_class", ""),
+        "class": func_class,
         "params": [
             {
                 "name": item.param_name,

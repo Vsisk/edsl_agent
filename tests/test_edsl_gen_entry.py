@@ -75,7 +75,7 @@ class EDSLGenEntryTest(unittest.TestCase):
         self.assertEqual(result.source.source_type, "plan")
         self.assertEqual(planner.calls[0]["node_info"].node_id, "node-1")
         self.assertEqual(planner.calls[0]["user_query"], "query one prep sub by id")
-        self.assertEqual(planner.calls[0]["filtered_env"].selected_bo_ids, ["bo.0000"])
+        self.assertEqual(planner.calls[0]["filtered_env"].selected_bo_ids, [])
 
     def test_generate_value_logic_raises_when_generation_fails(self):
         generator = ValueLogicGenerator(

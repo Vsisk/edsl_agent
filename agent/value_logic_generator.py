@@ -4,8 +4,8 @@ from dataclasses import dataclass, field
 import json
 from typing import Any
 
-from agent.environment.environment import build_filtered_environment
-from agent.environment.resource_filter import LLMResourceFilter
+from agent.environment.environment import build_filtered_environment, filter_resources
+from agent.environment.resource_filter import LLMResourceFilter, ResourceFilterTargetGenerator
 from agent.expression_generation.ast.builder import build_ast
 from agent.expression_generation.ast.generator import generate_expression
 from agent.expression_generation.ast.validator import validate_ast
@@ -19,6 +19,16 @@ DEFAULT_CONTEXT_LIMIT = 5
 DEFAULT_RESOURCE_LIMIT = 5
 MAX_DYNAMIC_CONTEXT_LIMIT = 12
 MAX_DYNAMIC_RESOURCE_LIMIT = 10
+
+
+@dataclass(slots=True)
+class ExpressionSpec:
+    nl: str
+
+
+class ExpressionSpecGenerator:
+    def generate(self, *, request: ValueLogicRequest, node_info: NodeDef) -> ExpressionSpec:
+        return ExpressionSpec(nl=str(request.query or "").strip())
 
 
 @dataclass(slots=True)
@@ -42,11 +52,17 @@ class ValueLogicGenerator:
         llm_resource_filter: Any | None = None,
         llm_difficulty_router: Any | None = None,
         llm_planner: LLMPlanner | None = None,
+        expression_spec_generator: Any | None = None,
+        resource_filter_target_generator: Any | None = None,
+        enable_legacy_filter_fallback: bool = False,
     ):
         self.resource_loader = resource_loader or default_resource_loader
         self.llm_resource_filter = llm_resource_filter or LLMResourceFilter()
         self.llm_difficulty_router = llm_difficulty_router or LLMDifficultyRouter()
         self.llm_planner = llm_planner or LLMPlanner()
+        self.expression_spec_generator = expression_spec_generator or ExpressionSpecGenerator()
+        self.resource_filter_target_generator = resource_filter_target_generator or ResourceFilterTargetGenerator()
+        self.enable_legacy_filter_fallback = enable_legacy_filter_fallback
 
     def generate(self, request: ValueLogicRequest) -> ValueLogicResult:
         resources = ResourceContext(
@@ -165,15 +181,31 @@ class ValueLogicGenerator:
 
     def _generate_expression_by_plan(self, request: ValueLogicRequest, ctx: GenerationContext) -> ValueLogicResult:
         node_info = self._to_node_def(request.node, request.node_path)
-        route = self._route_resources(node_info, request.query)
-        resource_limits = _resource_limits_from_route(route)
-        filtered_env = build_filtered_environment(
+        resource_limits = _default_resource_limits()
+        expression_spec = self.expression_spec_generator.generate(
+            request=request,
             node_info=node_info,
-            user_query=request.query,
-            registry=ctx.resources.loaded,
-            llm_resource_filter=self.llm_resource_filter,
-            **resource_limits,
         )
+        targets = self.resource_filter_target_generator.generate(
+            query=expression_spec.nl,
+            domain_registry=ctx.resources.loaded.domain_registry,
+            resource_count_summary=_resource_count_summary(ctx.resources.loaded),
+        )
+        filtered_env = filter_resources(
+            targets=targets,
+            loaded_resource=ctx.resources.loaded,
+            resource_limits=resource_limits,
+        )
+        if not targets and self.enable_legacy_filter_fallback:
+            route = self._route_resources(node_info, expression_spec.nl)
+            legacy_limits = _resource_limits_from_route(route)
+            filtered_env = build_filtered_environment(
+                node_info=node_info,
+                user_query=expression_spec.nl,
+                registry=ctx.resources.loaded,
+                llm_resource_filter=self.llm_resource_filter,
+                **legacy_limits,
+            )
         plan = self.llm_planner.plan(
             node_info=node_info,
             user_query=request.query,
@@ -395,4 +427,24 @@ def _resource_limits_from_route(route: ResourceRoute) -> dict[str, int]:
         "top_local_context": context_limit,
         "top_bo": resource_limit if route.use_bo else 0,
         "top_function": resource_limit if route.use_function else 0,
+    }
+
+
+def _default_resource_limits() -> dict[str, int]:
+    return {
+        "context_count": DEFAULT_CONTEXT_LIMIT,
+        "bo_count": DEFAULT_RESOURCE_LIMIT,
+        "function_count": DEFAULT_RESOURCE_LIMIT,
+        "namingsql_count": DEFAULT_RESOURCE_LIMIT,
+    }
+
+
+def _resource_count_summary(loaded_resource: LoadedResource) -> dict[str, int]:
+    return {
+        "context_count": len(loaded_resource.context_registry),
+        "bo_count": len(loaded_resource.bo_registry),
+        "function_count": len(loaded_resource.function_registry),
+        "namingsql_count": sum(
+            len(getattr(bo, "naming_sql_list", []) or []) for bo in loaded_resource.bo_registry.values()
+        ),
     }

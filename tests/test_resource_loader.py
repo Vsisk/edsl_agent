@@ -479,6 +479,10 @@ class ResourceLoaderTest(unittest.TestCase):
         self.assertEqual(sorted(loaded.context_registry), ["$ctx$.trans.LOG_ID"])
         self.assertEqual(sorted(loaded.bo_registry), ["BB_BAK_TRANS", "CUSTOM_ACCOUNT"])
         self.assertEqual(sorted(loaded.function_registry), ["CustCallMask", "getClassifyByRAcctId"])
+        self.assertEqual(loaded.domain_registry.ctx_domains, ["trans"])
+        self.assertEqual(loaded.domain_registry.bo_domains, ["BB_BAK_TRANS", "CUSTOM_ACCOUNT"])
+        self.assertEqual(loaded.domain_registry.func_domains, ["DacsDataTrans", "deOrg"])
+        self.assertEqual(loaded.domain_registry.namingsql_domains, ["BB_BAK_TRANS"])
         self.assertEqual(loaded.edsl_tree, {"root": []})
 
     def test_loaded_resource_generates_visible_local_context_registry(self):

@@ -1,3 +1,4 @@
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
@@ -15,6 +16,31 @@ class DataTypeEnum(str, Enum):
 class PropertyTypeEnum(str, Enum):
     system = "system"
     custom = "custom"
+
+
+class SourceType(str, Enum):
+    CONTEXT = "context"
+    BO = "bo"
+    FUNCTION = "function"
+    NAMING_SQL = "namingsql"
+
+
+@dataclass(slots=True)
+class FilterTarget:
+    source_type: SourceType
+    domain: str
+    source_name: str
+    confidence: float = 1.0
+    is_required: bool = True
+    reason: str | None = None
+
+
+@dataclass(slots=True)
+class DomainRegistry:
+    ctx_domains: list[str] = field(default_factory=list)
+    bo_domains: list[str] = field(default_factory=list)
+    func_domains: list[str] = field(default_factory=list)
+    namingsql_domains: list[str] = field(default_factory=list)
 
 
 class ReturnType(BaseModel):

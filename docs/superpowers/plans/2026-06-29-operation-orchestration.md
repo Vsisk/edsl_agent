@@ -162,7 +162,7 @@ git commit -m "feat: add operation orchestration contracts"
 - Create: `agent/operation_orchestration/node_index.py`
 - Create: `tests/test_operation_node_index.py`
 
-- [ ] **Step 1: Write failing DFS tests**
+- [x] **Step 1: Write failing DFS tests**
 
 ```python
 import pytest
@@ -196,13 +196,13 @@ def test_duplicate_node_ids_are_rejected():
         build_node_index(payload)
 ```
 
-- [ ] **Step 2: Run the tests and verify RED**
+- [x] **Step 2: Run the tests and verify RED**
 
 Run: `python -m pytest tests/test_operation_node_index.py -q`
 
 Expected: import fails because `node_index.py` does not exist.
 
-- [ ] **Step 3: Implement DFS and filters**
+- [x] **Step 3: Implement DFS and filters**
 
 Define `NodeLocateCandidate(BaseModel)` with the requested fields and `CREATE_PARENT_TYPES` containing all five required types. Traverse dict properties in insertion order and list elements in index order. Build JSONPath segments with dot notation for identifier keys and quoted bracket notation for other keys; current production trees use identifier keys, yielding the acceptance paths above. A dictionary is indexed only when both `node_id` and `tree_node_type` are non-empty. Preserve DFS order in the returned dict.
 
@@ -213,13 +213,13 @@ def is_valid_candidate(intent_type: str, candidate: NodeLocateCandidate) -> bool
     return intent_type in {"modify_node", "generate_expression", "delete_node"}
 ```
 
-- [ ] **Step 4: Run DFS tests and verify GREEN**
+- [x] **Step 4: Run DFS tests and verify GREEN**
 
 Run: `python -m pytest tests/test_operation_node_index.py -q`
 
 Expected: all tests pass.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```powershell
 git add agent/operation_orchestration/node_index.py tests/test_operation_node_index.py

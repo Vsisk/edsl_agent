@@ -133,6 +133,30 @@ def test_noncreate_rejects_untrusted_or_uncertain_selections(payload: dict) -> N
     ]
 
 
+@pytest.mark.parametrize(
+    ("selected_node_id", "selected_jsonpath"),
+    [
+        (" leaf ", "$.children[0]"),
+        ("leaf", " $.children[0] "),
+    ],
+)
+def test_noncreate_rejects_padded_selection_fields(
+    selected_node_id: str, selected_jsonpath: str
+) -> None:
+    response = OperationLocator(
+        lambda _query, _intent, _candidates: {
+            "selected_node_id": selected_node_id,
+            "selected_jsonpath": selected_jsonpath,
+            "confidence": "high",
+            "reason": "leaf",
+        }
+    ).locate(LocateOperationRequest(operation=_operation(), target_tree=_tree()))
+
+    assert response.success is False
+    assert response.operation.status == "failed"
+    assert response.operation.target_node_id is None
+
+
 def test_gateway_exception_fails_a_noncreate_operation() -> None:
     def gateway(_query: str, _intent: str, _candidates: list[dict]) -> dict:
         raise RuntimeError("offline")
@@ -198,6 +222,42 @@ def test_create_falls_back_to_first_valid_root_candidate(payload_or_error: objec
     assert response.operation.target_node_id == "root"
     assert response.operation.target_jsonpath == "$"
     assert [candidate["node_id"] for candidate in response.candidates] == ["root"]
+
+
+@pytest.mark.parametrize(
+    ("selected_node_id", "selected_jsonpath"),
+    [
+        (" nested ", "$.children[0]"),
+        ("nested", " $.children[0] "),
+    ],
+)
+def test_create_padded_selection_fields_trigger_root_fallback(
+    selected_node_id: str, selected_jsonpath: str
+) -> None:
+    target_tree = {
+        "node_id": "root",
+        "tree_node_type": "parent",
+        "children": [
+            {"node_id": "nested", "tree_node_type": "parent"}
+        ],
+    }
+    response = OperationLocator(
+        lambda _query, _intent, _candidates: {
+            "selected_node_id": selected_node_id,
+            "selected_jsonpath": selected_jsonpath,
+            "confidence": "high",
+            "reason": "nested",
+        }
+    ).locate(
+        LocateOperationRequest(
+            operation=_operation("create_node"), target_tree=target_tree
+        )
+    )
+
+    assert response.success is True
+    assert response.operation.status == "located"
+    assert response.operation.target_node_id == "root"
+    assert response.operation.target_jsonpath == "$"
 
 
 def test_create_fails_when_no_valid_root_candidate_exists() -> None:

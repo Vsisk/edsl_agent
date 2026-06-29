@@ -4,7 +4,7 @@ import json
 from collections.abc import Callable
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, StringConstraints
+from pydantic import BaseModel, ConfigDict, StringConstraints, field_validator
 
 from agent.llm.generate_by_llm import generate_by_llm
 from agent.operation_orchestration.models import (
@@ -17,7 +17,7 @@ from agent.operation_orchestration.node_index import build_node_index, is_valid_
 
 LLMGateway = Callable[[str, str, list[dict[str, Any]]], dict[str, Any]]
 _NonBlankText = Annotated[
-    str, StringConstraints(strip_whitespace=True, min_length=1)
+    str, StringConstraints(min_length=1)
 ]
 
 
@@ -30,6 +30,15 @@ class LocationSelection(BaseModel):
     selected_jsonpath: _NonBlankText
     confidence: Literal["high", "medium", "low"]
     reason: _NonBlankText
+
+    @field_validator(
+        "selected_node_id", "selected_jsonpath", "reason", mode="before"
+    )
+    @classmethod
+    def require_verbatim_trimmed_text(cls, value: Any) -> Any:
+        if isinstance(value, str) and value != value.strip():
+            raise ValueError("value must already be trimmed")
+        return value
 
 
 class OperationLocator:

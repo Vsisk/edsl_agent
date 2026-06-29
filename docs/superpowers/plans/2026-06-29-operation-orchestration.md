@@ -284,7 +284,7 @@ git commit -m "feat: generate node-level operations"
 - Modify: `prompt.json`
 - Modify: `tests/test_planner_prompt.py`
 
-- [ ] **Step 1: Write failing locator tests**
+- [x] **Step 1: Write failing locator tests**
 
 Cover successful selection, ID/path mismatch rejection, dependent-operation rejection, create-only root fallback on gateway exception or uncertain response, and no fallback for modify/expression/delete.
 
@@ -305,25 +305,25 @@ def test_modify_location_does_not_fall_back():
     assert response.operation.status == "failed"
 ```
 
-- [ ] **Step 2: Run locator tests and verify RED**
+- [x] **Step 2: Run locator tests and verify RED**
 
 Run: `python -m pytest tests/test_operation_locator.py tests/test_planner_prompt.py -q`
 
 Expected: locator import or prompt assertions fail.
 
-- [ ] **Step 3: Implement locator and location-search prompt**
+- [x] **Step 3: Implement locator and location-search prompt**
 
 Define a strict `LocationSelection` model. Send only filtered candidate dumps, query, and intent to the injected gateway/default `generate_by_llm("operation_locator_prompt", ...)`. Accept confidence values `high`, `medium`, and `low`; treat low confidence as failure. Verify selected ID and exact path against the same candidate. On any selection/gateway failure, call `_fallback_create_root()` only for create; choose the first valid candidate whose `parent_node_id is None`. Return candidate dumps on all outcomes.
 
 The prompt must explicitly state: select only supplied candidates, copy both ID and path verbatim from one candidate, never synthesize JSONPath, and return the strict four-field object.
 
-- [ ] **Step 4: Run locator and prompt tests and verify GREEN**
+- [x] **Step 4: Run locator and prompt tests and verify GREEN**
 
 Run: `python -m pytest tests/test_operation_locator.py tests/test_planner_prompt.py -q`
 
 Expected: all tests pass.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```powershell
 git add agent/operation_orchestration/locator.py tests/test_operation_locator.py tests/test_planner_prompt.py prompt.json

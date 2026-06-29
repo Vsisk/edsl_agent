@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import json
 import re
+from collections import Counter
 from collections.abc import Callable
-from typing import Any
+from itertools import islice
+from typing import Annotated, Any, Literal
 
-from pydantic import ValidationError
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, ValidationError
 
 from agent.operation_orchestration.models import (
     GenerateOperationsRequest,
@@ -13,18 +15,56 @@ from agent.operation_orchestration.models import (
     Operation,
     validate_and_sort_operations,
 )
-from agent.operation_orchestration.node_index import build_node_index
+from agent.operation_orchestration.node_index import (
+    NodeLocateCandidate,
+    build_node_index,
+)
 
 
 LLMGateway = Callable[[str, list[dict[str, Any]]], dict[str, Any]]
+MAX_TREE_SUMMARY_CANDIDATES = 200
+MAX_SUMMARY_TEXT_LENGTH = 256
+MAX_SUMMARY_PATH_LENGTH = 512
 _CONTAINER_CAPABILITY = "需要包含子节点"
 _CONTAINER_CAPABILITY_VARIANT = re.compile(
-    r"(?:不\s*需要|无需|需要)\s*包含\s*子节点"
+    r"(?:(?:不\s*(?:需要|应该|需|必)|无\s*(?:需|须)|需要)\s*包含\s*子节点)"
 )
+_CONTROL_OR_WHITESPACE = re.compile(r"[\s\x00-\x1f\x7f-\x9f]+")
 _PUNCTUATION_RUN = re.compile(r"([，,；;。.!！？?])(?:\s*[，,；;。.!！？?])+")
 _DANGLING_CONNECTOR = re.compile(
     r"(?:[，,；;]\s*)?(?:但是|但|并且|而且|同时|且|并)\s*$"
 )
+
+_NonBlankText = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1),
+]
+
+
+class _LLMOperation(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    op_id: _NonBlankText
+    query: _NonBlankText
+    intent_type: Literal[
+        "create_node",
+        "modify_node",
+        "generate_expression",
+        "delete_node",
+    ]
+    depends_on: list[_NonBlankText] = Field(default_factory=list)
+    target_from: _NonBlankText | None = None
+    target_jsonpath: str | None = None
+    target_node_id: str | None = None
+    output_node_id: str | None = None
+    status: Literal["pending", "located", "executed", "failed"] = "pending"
+    error_message: str | None = None
+
+
+class _LLMGenerateOperationsResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    operations: list[_LLMOperation] = Field(min_length=1, max_length=100)
 
 
 class OperationGenerator:
@@ -41,25 +81,29 @@ class OperationGenerator:
         except ValueError as exc:
             raise ValueError(f"failed to summarize target tree: {exc}") from exc
 
-        summary = [
-            candidate.model_dump(mode="json") for candidate in node_index.values()
-        ]
+        summary = self._build_target_tree_summary(node_index)
         try:
             payload = self._llm_gateway(request.query, summary)
         except Exception as exc:
             raise ValueError(f"operation generation gateway failed: {exc}") from exc
 
+        if isinstance(payload, dict) and payload.get("operations") == []:
+            raise ValueError("operation generation requires at least one operation")
         try:
-            generated = GenerateOperationsResponse.model_validate(payload, strict=True)
+            inbound = _LLMGenerateOperationsResponse.model_validate(
+                payload, strict=True
+            )
         except (ValidationError, TypeError, ValueError) as exc:
             raise ValueError(f"invalid operation generation payload: {exc}") from exc
 
-        if not generated.operations:
-            raise ValueError("operation generation requires at least one operation")
+        generated_operations = [
+            Operation.model_validate(operation.model_dump(mode="python"))
+            for operation in inbound.operations
+        ]
 
-        original_ids = [operation.op_id for operation in generated.operations]
+        original_ids = [operation.op_id for operation in generated_operations]
         duplicate_ids = {
-            op_id for op_id in original_ids if original_ids.count(op_id) > 1
+            op_id for op_id, count in Counter(original_ids).items() if count > 1
         }
         if duplicate_ids:
             duplicates = ", ".join(sorted(duplicate_ids))
@@ -71,7 +115,7 @@ class OperationGenerator:
         }
         operations = [
             self._normalize_operation(operation, id_mapping)
-            for operation in generated.operations
+            for operation in generated_operations
         ]
 
         try:
@@ -81,6 +125,36 @@ class OperationGenerator:
 
         self._enrich_container_queries(operations)
         return GenerateOperationsResponse(operations=operations)
+
+    @staticmethod
+    def _build_target_tree_summary(
+        node_index: dict[str, NodeLocateCandidate],
+    ) -> list[dict[str, Any]]:
+        summary: list[dict[str, Any]] = []
+        candidates = islice(node_index.values(), MAX_TREE_SUMMARY_CANDIDATES)
+        for candidate in candidates:
+            item = candidate.model_dump(mode="json")
+            for field_name in (
+                "xml_name",
+                "annotation",
+                "parent_xml_name",
+                "tree_node_type",
+            ):
+                item[field_name] = OperationGenerator._sanitize_summary_text(
+                    item[field_name], MAX_SUMMARY_TEXT_LENGTH
+                )
+            for field_name in ("node_id", "jsonpath", "parent_node_id"):
+                item[field_name] = OperationGenerator._sanitize_summary_text(
+                    item[field_name], MAX_SUMMARY_PATH_LENGTH
+                )
+            summary.append(item)
+        return summary
+
+    @staticmethod
+    def _sanitize_summary_text(value: Any, max_length: int) -> Any:
+        if not isinstance(value, str):
+            return value
+        return _CONTROL_OR_WHITESPACE.sub(" ", value).strip()[:max_length]
 
     @staticmethod
     def _normalize_operation(

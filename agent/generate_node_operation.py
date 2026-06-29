@@ -83,7 +83,13 @@ class PathResolver:
         r"^\$(?:\.[A-Za-z_][A-Za-z0-9_]*|\[[0-9]+\])+$"
     )
     _SEGMENT = re.compile(r"\.([A-Za-z_][A-Za-z0-9_]*)|\[([0-9]+)\]")
-    _CONTAINER_TYPES = {"parent", "parent_list"}
+    _CONTAINER_TYPES = {
+        "parent",
+        "parent_list",
+        "ab_single_mapping_table",
+        "ab_two_level_table",
+        "ab_pivot_table",
+    }
 
     def resolve(self, edsl_tree: dict[str, Any], node_path: str) -> ResolvedNodePath:
         resolved_value = self.resolve_value(

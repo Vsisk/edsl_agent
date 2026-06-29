@@ -102,6 +102,23 @@ def test_normalizes_parent_path_without_root_marker(sample_tree):
     assert result.patch_path == "/mapping_content/children/1/children/-"
 
 
+@pytest.mark.parametrize(
+    "tree_node_type",
+    ["parent", "parent_list", "ab_single_mapping_table", "ab_two_level_table", "ab_pivot_table"],
+)
+def test_resolver_accepts_all_create_parent_types(tree_node_type):
+    tree = {
+        "target": {
+            "tree_node_type": tree_node_type,
+            "children": [],
+        }
+    }
+
+    result = PathResolver().resolve(tree, "$.target")
+
+    assert result.patch_path == "/target/children/-"
+
+
 def test_rejects_leaf_as_parent(sample_tree):
     with pytest.raises(OperationFailure) as error:
         PathResolver().resolve(sample_tree, "$.mapping_content.children[0]")

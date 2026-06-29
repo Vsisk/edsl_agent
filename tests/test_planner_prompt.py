@@ -56,6 +56,43 @@ class PlannerPromptTest(unittest.TestCase):
         self.assertIn("domain=xxx", prompt)
         self.assertIn("source_type=context", prompt)
 
+    def test_node_type_route_prompt_has_narrow_json_contract(self):
+        prompt = prompt_manager.render("node_type_route_prompt", query="生成账户ID字段")
+
+        self.assertIn("生成账户ID字段", prompt)
+        self.assertIn('"tree_node_type"', prompt)
+        self.assertIn('"evidence_terms"', prompt)
+
+    def test_common_node_field_prompt_has_narrow_json_contract(self):
+        prompt = prompt_manager.render("common_node_field_prompt", query="生成账户ID字段")
+
+        self.assertIn("生成账户ID字段", prompt)
+        self.assertIn('"xml_name_property"', prompt)
+        self.assertIn('"reference_logic_area_id_list"', prompt)
+
+    def test_modify_intent_route_prompt_has_narrow_json_contract(self):
+        prompt = prompt_manager.render(
+            "modify_intent_route_prompt",
+            query="改成列表节点",
+            current_node_json='{"tree_node_type":"parent"}',
+        )
+
+        self.assertIn("改成列表节点", prompt)
+        self.assertIn('"intent_type"', prompt)
+        self.assertNotIn('"patch_list"', prompt)
+
+    def test_modify_plan_prompt_has_narrow_json_contract(self):
+        prompt = prompt_manager.render(
+            "modify_plan_prompt",
+            query="XML 名称改成 ACCT_ID",
+            current_node_json='{"tree_node_type":"simple_leaf"}',
+            modify_intent_json='{"intent_type":"set_common_field"}',
+        )
+
+        self.assertIn('"common_field_updates"', prompt)
+        self.assertIn('"migration_plan"', prompt)
+        self.assertNotIn('"patch_list"', prompt)
+
 
 if __name__ == "__main__":
     unittest.main()

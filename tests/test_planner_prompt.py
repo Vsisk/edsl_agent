@@ -4,6 +4,41 @@ from agent.llm.prompt_manager import prompt_manager
 
 
 class PlannerPromptTest(unittest.TestCase):
+    def test_operation_generator_prompt_has_strict_contract(self):
+        prompt = prompt_manager.render(
+            "operation_generator_prompt",
+            query="创建父节点和两个子节点",
+            target_tree_summary_json='[{"node_id":"root"}]',
+        )
+
+        self.assertIn("create_node", prompt)
+        self.assertIn("modify_node", prompt)
+        self.assertIn("generate_expression", prompt)
+        self.assertIn("delete_node", prompt)
+        self.assertIn("one node per operation", prompt)
+        self.assertIn("op_0", prompt)
+        self.assertIn("target_from", prompt)
+        self.assertIn("siblings", prompt)
+        self.assertIn("需要包含子节点", prompt)
+        self.assertIn('{"operations":[', prompt)
+
+    def test_operation_generator_prompt_forbids_runtime_and_location_fields(self):
+        prompt = prompt_manager.render(
+            "operation_generator_prompt",
+            query="修改节点",
+            target_tree_summary_json="[]",
+        )
+
+        self.assertIn("MUST NOT emit", prompt)
+        for field in (
+            "target_jsonpath",
+            "target_node_id",
+            "output_node_id",
+            "status",
+            "error_message",
+        ):
+            self.assertIn(field, prompt)
+
     def test_planner_prompt_explains_call_node(self):
         prompt = prompt_manager.render(
             "planner",

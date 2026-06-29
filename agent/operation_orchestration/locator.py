@@ -20,6 +20,10 @@ from agent.operation_orchestration.node_index import build_node_index, is_valid_
 LLMGateway = Callable[[str, str, list[dict[str, Any]]], dict[str, Any]]
 MAX_PROMPT_CANDIDATES = 200
 MAX_PROMPT_BYTES = 32_000
+MAX_QUERY_BYTES = 4_096
+MAX_NODE_ID_BYTES = 256
+MAX_JSONPATH_BYTES = 2_048
+PROMPT_OVERHEAD_BYTES = 4_096
 MAX_DESCRIPTION_LENGTH = 256
 _DESCRIPTION_FIELDS = ("xml_name", "annotation", "parent_xml_name")
 _CONTROL_OR_WHITESPACE = re.compile(r"[\s\x00-\x1f\x7f-\x9f]+")
@@ -96,55 +100,97 @@ class OperationLocator:
                 f"no valid candidates for intent {operation.intent_type}",
             )
 
-        valid_selections: list[tuple[int, int, dict[str, Any]]] = []
-        errors: list[str] = []
-        global_offset = 0
-        for authoritative_chunk, prompt_chunk in self._candidate_chunks(candidates):
-            try:
-                payload = self._llm_gateway(
-                    operation.query,
-                    operation.intent_type,
-                    deepcopy(prompt_chunk),
-                )
-                selection = LocationSelection.model_validate(payload, strict=True)
-                if selection.confidence == "low":
-                    raise ValueError("locator returned low confidence")
-
-                selected_index = next(
-                    (
-                        index
-                        for index, candidate in enumerate(authoritative_chunk)
-                        if candidate["node_id"] == selection.selected_node_id
-                    ),
-                    None,
-                )
-                if selected_index is None:
-                    raise ValueError("selected node_id is not a supplied candidate")
-                selected = authoritative_chunk[selected_index]
-                if selected["jsonpath"] != selection.selected_jsonpath:
-                    raise ValueError(
-                        "selected jsonpath does not match the selected candidate"
-                    )
-                confidence_rank = 2 if selection.confidence == "high" else 1
-                valid_selections.append(
-                    (confidence_rank, global_offset + selected_index, selected)
-                )
-            except Exception as exc:
-                errors.append(str(exc))
-            global_offset += len(authoritative_chunk)
-
-        if valid_selections:
-            _, _, selected = min(
-                valid_selections, key=lambda item: (-item[0], item[1])
+        structural_error = self._validate_structural_limits(
+            operation.query, candidates
+        )
+        if structural_error is not None:
+            return self._fallback_or_failure(
+                operation, candidates, structural_error
             )
-            return self._success(operation, candidates, selected)
 
-        reason = "; ".join(errors) or "no valid semantic selection"
-        return self._fallback_or_failure(operation, candidates, reason)
+        round_candidates = candidates
+        all_errors: list[str] = []
+        while True:
+            try:
+                chunks = self._candidate_chunks(
+                    round_candidates, operation.query, operation.intent_type
+                )
+            except ValueError as exc:
+                return self._fallback_or_failure(operation, candidates, str(exc))
+
+            winners: list[dict[str, Any]] = []
+            round_errors: list[str] = []
+            for authoritative_chunk, prompt_chunk in chunks:
+                try:
+                    winner = self._select_chunk(
+                        operation.query,
+                        operation.intent_type,
+                        authoritative_chunk,
+                        prompt_chunk,
+                    )
+                    winners.append(winner)
+                except Exception as exc:
+                    round_errors.append(str(exc))
+
+            all_errors.extend(round_errors)
+            if not winners:
+                reason = "; ".join(all_errors) or "no valid semantic selection"
+                return self._fallback_or_failure(operation, candidates, reason)
+            if len(winners) == 1:
+                return self._success(operation, candidates, winners[0])
+            if len(winners) >= len(round_candidates):
+                return self._fallback_or_failure(
+                    operation,
+                    candidates,
+                    "semantic tournament did not reduce candidate count",
+                )
+            round_candidates = tuple(winners)
+
+    def _select_chunk(
+        self,
+        query: str,
+        intent_type: str,
+        authoritative_chunk: tuple[dict[str, Any], ...],
+        prompt_chunk: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        payload = self._llm_gateway(query, intent_type, deepcopy(prompt_chunk))
+        selection = LocationSelection.model_validate(payload, strict=True)
+        if selection.confidence == "low":
+            raise ValueError("locator returned low confidence")
+
+        selected = next(
+            (
+                candidate
+                for candidate in authoritative_chunk
+                if candidate["node_id"] == selection.selected_node_id
+            ),
+            None,
+        )
+        if selected is None:
+            raise ValueError("selected node_id is not a supplied candidate")
+        if selected["jsonpath"] != selection.selected_jsonpath:
+            raise ValueError("selected jsonpath does not match the selected candidate")
+        return selected
+
+    @staticmethod
+    def _validate_structural_limits(
+        query: str, candidates: tuple[dict[str, Any], ...]
+    ) -> str | None:
+        if len(query.encode("utf-8")) > MAX_QUERY_BYTES:
+            return f"query exceeds {MAX_QUERY_BYTES} UTF-8 bytes"
+        for candidate in candidates:
+            if len(candidate["node_id"].encode("utf-8")) > MAX_NODE_ID_BYTES:
+                return f"candidate node_id exceeds {MAX_NODE_ID_BYTES} UTF-8 bytes"
+            if len(candidate["jsonpath"].encode("utf-8")) > MAX_JSONPATH_BYTES:
+                return f"candidate jsonpath exceeds {MAX_JSONPATH_BYTES} UTF-8 bytes"
+        return None
 
     @classmethod
     def _candidate_chunks(
-        cls, candidates: tuple[dict[str, Any], ...]
+        cls,
+        candidates: tuple[dict[str, Any], ...],
+        query: str,
+        intent_type: str,
     ) -> list[tuple[tuple[dict[str, Any], ...], list[dict[str, Any]]]]:
         chunks: list[
             tuple[tuple[dict[str, Any], ...], list[dict[str, Any]]]
@@ -156,11 +202,19 @@ class OperationLocator:
             prompt_candidate = cls._prompt_candidate(candidate)
             proposed_prompt_chunk = [*prompt_chunk, prompt_candidate]
             exceeds_count = len(proposed_prompt_chunk) > MAX_PROMPT_CANDIDATES
-            exceeds_bytes = cls._prompt_size(proposed_prompt_chunk) > MAX_PROMPT_BYTES
+            exceeds_bytes = (
+                cls._prompt_size(proposed_prompt_chunk, query, intent_type)
+                > MAX_PROMPT_BYTES
+            )
             if prompt_chunk and (exceeds_count or exceeds_bytes):
                 chunks.append((tuple(authoritative_chunk), prompt_chunk))
                 authoritative_chunk = []
                 prompt_chunk = []
+            if not prompt_chunk and (
+                cls._prompt_size([prompt_candidate], query, intent_type)
+                > MAX_PROMPT_BYTES
+            ):
+                raise ValueError("single candidate exceeds locator prompt budget")
             authoritative_chunk.append(candidate)
             prompt_chunk.append(prompt_candidate)
 
@@ -180,8 +234,15 @@ class OperationLocator:
         return prompt_candidate
 
     @staticmethod
-    def _prompt_size(candidates: list[dict[str, Any]]) -> int:
-        return len(json.dumps(candidates, ensure_ascii=False).encode("utf-8"))
+    def _prompt_size(
+        candidates: list[dict[str, Any]], query: str, intent_type: str
+    ) -> int:
+        return (
+            len(json.dumps(candidates, ensure_ascii=False).encode("utf-8"))
+            + len(query.encode("utf-8"))
+            + len(intent_type.encode("utf-8"))
+            + PROMPT_OVERHEAD_BYTES
+        )
 
     @staticmethod
     def _success(

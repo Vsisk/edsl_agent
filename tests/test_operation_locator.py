@@ -574,6 +574,166 @@ def test_locator_breaks_equal_confidence_ties_by_global_dfs_order() -> None:
     assert response.operation.target_node_id == "node-5"
 
 
+def test_global_tournament_can_choose_a_later_chunk_winner() -> None:
+    calls: list[list[str]] = []
+
+    def gateway(_query: str, _intent: str, candidates: list[dict]) -> dict:
+        node_ids = [candidate["node_id"] for candidate in candidates]
+        calls.append(node_ids)
+        if len(candidates) <= 3 and "node-200" in node_ids:
+            winner = next(
+                candidate for candidate in candidates if candidate["node_id"] == "node-200"
+            )
+            return _selection(winner, "high")
+        if "node-200" in node_ids:
+            winner = next(
+                candidate for candidate in candidates if candidate["node_id"] == "node-200"
+            )
+            return _selection(winner, "high")
+        return _selection(candidates[0], "high")
+
+    response = OperationLocator(gateway).locate(
+        LocateOperationRequest(
+            operation=_operation(), target_tree=_many_node_tree(201)
+        )
+    )
+
+    assert len(calls) >= 3
+    assert response.success is True
+    assert response.operation.target_node_id == "node-200"
+
+
+def test_global_tournament_recurses_when_winners_exceed_a_chunk(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(locator_module, "MAX_PROMPT_CANDIDATES", 2)
+    calls = 0
+
+    def gateway(_query: str, _intent: str, candidates: list[dict]) -> dict:
+        nonlocal calls
+        calls += 1
+        return _selection(candidates[-1], "high")
+
+    response = OperationLocator(gateway).locate(
+        LocateOperationRequest(
+            operation=_operation(), target_tree=_many_node_tree(9)
+        )
+    )
+
+    assert calls == 11
+    assert response.success is True
+    assert response.operation.target_node_id == "node-8"
+
+
+def test_every_initial_and_tournament_call_stays_within_total_byte_budget() -> None:
+    calls = 0
+    tournament_call_seen = False
+
+    def gateway(query: str, intent_type: str, candidates: list[dict]) -> dict:
+        nonlocal calls, tournament_call_seen
+        calls += 1
+        total_bytes = (
+            len(json.dumps(candidates, ensure_ascii=False).encode("utf-8"))
+            + len(query.encode("utf-8"))
+            + len(intent_type.encode("utf-8"))
+            + locator_module.PROMPT_OVERHEAD_BYTES
+        )
+        assert total_bytes <= locator_module.MAX_PROMPT_BYTES
+        indexes = [int(candidate["node_id"].split("-")[1]) for candidate in candidates]
+        if any(right - left > 1 for left, right in zip(indexes, indexes[1:])):
+            tournament_call_seen = True
+        return _selection(candidates[-1], "high")
+
+    response = OperationLocator(gateway).locate(
+        LocateOperationRequest(
+            operation=_operation(), target_tree=_many_node_tree(401)
+        )
+    )
+
+    assert calls >= 4
+    assert tournament_call_seen is True
+    assert response.operation.target_node_id == "node-400"
+
+
+@pytest.mark.parametrize(
+    ("query", "target_tree", "expected_limit"),
+    [
+        (
+            "界" * ((locator_module.MAX_QUERY_BYTES // 3) + 1),
+            _many_node_tree(1),
+            "query",
+        ),
+        (
+            "modify amount",
+            {
+                "node_id": "n" * (locator_module.MAX_NODE_ID_BYTES + 1),
+                "tree_node_type": "simple_leaf",
+            },
+            "node_id",
+        ),
+        (
+            "modify amount",
+            {
+                "p" * (locator_module.MAX_JSONPATH_BYTES + 1): {
+                    "node_id": "leaf",
+                    "tree_node_type": "simple_leaf",
+                }
+            },
+            "jsonpath",
+        ),
+    ],
+)
+def test_structural_byte_limits_fail_before_gateway(
+    query: str, target_tree: dict, expected_limit: str
+) -> None:
+    called = False
+
+    def gateway(_query: str, _intent: str, _candidates: list[dict]) -> dict:
+        nonlocal called
+        called = True
+        return {}
+
+    operation = _operation().model_copy(update={"query": query})
+    response = OperationLocator(gateway).locate(
+        LocateOperationRequest(operation=operation, target_tree=target_tree)
+    )
+
+    assert called is False
+    assert response.success is False
+    assert response.operation.target_node_id is None
+    assert expected_limit in (response.error_message or "")
+
+
+def test_create_uses_root_fallback_without_gateway_on_structural_limit() -> None:
+    called = False
+    target_tree = {
+        "node_id": "root",
+        "tree_node_type": "parent",
+        "children": [
+            {
+                "node_id": "n" * (locator_module.MAX_NODE_ID_BYTES + 1),
+                "tree_node_type": "parent",
+            }
+        ],
+    }
+
+    def gateway(_query: str, _intent: str, _candidates: list[dict]) -> dict:
+        nonlocal called
+        called = True
+        return {}
+
+    response = OperationLocator(gateway).locate(
+        LocateOperationRequest(
+            operation=_operation("create_node"), target_tree=target_tree
+        )
+    )
+
+    assert called is False
+    assert response.success is True
+    assert response.operation.target_node_id == "root"
+    assert response.error_message == "semantic location failed; used create root fallback"
+
+
 def test_earlier_chunk_exception_does_not_block_later_valid_selection() -> None:
     calls = 0
 

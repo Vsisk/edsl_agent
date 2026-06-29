@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import json
 
 import pytest
 
@@ -26,6 +27,28 @@ def _tree() -> dict:
 
 def _operation(intent_type: str = "modify_node") -> Operation:
     return Operation(op_id="op_0", query="modify amount", intent_type=intent_type)
+
+
+def _many_node_tree(count: int) -> dict:
+    return {
+        "nodes": [
+            {
+                "node_id": f"node-{index}",
+                "tree_node_type": "simple_leaf",
+                "annotation": f"node {index}",
+            }
+            for index in range(count)
+        ]
+    }
+
+
+def _selection(candidate: dict, confidence: str = "high") -> dict:
+    return {
+        "selected_node_id": candidate["node_id"],
+        "selected_jsonpath": candidate["jsonpath"],
+        "confidence": confidence,
+        "reason": "selected candidate",
+    }
 
 
 def test_locate_accepts_an_exact_high_confidence_selection() -> None:
@@ -186,6 +209,33 @@ def test_dependent_operation_is_rejected_without_calling_gateway_or_fallback() -
     assert response.operation.status == "failed"
     assert response.operation.target_node_id is None
     assert called is False
+
+
+def test_location_attempt_clears_stale_runtime_fields_before_failure() -> None:
+    operation = Operation(
+        op_id="op_stale",
+        query="modify amount",
+        intent_type="modify_node",
+        depends_on=["upstream"],
+        target_node_id="stale-node",
+        target_jsonpath="$.stale",
+        output_node_id="stale-output",
+        status="executed",
+        error_message="stale error",
+    )
+
+    response = OperationLocator(
+        lambda _query, _intent, _candidates: (_ for _ in ()).throw(
+            AssertionError("must not call gateway")
+        )
+    ).locate(LocateOperationRequest(operation=operation, target_tree=_tree()))
+
+    assert response.success is False
+    assert response.operation.status == "failed"
+    assert response.operation.target_node_id is None
+    assert response.operation.target_jsonpath is None
+    assert response.operation.output_node_id is None
+    assert response.operation.error_message != "stale error"
 
 
 @pytest.mark.parametrize(
@@ -369,6 +419,183 @@ def test_locate_does_not_mutate_request_operation_or_tree() -> None:
     assert response.operation is not operation
     assert operation.model_dump(mode="python") == operation_before
     assert target_tree == tree_before
+
+
+def test_gateway_cannot_mutate_authoritative_candidates_or_invent_location() -> None:
+    def gateway(_query: str, _intent: str, candidates: list[dict]) -> dict:
+        candidates[1]["node_id"] = "invented"
+        candidates[1]["jsonpath"] = "$.invented"
+        candidates[1]["parent_node_id"] = None
+        return {
+            "selected_node_id": "invented",
+            "selected_jsonpath": "$.invented",
+            "confidence": "high",
+            "reason": "mutated candidate",
+        }
+
+    response = OperationLocator(gateway).locate(
+        LocateOperationRequest(operation=_operation(), target_tree=_tree())
+    )
+
+    assert response.success is False
+    assert response.operation.target_node_id is None
+    assert [candidate["node_id"] for candidate in response.candidates] == [
+        "root",
+        "leaf",
+    ]
+    assert response.candidates[1]["jsonpath"] == "$.children[0]"
+    assert response.candidates[1]["parent_node_id"] == "root"
+
+
+def test_gateway_mutation_cannot_redirect_create_root_fallback() -> None:
+    target_tree = {
+        "node_id": "root",
+        "tree_node_type": "parent",
+        "children": [{"node_id": "nested", "tree_node_type": "parent"}],
+    }
+
+    def gateway(_query: str, _intent: str, candidates: list[dict]) -> dict:
+        candidates[0]["parent_node_id"] = "fake-parent"
+        candidates[1]["parent_node_id"] = None
+        candidates[1]["node_id"] = "invented"
+        candidates[1]["jsonpath"] = "$.invented"
+        return {
+            "selected_node_id": "invented",
+            "selected_jsonpath": "$.invented",
+            "confidence": "high",
+            "reason": "mutated nested candidate",
+        }
+
+    response = OperationLocator(gateway).locate(
+        LocateOperationRequest(
+            operation=_operation("create_node"), target_tree=target_tree
+        )
+    )
+
+    assert response.success is True
+    assert response.operation.target_node_id == "root"
+    assert response.operation.target_jsonpath == "$"
+    assert response.error_message == "semantic location failed; used create root fallback"
+    assert [candidate["parent_node_id"] for candidate in response.candidates] == [
+        None,
+        "root",
+    ]
+
+
+def test_all_201_candidates_are_searchable_through_bounded_chunks() -> None:
+    chunk_sizes: list[int] = []
+
+    def gateway(_query: str, _intent: str, candidates: list[dict]) -> dict:
+        chunk_sizes.append(len(candidates))
+        assert len(candidates) <= 200
+        assert len(json.dumps(candidates, ensure_ascii=False).encode("utf-8")) <= 32_000
+        if candidates[-1]["node_id"] == "node-200":
+            return _selection(candidates[-1])
+        return _selection(candidates[0], "low")
+
+    response = OperationLocator(gateway).locate(
+        LocateOperationRequest(
+            operation=_operation(), target_tree=_many_node_tree(201)
+        )
+    )
+
+    assert len(chunk_sizes) >= 2
+    assert sum(chunk_sizes) == 201
+    assert response.success is True
+    assert response.operation.target_node_id == "node-200"
+    assert len(response.candidates) == 201
+
+
+def test_prompt_candidates_bound_descriptions_without_changing_response() -> None:
+    annotation = "alpha\n\t\x00beta " + ("界" * 1000)
+    target_tree = {
+        "node_id": "root",
+        "tree_node_type": "simple_leaf",
+        "annotation": annotation,
+        "xml_name_property": {"xml_name": " ROOT\n\tNAME " + ("x" * 500)},
+    }
+    seen: dict = {}
+
+    def gateway(_query: str, _intent: str, candidates: list[dict]) -> dict:
+        seen.update(candidates[0])
+        return _selection(candidates[0])
+
+    response = OperationLocator(gateway).locate(
+        LocateOperationRequest(operation=_operation(), target_tree=target_tree)
+    )
+
+    assert response.success is True
+    assert seen["annotation"].startswith("alpha beta ")
+    assert "\n" not in seen["annotation"]
+    assert "\t" not in seen["annotation"]
+    assert "\x00" not in seen["annotation"]
+    assert len(seen["annotation"]) == 256
+    assert len(seen["xml_name"]) == 256
+    assert response.candidates[0]["annotation"] == annotation
+    assert response.candidates[0]["xml_name"] == target_tree["xml_name_property"]["xml_name"]
+
+
+def test_locator_chooses_high_over_earlier_medium_across_chunks() -> None:
+    def gateway(_query: str, _intent: str, candidates: list[dict]) -> dict:
+        if any(candidate["node_id"] == "node-200" for candidate in candidates):
+            selected = next(
+                candidate for candidate in candidates if candidate["node_id"] == "node-200"
+            )
+            return _selection(selected, "high")
+        return _selection(candidates[0], "medium")
+
+    response = OperationLocator(gateway).locate(
+        LocateOperationRequest(
+            operation=_operation(), target_tree=_many_node_tree(201)
+        )
+    )
+
+    assert response.operation.target_node_id == "node-200"
+
+
+def test_locator_breaks_equal_confidence_ties_by_global_dfs_order() -> None:
+    def gateway(_query: str, _intent: str, candidates: list[dict]) -> dict:
+        selected = next(
+            (
+                candidate
+                for candidate in candidates
+                if candidate["node_id"] in {"node-5", "node-200"}
+            ),
+            candidates[0],
+        )
+        return _selection(selected, "high")
+
+    response = OperationLocator(gateway).locate(
+        LocateOperationRequest(
+            operation=_operation(), target_tree=_many_node_tree(201)
+        )
+    )
+
+    assert response.operation.target_node_id == "node-5"
+
+
+def test_earlier_chunk_exception_does_not_block_later_valid_selection() -> None:
+    calls = 0
+
+    def gateway(_query: str, _intent: str, candidates: list[dict]) -> dict:
+        nonlocal calls
+        calls += 1
+        if not any(candidate["node_id"] == "node-200" for candidate in candidates):
+            raise RuntimeError("first chunk failed")
+        selected = next(
+            candidate for candidate in candidates if candidate["node_id"] == "node-200"
+        )
+        return _selection(selected)
+
+    response = OperationLocator(gateway).locate(
+        LocateOperationRequest(
+            operation=_operation(), target_tree=_many_node_tree(201)
+        )
+    )
+
+    assert calls >= 2
+    assert response.success is True
+    assert response.operation.target_node_id == "node-200"
 
 
 def test_no_candidates_fails_clearly_without_calling_gateway() -> None:

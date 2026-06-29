@@ -234,7 +234,7 @@ git commit -m "feat: index operation target nodes"
 - Modify: `prompt.json`
 - Modify: `tests/test_planner_prompt.py`
 
-- [ ] **Step 1: Write failing generator tests**
+- [x] **Step 1: Write failing generator tests**
 
 Test an injected gateway returning: one create; `A -> B -> expression`; and `A -> {B, C}`. Assert IDs are normalized to `op_0...`, all target fields remain `None`, and A's query contains `需要包含子节点` only when downstream create operations target A. Also assert malformed graphs raise `ValueError` and the default gateway calls `generate_by_llm("operation_generator_prompt", query=..., target_tree_summary_json=...)`.
 
@@ -251,25 +251,25 @@ def test_branch_parent_query_is_enriched_without_serializing_siblings():
     assert result.operations[2].depends_on == ["op_0"]
 ```
 
-- [ ] **Step 2: Run generator tests and verify RED**
+- [x] **Step 2: Run generator tests and verify RED**
 
 Run: `python -m pytest tests/test_operation_generator.py tests/test_planner_prompt.py -q`
 
 Expected: generator import or new prompt assertions fail.
 
-- [ ] **Step 3: Implement generator and strict prompt**
+- [x] **Step 3: Implement generator and strict prompt**
 
 Implement an injected gateway contract `(query: str, target_tree_summary: list[dict]) -> dict`; the default serializes the summary with `ensure_ascii=False` and calls `generate_by_llm`. Validate the response using `GenerateOperationsResponse`, overwrite IDs sequentially only when the response is already list-ordered, remap dependencies through the old-to-new ID map, clear all runtime fields, enrich container queries, then call `validate_and_sort_operations()` without reordering the response.
 
 Add `operation_generator_prompt` requiring one node per operation, the four exact intent values, dependencies only when a target is produced upstream, `target_from` for multiple dependencies, no location/runtime fields, branch siblings depending on the same parent, and container-capability wording for newly created parents.
 
-- [ ] **Step 4: Run generator and prompt tests and verify GREEN**
+- [x] **Step 4: Run generator and prompt tests and verify GREEN**
 
 Run: `python -m pytest tests/test_operation_generator.py tests/test_planner_prompt.py -q`
 
 Expected: all tests pass.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```powershell
 git add agent/operation_orchestration/generator.py tests/test_operation_generator.py tests/test_planner_prompt.py prompt.json

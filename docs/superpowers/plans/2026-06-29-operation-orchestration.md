@@ -31,7 +31,7 @@
 - Create: `agent/operation_orchestration/models.py`
 - Create: `tests/test_operation_models.py`
 
-- [ ] **Step 1: Write failing model and graph tests**
+- [x] **Step 1: Write failing model and graph tests**
 
 ```python
 import pytest
@@ -77,13 +77,13 @@ def test_topological_sort_is_stable_for_siblings():
     assert [item.op_id for item in validate_and_sort_operations(operations)] == ["op_0", "op_1", "op_2"]
 ```
 
-- [ ] **Step 2: Run the tests and verify RED**
+- [x] **Step 2: Run the tests and verify RED**
 
 Run: `python -m pytest tests/test_operation_models.py -q`
 
 Expected: collection fails with `ModuleNotFoundError: No module named 'agent.operation_orchestration'`.
 
-- [ ] **Step 3: Implement the contracts and stable Kahn sort**
+- [x] **Step 3: Implement the contracts and stable Kahn sort**
 
 ```python
 from typing import Literal
@@ -143,13 +143,13 @@ class ExecuteOperationsResponse(BaseModel):
 
 Implement `validate_and_sort_operations()` with these exact checks before Kahn sorting: unique IDs, all dependencies exist, no self-dependency, `target_from` belongs to `depends_on`, and dependency count greater than one requires `target_from`. Use original list indices as the ready-queue ordering key.
 
-- [ ] **Step 4: Run model tests and verify GREEN**
+- [x] **Step 4: Run model tests and verify GREEN**
 
 Run: `python -m pytest tests/test_operation_models.py -q`
 
 Expected: all tests pass.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```powershell
 git add agent/operation_orchestration/models.py tests/test_operation_models.py

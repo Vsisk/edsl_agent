@@ -93,6 +93,17 @@ class PlannerPromptTest(unittest.TestCase):
         self.assertIn('"migration_plan"', prompt)
         self.assertNotIn('"patch_list"', prompt)
 
+    def test_node_content_intent_prompt_has_narrow_json_contract(self):
+        prompt = prompt_manager.render(
+            "node_content_intent_prompt",
+            query="任意语义",
+            tree_node_type="simple_leaf",
+        )
+
+        self.assertIn('"data_type"', prompt)
+        self.assertIn('"requires_expression_generation"', prompt)
+        self.assertNotIn('"patch"', prompt)
+
 
 if __name__ == "__main__":
     unittest.main()

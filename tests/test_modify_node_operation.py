@@ -8,12 +8,81 @@ from agent.modify_node_operation import (
     ModifyNodeOperationInput,
     ModifyAdapterContext,
     ModifyIntentRouter,
+    ModifyIntent,
+    NodeModifyPlan,
     ModifyExecutor,
     ModifyPlanGenerator,
     NodeResolver,
 )
 from models import TreeNodeTerm
 from agent.models import ValueLogicResult, ValueLogicSource
+
+
+@pytest.fixture(autouse=True)
+def fake_modify_semantic_llm(monkeypatch):
+    def intent_for(query):
+        if "普通字段" in query:
+            return "change_node_type", "simple_leaf", ["tree_node_type"]
+        if "列表节点" in query:
+            return "change_node_type", "parent_list", ["tree_node_type"]
+        if "父节点" in query:
+            return "change_node_type", "parent", ["tree_node_type"]
+        if "透视表" in query and "group by" not in query:
+            return "change_node_type", "ab_pivot_table", ["tree_node_type"]
+        if "两级表" in query:
+            return "change_node_type", "ab_two_level_table", ["tree_node_type"]
+        if "表达式" in query:
+            return "modify_expression", None, ["data_expression"]
+        if "金额" in query or "精度" in query:
+            return "modify_datatype", None, ["data_type_config"]
+        if "数据源" in query:
+            return "modify_data_source", None, ["data_source"]
+        if "local context" in query:
+            return "modify_context", None, ["local_context"]
+        if "group by" in query:
+            return "modify_ab_content", None, ["ab_content"]
+        return "set_common_field", None, ["xml_name_property", "annotation"]
+
+    def fake_generate(prompt_key, **variables):
+        query = variables.get("query", "")
+        if prompt_key == "modify_intent_route_prompt":
+            intent_type, target, fields = intent_for(query)
+            return {
+                "intent_type": intent_type,
+                "target_tree_node_type": target,
+                "affected_fields": fields,
+                "requires_expression_generation": intent_type == "modify_expression",
+                "requires_resource_selection": False,
+                "destructive_risk": False,
+                "reason": "fake semantic",
+            }
+        if prompt_key == "modify_plan_prompt":
+            import json
+
+            intent_payload = json.loads(variables["modify_intent_json"])
+            common = {}
+            type_updates = {}
+            expression_query = None
+            if "XML 名称" in query:
+                common.setdefault("xml_name_property", {})["xml_name"] = "ACCT_ID"
+            if "注释" in query:
+                common["annotation"] = "新注释" if "新注释" in query else "账户ID"
+            if "金额" in query or "精度" in query:
+                precision = "4" if "精度 4" in query else "2"
+                type_updates["data_type_config"] = {"data_type": "money", "decimal_precision": precision}
+            if "表达式" in query:
+                expression_query = query
+            return {
+                "intent": intent_payload,
+                "common_field_updates": common,
+                "type_field_updates": type_updates,
+                "expression_update_query": expression_query,
+                "destructive_authorized": any(term in query for term in ("删除", "清空", "覆盖")),
+                "rebuild_node": "重建" in query,
+            }
+        raise AssertionError(prompt_key)
+
+    monkeypatch.setattr("agent.modify_node_operation.generate_by_llm", fake_generate)
 
 
 @pytest.fixture
@@ -115,7 +184,7 @@ def test_plan_extracts_common_updates():
     assert plan.common_field_updates["annotation"] == "账户ID"
 
 
-def test_plan_records_expression_and_datatype_queries():
+def test_plan_records_expression_query_and_structured_datatype_update():
     expression_query = "把取值表达式改成 $ctx$.bill.amount"
     datatype_query = "改成金额类型，精度 2"
 
@@ -127,7 +196,7 @@ def test_plan_records_expression_and_datatype_queries():
     )
 
     assert expression_plan.expression_update_query == expression_query
-    assert datatype_plan.datatype_update_query == datatype_query
+    assert datatype_plan.type_field_updates["data_type_config"]["data_type"] == "money"
 
 
 def test_migration_parent_to_parent_list_preserves_children(sample_tree):
@@ -177,7 +246,9 @@ def test_migration_only_changes_node_id_when_rebuild_is_explicit(sample_tree):
     plan = MigrationPlanner().plan(original, "parent")
 
     preserved, _ = ModifyExecutor().migrate(original, plan, "改成父节点")
-    rebuilt, _ = ModifyExecutor().migrate(original, plan, "重建节点并改成父节点")
+    rebuilt, _ = ModifyExecutor().migrate(
+        original, plan, "任意语义", rebuild_node=True
+    )
 
     assert preserved["node_id"] == "leaf-id"
     assert rebuilt["node_id"] != "leaf-id"
@@ -409,7 +480,7 @@ def test_valid_llm_intent_is_used(sample_tree):
     assert result.modify_intent["reason"] == "llm selected common update"
 
 
-def test_invalid_llm_intent_falls_back_to_local_router(sample_tree):
+def test_invalid_llm_intent_fails_without_local_fallback(sample_tree):
     operation = ModifyNodeOperation(
         intent_llm=lambda query, current_node: {"intent_type": "unknown"}
     )
@@ -422,5 +493,111 @@ def test_invalid_llm_intent_falls_back_to_local_router(sample_tree):
         )
     )
 
-    assert result.success is True
-    assert result.modify_intent["intent_type"] == "set_common_field"
+    assert result.success is False
+    assert result.failure_reason == "MODIFY_INTENT_ROUTE_FAILED"
+
+
+def test_llm_semantic_intent_router_uses_gateway_without_keywords():
+    router = ModifyIntentRouter(
+        llm_gateway=lambda query, current_node: {
+            "intent_type": "modify_datatype",
+            "affected_fields": ["data_type_config"],
+            "reason": "semantic result",
+        }
+    )
+
+    result = router.route("任意语义", {"tree_node_type": "simple_leaf"})
+
+    assert result.intent_type == "modify_datatype"
+
+
+def test_llm_semantic_intent_invalid_payload_fails_without_fallback():
+    router = ModifyIntentRouter(
+        llm_gateway=lambda query, current_node: {"intent_type": "unknown"}
+    )
+
+    with pytest.raises(OperationFailure) as error:
+        router.route("改成父节点", {"tree_node_type": "simple_leaf"})
+
+    assert error.value.code == "MODIFY_INTENT_ROUTE_FAILED"
+
+
+def test_llm_semantic_plan_generator_uses_structured_updates():
+    intent = ModifyIntent(
+        intent_type="modify_datatype",
+        affected_fields=["data_type_config"],
+    )
+    generator = ModifyPlanGenerator(
+        llm_gateway=lambda query, current_node, intent_payload: {
+            "intent": intent_payload,
+            "type_field_updates": {
+                "data_type_config": {"data_type": "money", "decimal_precision": "3"}
+            },
+            "destructive_authorized": False,
+        }
+    )
+
+    plan = generator.generate(intent, "任意语义", {"tree_node_type": "simple_leaf"})
+
+    assert plan.type_field_updates["data_type_config"]["data_type"] == "money"
+
+
+def test_structured_plan_drives_datatype_without_query_keywords(sample_tree):
+    intent = ModifyIntent(intent_type="modify_datatype", affected_fields=["data_type_config"])
+    plan = NodeModifyPlan(
+        intent=intent,
+        type_field_updates={
+            "data_type_config": {"data_type": "money", "decimal_precision": "4"}
+        },
+    )
+    context = ModifyAdapterContext(
+        query="任意语义",
+        current_node=sample_tree["mapping_content"]["children"][0],
+        edsl_tree=sample_tree,
+    )
+
+    candidate = ModifyExecutor().apply_plan(
+        context.current_node,
+        plan,
+        context,
+    )
+
+    assert candidate["data_type_config"]["data_type"] == "money"
+    assert candidate["data_type_config"]["decimal_precision"] == "4"
+
+
+def test_structured_plan_rejects_non_common_field_in_common_updates(sample_tree):
+    intent = ModifyIntent(intent_type="set_common_field", affected_fields=["node_id"])
+    plan = NodeModifyPlan(intent=intent, common_field_updates={"node_id": "forged"})
+    context = ModifyAdapterContext(
+        query="任意语义",
+        current_node=sample_tree["mapping_content"]["children"][0],
+        edsl_tree=sample_tree,
+    )
+
+    with pytest.raises(OperationFailure) as error:
+        ModifyExecutor().apply_plan(context.current_node, plan, context)
+
+    assert error.value.code == "UNSUPPORTED_FIELD_UPDATE"
+
+
+def test_default_modify_intent_router_calls_generate_by_llm(monkeypatch):
+    calls = []
+
+    def fake_generate(prompt_key, **variables):
+        calls.append((prompt_key, variables))
+        return {
+            "intent_type": "set_common_field",
+            "affected_fields": ["annotation"],
+            "reason": "semantic",
+        }
+
+    monkeypatch.setattr("agent.modify_node_operation.generate_by_llm", fake_generate)
+
+    ModifyIntentRouter().route("任意语义", {"tree_node_type": "simple_leaf"})
+
+    assert calls[0][0] == "modify_intent_route_prompt"
+    assert calls[0][1]["query"] == "任意语义"
+    import json
+
+    assert json.loads(calls[0][1]["current_node_json"])["tree_node_type"] == "simple_leaf"

@@ -5,11 +5,65 @@ from agent.generate_node_operation import (
     GenerateNodeOperation,
     GenerateNodeOperationInput,
     NodeTypeRouter,
+    NodeContentIntentGenerator,
+    NodeContentIntent,
     OperationFailure,
     PathResolver,
     TypeSpecificFieldGenerator,
 )
 from models import PivotTableTerm, TwoLevelTableTerm
+
+
+@pytest.fixture(autouse=True)
+def fake_generate_semantic_llm(monkeypatch):
+    def fake_generate(prompt_key, **variables):
+        query = variables.get("query", "")
+        if prompt_key == "node_type_route_prompt":
+            if "两级" in query:
+                node_type = "ab_two_level_table"
+            elif "透视" in query:
+                node_type = "ab_pivot_table"
+            elif "列表" in query or "循环" in query:
+                node_type = "parent_list"
+            elif "父节点" in query:
+                node_type = "parent"
+            else:
+                node_type = "simple_leaf"
+            return {"tree_node_type": node_type, "confidence": 1.0, "reason": "fake semantic", "evidence_terms": []}
+        if prompt_key == "common_node_field_prompt":
+            if not query:
+                xml_name = ""
+            elif "账户ID" in query:
+                xml_name = "ACCT_ID"
+            elif "账户信息" in query:
+                xml_name = "ACCT_INFO"
+            elif "账单明细" in query:
+                xml_name = "BILL_DETAIL_LIST"
+            elif "费用" in query:
+                xml_name = "FEE_PIVOT"
+            elif "两级" in query:
+                xml_name = "TWO_LEVEL_DETAIL"
+            else:
+                xml_name = "ACCT"
+            empty_type = "half" if "半标签" in query else "full" if "全标签" in query else "none"
+            ids = [value for value in ("area-100", "area_200") if value in query]
+            return {
+                "xml_name_property": {"xml_name": xml_name, "xml_empty_field_type": empty_type},
+                "annotation": query,
+                "reference_logic_area_id_list": ids,
+            }
+        if prompt_key == "node_content_intent_prompt":
+            data_type = "money" if "金额" in query else "time" if "时间" in query else "simple_string"
+            return {
+                "tree_node_type": variables["tree_node_type"],
+                "data_type": data_type,
+                "requires_expression_generation": False,
+                "requires_data_source_generation": False,
+                "reason": "fake semantic",
+            }
+        raise AssertionError(prompt_key)
+
+    monkeypatch.setattr("agent.generate_node_operation.generate_by_llm", fake_generate)
 
 
 @pytest.fixture
@@ -129,7 +183,10 @@ def test_common_fields_extract_explicit_logic_area_ids():
     ],
 )
 def test_type_specific_simple_leaf_selects_data_type(query, expected):
-    fields = TypeSpecificFieldGenerator().generate("simple_leaf", query)
+    fields = TypeSpecificFieldGenerator().generate(
+        "simple_leaf",
+        NodeContentIntent(tree_node_type="simple_leaf", data_type=expected),
+    )
 
     assert fields["data_type_config"].data_type == expected
     assert "data_expression" in fields
@@ -137,13 +194,17 @@ def test_type_specific_simple_leaf_selects_data_type(query, expected):
 
 
 def test_type_specific_parent_initializes_container_fields():
-    fields = TypeSpecificFieldGenerator().generate("parent", "生成账户父节点")
+    fields = TypeSpecificFieldGenerator().generate(
+        "parent", NodeContentIntent(tree_node_type="parent")
+    )
 
     assert fields == {"children": [], "local_context": []}
 
 
 def test_type_specific_parent_list_initializes_list_fields():
-    fields = TypeSpecificFieldGenerator().generate("parent_list", "生成账单明细列表")
+    fields = TypeSpecificFieldGenerator().generate(
+        "parent_list", NodeContentIntent(tree_node_type="parent_list")
+    )
 
     assert fields["children"] == []
     assert fields["local_context"] == []
@@ -153,8 +214,12 @@ def test_type_specific_parent_list_initializes_list_fields():
 
 
 def test_type_specific_ab_nodes_create_matching_content_models():
-    pivot = TypeSpecificFieldGenerator().generate("ab_pivot_table", "生成透视表")
-    two_level = TypeSpecificFieldGenerator().generate("ab_two_level_table", "生成两级表")
+    pivot = TypeSpecificFieldGenerator().generate(
+        "ab_pivot_table", NodeContentIntent(tree_node_type="ab_pivot_table")
+    )
+    two_level = TypeSpecificFieldGenerator().generate(
+        "ab_two_level_table", NodeContentIntent(tree_node_type="ab_two_level_table")
+    )
 
     assert isinstance(pivot["ab_content"], PivotTableTerm)
     assert isinstance(two_level["ab_content"], TwoLevelTableTerm)
@@ -228,7 +293,7 @@ def test_failure_never_returns_partial_patch(sample_tree):
     assert result.validation_errors[0]["code"] == result.failure_reason
 
 
-def test_empty_query_fails_with_xml_name_empty(sample_tree):
+def test_empty_query_fails_with_common_field_generation_error(sample_tree):
     result = GenerateNodeOperation().execute(
         GenerateNodeOperationInput(
             query="",
@@ -238,11 +303,11 @@ def test_empty_query_fails_with_xml_name_empty(sample_tree):
     )
 
     assert result.success is False
-    assert result.failure_reason == "XML_NAME_EMPTY"
+    assert result.failure_reason == "COMMON_FIELD_GENERATION_FAILED"
     assert result.patch is None
 
 
-def test_invalid_llm_route_falls_back_to_local_rules(sample_tree):
+def test_invalid_llm_route_fails_without_local_fallback(sample_tree):
     operation = GenerateNodeOperation(
         route_llm=lambda query: {"tree_node_type": "unknown"}
     )
@@ -255,12 +320,11 @@ def test_invalid_llm_route_falls_back_to_local_rules(sample_tree):
         )
     )
 
-    assert result.success is True
-    assert result.route_result["tree_node_type"] == "ab_pivot_table"
-    assert result.route_result["source"] == "local"
+    assert result.success is False
+    assert result.failure_reason == "NODE_TYPE_ROUTE_FAILED"
 
 
-def test_llm_runtime_failure_falls_back_to_local_rules(sample_tree):
+def test_llm_runtime_failure_fails_without_local_fallback(sample_tree):
     def unavailable_llm(query):
         raise RuntimeError("LLM unavailable")
 
@@ -274,9 +338,8 @@ def test_llm_runtime_failure_falls_back_to_local_rules(sample_tree):
         )
     )
 
-    assert result.success is True
-    assert result.route_result["tree_node_type"] == "parent_list"
-    assert result.route_result["source"] == "local"
+    assert result.success is False
+    assert result.failure_reason == "NODE_TYPE_ROUTE_FAILED"
 
 
 def test_local_route_failure_returns_structured_error(sample_tree):
@@ -323,3 +386,77 @@ def test_valid_llm_common_fields_are_constrained_and_used(sample_tree):
     assert result.success is True
     assert result.generated_node["xml_name_property"]["xml_name"] == "CUSTOM_ACCT"
     assert "children" not in result.generated_node
+
+
+def test_llm_router_uses_gateway_result_without_keyword_rules():
+    router = NodeTypeRouter(
+        llm_gateway=lambda query: {
+            "tree_node_type": "parent_list",
+            "confidence": 0.98,
+            "reason": "semantic classification",
+            "evidence_terms": ["semantic"],
+        }
+    )
+
+    result = router.route("这句话不包含旧关键词")
+
+    assert result.tree_node_type == "parent_list"
+    assert result.source == "llm"
+
+
+def test_llm_router_invalid_payload_fails_without_keyword_fallback():
+    router = NodeTypeRouter(llm_gateway=lambda query: {"tree_node_type": "unknown"})
+
+    with pytest.raises(OperationFailure) as error:
+        router.route("生成列表节点")
+
+    assert error.value.code == "NODE_TYPE_ROUTE_FAILED"
+
+
+def test_llm_common_field_generator_uses_gateway_payload():
+    generator = CommonFieldGenerator(
+        llm_gateway=lambda query: {
+            "xml_name_property": {"xml_name": "SEMANTIC_NAME", "xml_empty_field_type": "none"},
+            "annotation": "from llm",
+            "reference_logic_area_id_list": [],
+        }
+    )
+
+    result = generator.generate("任意描述")
+
+    assert result.xml_name_property.xml_name == "SEMANTIC_NAME"
+
+
+def test_node_content_intent_generator_validates_llm_payload():
+    generator = NodeContentIntentGenerator(
+        llm_gateway=lambda query, tree_node_type: {
+            "tree_node_type": tree_node_type,
+            "data_type": "money",
+            "requires_expression_generation": False,
+            "requires_data_source_generation": False,
+            "reason": "money semantics",
+        }
+    )
+
+    result = generator.generate("任意金额语义", "simple_leaf")
+
+    assert result.data_type == "money"
+
+
+def test_default_generate_router_calls_generate_by_llm(monkeypatch):
+    calls = []
+
+    def fake_generate(prompt_key, **variables):
+        calls.append((prompt_key, variables))
+        return {
+            "tree_node_type": "parent",
+            "confidence": 1.0,
+            "reason": "semantic",
+            "evidence_terms": [],
+        }
+
+    monkeypatch.setattr("agent.generate_node_operation.generate_by_llm", fake_generate)
+
+    NodeTypeRouter().route("任意语义")
+
+    assert calls == [("node_type_route_prompt", {"query": "任意语义"})]

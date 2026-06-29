@@ -6,6 +6,7 @@ from typing import Any, Literal
 
 from jsonpath_ng import parse
 from pydantic import BaseModel, Field, ValidationError
+from agent.llm.generate_by_llm import generate_by_llm
 
 from models import (
     DataExpressionTerm,
@@ -190,122 +191,88 @@ class CommonNodeFields(BaseModel):
 
 
 class NodeTypeRouter:
-    _RULES: tuple[tuple[NodeType, tuple[str, ...]], ...] = (
-        (
-            "ab_two_level_table",
-            ("两级表", "两级明细表", "主子表", "summary/detail", "summary detail"),
-        ),
-        (
-            "ab_pivot_table",
-            ("透视表", "行列交叉", "横向展开", "pivot table", "pivot"),
-        ),
-        (
-            "parent_list",
-            ("列表", "循环", "多条记录", "明细集合", "list", "collection"),
-        ),
-        (
-            "parent",
-            ("父节点", "结构容器", "节点组", "分类节点", "容器", "parent"),
-        ),
-    )
+    def __init__(self, llm_gateway: Any | None = None):
+        self.llm_gateway = llm_gateway
 
     def route(self, query: str) -> NodeRouteResult:
-        lowered = query.lower()
-        for node_type, terms in self._RULES:
-            evidence = [term for term in terms if term.lower() in lowered]
-            if evidence:
-                return NodeRouteResult(
-                    tree_node_type=node_type,
-                    confidence=0.95,
-                    reason=f"query contains {node_type} structure terms",
-                    evidence_terms=evidence,
-                )
-        return NodeRouteResult(
-            tree_node_type="simple_leaf",
-            confidence=0.9,
-            reason="query describes a normal value node or has no container terms",
-            evidence_terms=[],
-        )
+        try:
+            payload = (
+                self.llm_gateway(query)
+                if self.llm_gateway is not None
+                else generate_by_llm("node_type_route_prompt", query=query)
+            )
+            result = NodeRouteResult.model_validate(payload)
+            result.source = "llm"
+            return result
+        except Exception as exc:
+            raise OperationFailure("NODE_TYPE_ROUTE_FAILED", "LLM node type routing failed") from exc
 
 
 class CommonFieldGenerator:
-    _NAME_TERMS: tuple[tuple[str, str], ...] = (
-        ("账户", "ACCT"),
-        ("账单", "BILL"),
-        ("费用", "FEE"),
-        ("信息", "INFO"),
-        ("明细", "DETAIL"),
-        ("金额", "AMOUNT"),
-        ("时间", "TIME"),
-        ("日期", "DATE"),
-        ("名称", "NAME"),
-        ("号码", "NUMBER"),
-        ("透视表", "PIVOT_TABLE"),
-        ("列表", "LIST"),
-        ("ID", "ID"),
-    )
-    _ENGLISH_STOP_WORDS = {
-        "generate",
-        "create",
-        "node",
-        "field",
-        "parent",
-        "list",
-        "logic",
-        "area",
-        "id",
-    }
-    _LOGIC_AREA_ID = re.compile(
-        r"logic(?:[\s_-]+area)?[\s_-]*id\s*[:=：]\s*([A-Za-z0-9_-]+)",
-        re.IGNORECASE,
-    )
+    def __init__(self, llm_gateway: Any | None = None):
+        self.llm_gateway = llm_gateway
 
     def generate(self, query: str) -> CommonNodeFields:
-        xml_name = self._generate_xml_name(query)
-        if not xml_name:
-            raise OperationFailure("XML_NAME_EMPTY", "xml_name could not be generated")
+        try:
+            payload = (
+                self.llm_gateway(query)
+                if self.llm_gateway is not None
+                else generate_by_llm("common_node_field_prompt", query=query)
+            )
+            result = CommonNodeFields.model_validate(payload)
+            if not result.xml_name_property.xml_name or not result.xml_name_property.xml_name.strip():
+                raise ValueError("xml_name is empty")
+            return result
+        except Exception as exc:
+            raise OperationFailure(
+                "COMMON_FIELD_GENERATION_FAILED",
+                "LLM common field generation failed",
+            ) from exc
 
-        empty_field_type = "none"
-        if "半标签" in query:
-            empty_field_type = "half"
-        elif "全标签" in query:
-            empty_field_type = "full"
 
-        logic_area_ids = list(dict.fromkeys(self._LOGIC_AREA_ID.findall(query)))
-        return CommonNodeFields(
-            xml_name_property=XmlNamePropertyTerm(
-                xml_name=xml_name,
-                xml_empty_field_type=empty_field_type,
-            ),
-            annotation=query.strip(),
-            reference_logic_area_id_list=logic_area_ids,
-        )
+class NodeContentIntent(BaseModel):
+    tree_node_type: NodeType
+    data_type: Literal["simple_string", "time", "money"] = "simple_string"
+    requires_expression_generation: bool = False
+    requires_data_source_generation: bool = False
+    expression_query: str | None = None
+    data_source_query: str | None = None
+    ab_content_query: str | None = None
+    reason: str = ""
 
-    def _generate_xml_name(self, query: str) -> str:
-        located: list[tuple[int, str]] = []
-        upper_query = query.upper()
-        for term, replacement in self._NAME_TERMS:
-            index = upper_query.find(term.upper())
-            if index >= 0:
-                located.append((index, replacement))
-        if located:
-            ordered = [replacement for _, replacement in sorted(located)]
-            return "_".join(dict.fromkeys(ordered))
 
-        words = re.findall(r"[A-Za-z][A-Za-z0-9_]*", query)
-        useful = [word for word in words if word.lower() not in self._ENGLISH_STOP_WORDS]
-        return "_".join(word.upper() for word in useful)
+class NodeContentIntentGenerator:
+    def __init__(self, llm_gateway: Any | None = None):
+        self.llm_gateway = llm_gateway
+
+    def generate(self, query: str, tree_node_type: NodeType) -> NodeContentIntent:
+        try:
+            payload = (
+                self.llm_gateway(query, tree_node_type)
+                if self.llm_gateway is not None
+                else generate_by_llm(
+                    "node_content_intent_prompt",
+                    query=query,
+                    tree_node_type=tree_node_type,
+                )
+            )
+            result = NodeContentIntent.model_validate(payload)
+            if result.tree_node_type != tree_node_type:
+                raise ValueError("content intent node type differs from route")
+            return result
+        except Exception as exc:
+            raise OperationFailure(
+                "NODE_CONTENT_INTENT_FAILED",
+                "LLM node content intent generation failed",
+            ) from exc
 
 
 class TypeSpecificFieldGenerator:
-    _MONEY_TERMS = ("金额", "货币", "币种", "money", "amount", "currency")
-    _TIME_TERMS = ("时间", "日期", "time", "date")
-
-    def generate(self, tree_node_type: NodeType, query: str) -> dict[str, Any]:
+    def generate(self, tree_node_type: NodeType, intent: NodeContentIntent) -> dict[str, Any]:
         if tree_node_type == "simple_leaf":
             return {
                 "data_expression": DataExpressionTerm(),
-                "data_type_config": DataTypeTerm(data_type=self._data_type(query)),
+                "data_type_config": DataTypeTerm(data_type=intent.data_type),
                 "support_big_cust_acct": SupportBigCustAcctTerm(),
             }
         if tree_node_type == "parent":
@@ -327,14 +294,6 @@ class TypeSpecificFieldGenerator:
             "unsupported node type has no type-specific field generator",
             tree_node_type=tree_node_type,
         )
-
-    def _data_type(self, query: str) -> str:
-        lowered = query.lower()
-        if any(term in lowered for term in self._MONEY_TERMS):
-            return "money"
-        if any(term in lowered for term in self._TIME_TERMS):
-            return "time"
-        return "simple_string"
 
 
 class NodeAssembler:
@@ -391,17 +350,18 @@ class GenerateNodeOperation:
         patch_builder: NodePatchBuilder | None = None,
         route_llm: Any | None = None,
         common_fields_llm: Any | None = None,
+        content_intent_llm: Any | None = None,
+        content_intent_generator: NodeContentIntentGenerator | None = None,
     ):
         self.path_resolver = path_resolver or PathResolver()
-        self.node_type_router = node_type_router or NodeTypeRouter()
-        self.common_field_generator = common_field_generator or CommonFieldGenerator()
+        self.node_type_router = node_type_router or NodeTypeRouter(route_llm)
+        self.common_field_generator = common_field_generator or CommonFieldGenerator(common_fields_llm)
+        self.content_intent_generator = content_intent_generator or NodeContentIntentGenerator(content_intent_llm)
         self.type_specific_field_generator = (
             type_specific_field_generator or TypeSpecificFieldGenerator()
         )
         self.node_assembler = node_assembler or NodeAssembler()
         self.patch_builder = patch_builder or NodePatchBuilder()
-        self.route_llm = route_llm
-        self.common_fields_llm = common_fields_llm
 
     def execute(self, operation_input: GenerateNodeOperationInput) -> GenerateNodeOperationOutput:
         resolved: ResolvedNodePath | None = None
@@ -413,9 +373,13 @@ class GenerateNodeOperation:
             )
             route = self._route(operation_input.query)
             common_fields = self._common_fields(operation_input.query)
+            content_intent = self.content_intent_generator.generate(
+                operation_input.query,
+                route.tree_node_type,
+            )
             type_specific_fields = self.type_specific_field_generator.generate(
                 route.tree_node_type,
-                operation_input.query,
+                content_intent,
             )
             draft = self.node_assembler.assemble(route, common_fields, type_specific_fields)
             validated_node = TreeNodeTerm.model_validate(draft)
@@ -452,32 +416,23 @@ class GenerateNodeOperation:
             )
 
     def _route(self, query: str) -> NodeRouteResult:
-        if self.route_llm is not None:
-            try:
-                payload = dict(self.route_llm(query))
-                payload["source"] = "llm"
-                return NodeRouteResult.model_validate(payload)
-            except Exception:
-                pass
         try:
             return self.node_type_router.route(query)
         except OperationFailure:
             raise
         except Exception as exc:
-            raise OperationFailure(
-                "NODE_TYPE_ROUTE_FAILED",
-                "node type routing failed",
-            ) from exc
+            raise OperationFailure("NODE_TYPE_ROUTE_FAILED", "LLM node type routing failed") from exc
 
     def _common_fields(self, query: str) -> CommonNodeFields:
-        if self.common_fields_llm is not None:
-            try:
-                fields = CommonNodeFields.model_validate(self.common_fields_llm(query))
-                if fields.xml_name_property.xml_name and fields.xml_name_property.xml_name.strip():
-                    return fields
-            except Exception:
-                pass
-        return self.common_field_generator.generate(query)
+        try:
+            return self.common_field_generator.generate(query)
+        except OperationFailure:
+            raise
+        except Exception as exc:
+            raise OperationFailure(
+                "COMMON_FIELD_GENERATION_FAILED",
+                "LLM common field generation failed",
+            ) from exc
 
     @staticmethod
     def _serialize_node(node: TreeNodeTerm) -> dict[str, Any]:

@@ -26,7 +26,25 @@ def test_generated_patch_appends_a_valid_tree_node():
             "children": [],
         }
     }
-    result = GenerateNodeOperation().execute(
+    operation = GenerateNodeOperation(
+        route_llm=lambda query: {
+            "tree_node_type": "simple_leaf",
+            "confidence": 1.0,
+            "reason": "test",
+            "evidence_terms": [],
+        },
+        common_fields_llm=lambda query: {
+            "xml_name_property": {"xml_name": "ACCT_ID", "xml_empty_field_type": "none"},
+            "annotation": "账户ID",
+            "reference_logic_area_id_list": [],
+        },
+        content_intent_llm=lambda query, node_type: {
+            "tree_node_type": node_type,
+            "data_type": "simple_string",
+            "reason": "test",
+        },
+    )
+    result = operation.execute(
         GenerateNodeOperationInput(
             query="生成账户ID字段",
             node_path="$.mapping_content",

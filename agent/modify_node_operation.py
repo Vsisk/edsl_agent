@@ -2,11 +2,12 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import dataclass
-import re
+import json
 from typing import Any, Literal
 
 from agent.generate_node_operation import (
     GenerateNodeOperation,
+    NodeContentIntent,
     OperationFailure,
     PathResolver,
     TypeSpecificFieldGenerator,
@@ -15,6 +16,7 @@ from pydantic import BaseModel, Field, ValidationError
 from models import DataExpressionTerm, DataTypeTerm, TreeNodeTerm
 from agent.models import ValueLogicRequest
 from agent.value_logic_generator import ValueLogicGenerator
+from agent.llm.generate_by_llm import generate_by_llm
 
 
 @dataclass(frozen=True)
@@ -134,109 +136,64 @@ class NodeModifyPlan(BaseModel):
     data_source_update_query: str | None = None
     ab_content_update_query: str | None = None
     migration_plan: NodeTypeMigrationPlan | None = None
+    destructive_authorized: bool = False
+    rebuild_node: bool = False
 
 
 class ModifyIntentRouter:
-    _TYPE_PATTERNS: tuple[tuple[str, ModifyNodeType], ...] = (
-        ("普通字段", "simple_leaf"),
-        ("叶子节点", "simple_leaf"),
-        ("列表节点", "parent_list"),
-        ("父节点", "parent"),
-        ("透视表", "ab_pivot_table"),
-        ("两级表", "ab_two_level_table"),
-        ("简单映射表", "ab_single_mapping_table"),
-    )
-    _CATEGORY_RULES: tuple[tuple[ModifyIntentType, tuple[str, ...], list[str]], ...] = (
-        ("modify_ab_content", ("group by", "detail field", "summary field", "透视表字段", "两级表字段"), ["ab_content"]),
-        ("modify_context", ("local context", "iter context", "局部变量", "本地上下文"), ["local_context", "iter_local_context"]),
-        ("modify_data_source", ("数据源", "循环来源", "namingsql", "naming sql", "BO"), ["data_source"]),
-        ("modify_expression", ("取值逻辑", "表达式", "通过 context", "$ctx$", "function", "获取值"), ["data_expression"]),
-        ("modify_datatype", ("金额类型", "时间类型", "字符串类型", "精度", "币种", "时间格式"), ["data_type_config"]),
-        ("set_common_field", ("xml 名称", "xml_name", "注释", "标签", "logic area"), ["xml_name_property", "annotation", "reference_logic_area_id_list"]),
-    )
+    def __init__(self, llm_gateway: Any | None = None):
+        self.llm_gateway = llm_gateway
 
-    def route(self, query: str) -> ModifyIntent:
-        lowered = query.lower()
-        if any(marker in query for marker in ("改成", "改为", "转换成", "转换为")):
-            for term, target in self._TYPE_PATTERNS:
-                if term.lower() in lowered:
-                    return ModifyIntent(
-                        intent_type="change_node_type",
-                        target_tree_node_type=target,
-                        affected_fields=["tree_node_type"],
-                        reason=f"query requests migration to {target}",
-                    )
-
-        matches: list[tuple[ModifyIntentType, list[str]]] = []
-        for intent_type, terms, fields in self._CATEGORY_RULES:
-            if any(term.lower() in lowered for term in terms):
-                matches.append((intent_type, fields))
-        if not matches:
+    def route(self, query: str, current_node: dict[str, Any] | None = None) -> ModifyIntent:
+        current_node = current_node or {}
+        try:
+            payload = (
+                self.llm_gateway(query, current_node)
+                if self.llm_gateway is not None
+                else generate_by_llm(
+                    "modify_intent_route_prompt",
+                    query=query,
+                    current_node_json=json.dumps(current_node, ensure_ascii=False),
+                )
+            )
+            return ModifyIntent.model_validate(payload)
+        except Exception as exc:
             raise OperationFailure(
                 "MODIFY_INTENT_ROUTE_FAILED",
-                "modify intent could not be determined",
-            )
-        if len(matches) == 1:
-            intent_type, fields = matches[0]
-            return ModifyIntent(
-                intent_type=intent_type,
-                affected_fields=fields,
-                requires_expression_generation=intent_type == "modify_expression",
-                requires_resource_selection=intent_type in {"modify_expression", "modify_data_source"},
-                reason=f"query matches {intent_type}",
-            )
-        return ModifyIntent(
-            intent_type="mixed",
-            affected_fields=list(dict.fromkeys(field for _, fields in matches for field in fields)),
-            requires_expression_generation=any(item[0] == "modify_expression" for item in matches),
-            requires_resource_selection=any(item[0] in {"modify_expression", "modify_data_source"} for item in matches),
-            reason="query contains multiple modification categories",
-        )
+                "LLM modify intent routing failed",
+            ) from exc
 
 
 class ModifyPlanGenerator:
-    _XML_NAME = re.compile(
-        r"(?:XML\s*名称|xml_name)\s*(?:改成|改为|为|=|:)\s*([A-Za-z][A-Za-z0-9_]*)",
-        re.IGNORECASE,
-    )
-    _ANNOTATION = re.compile(r"注释\s*(?:改成|改为|为|=|:)\s*([^，,。;；]+)")
-    _LOGIC_AREA_ID = re.compile(
-        r"logic(?:[\s_-]+area)?[\s_-]*id\s*[:=：]\s*([A-Za-z0-9_-]+)",
-        re.IGNORECASE,
-    )
+    def __init__(self, llm_gateway: Any | None = None):
+        self.llm_gateway = llm_gateway
 
-    def generate(self, intent: ModifyIntent, query: str) -> NodeModifyPlan:
-        common_updates: dict[str, Any] = {}
-        xml_updates: dict[str, Any] = {}
-        xml_match = self._XML_NAME.search(query)
-        if xml_match:
-            xml_updates["xml_name"] = xml_match.group(1)
-        if "半标签" in query:
-            xml_updates["xml_empty_field_type"] = "half"
-        elif "全标签" in query:
-            xml_updates["xml_empty_field_type"] = "full"
-        if "属性输出" in query:
-            xml_updates["xml_format_type"] = "property"
-        elif "标签输出" in query:
-            xml_updates["xml_format_type"] = "label"
-        if xml_updates:
-            common_updates["xml_name_property"] = xml_updates
-
-        annotation_match = self._ANNOTATION.search(query)
-        if annotation_match:
-            common_updates["annotation"] = annotation_match.group(1).strip()
-        logic_area_ids = list(dict.fromkeys(self._LOGIC_AREA_ID.findall(query)))
-        if logic_area_ids:
-            common_updates["reference_logic_area_id_list"] = logic_area_ids
-
-        return NodeModifyPlan(
-            intent=intent,
-            common_field_updates=common_updates,
-            expression_update_query=query if intent.intent_type in {"modify_expression", "mixed"} and "data_expression" in intent.affected_fields else None,
-            datatype_update_query=query if intent.intent_type in {"modify_datatype", "mixed"} and "data_type_config" in intent.affected_fields else None,
-            data_source_update_query=query if intent.intent_type in {"modify_data_source", "mixed"} and "data_source" in intent.affected_fields else None,
-            ab_content_update_query=query if intent.intent_type in {"modify_ab_content", "mixed"} and "ab_content" in intent.affected_fields else None,
-        )
+    def generate(
+        self,
+        intent: ModifyIntent,
+        query: str,
+        current_node: dict[str, Any] | None = None,
+    ) -> NodeModifyPlan:
+        current_node = current_node or {}
+        try:
+            payload = (
+                self.llm_gateway(query, current_node, intent.model_dump())
+                if self.llm_gateway is not None
+                else generate_by_llm(
+                    "modify_plan_prompt",
+                    query=query,
+                    current_node_json=json.dumps(current_node, ensure_ascii=False),
+                    modify_intent_json=intent.model_dump_json(),
+                )
+            )
+            plan = NodeModifyPlan.model_validate(payload)
+            plan.intent = intent
+            return plan
+        except Exception as exc:
+            raise OperationFailure(
+                "MODIFY_PLAN_GENERATION_FAILED",
+                "LLM modify plan generation failed",
+            ) from exc
 
 
 class MigrationReport(BaseModel):
@@ -321,6 +278,11 @@ class ModifyExecutor:
         "edsl_prompt",
         "reference_logic_area_id_list",
     }
+    _COMMON_UPDATE_FIELDS = {
+        "xml_name_property",
+        "annotation",
+        "reference_logic_area_id_list",
+    }
 
     def __init__(self, type_specific_generator: TypeSpecificFieldGenerator | None = None):
         self.type_specific_generator = type_specific_generator or TypeSpecificFieldGenerator()
@@ -330,11 +292,13 @@ class ModifyExecutor:
         original_node: dict[str, Any],
         migration_plan: NodeTypeMigrationPlan,
         query: str,
+        *,
+        rebuild_node: bool = False,
     ) -> tuple[dict[str, Any], MigrationReport]:
         try:
             target_fields = self.type_specific_generator.generate(
                 migration_plan.target_tree_node_type,
-                query,
+                NodeContentIntent(tree_node_type=migration_plan.target_tree_node_type),
             )
         except OperationFailure as exc:
             raise OperationFailure(
@@ -364,7 +328,7 @@ class ModifyExecutor:
                     target_payload[field] = deepcopy(source_ab[field])
             candidate["ab_content"] = target_payload
 
-        if "重建节点" in query or "rebuild node" in query.lower():
+        if rebuild_node:
             rebuilt_node = TreeNodeTerm.model_validate(candidate)
             rebuilt_node.update_id()
             candidate["node_id"] = rebuilt_node.node_id
@@ -404,10 +368,38 @@ class ModifyExecutor:
     ) -> dict[str, Any]:
         candidate = deepcopy(original_node)
         for field, value in plan.common_field_updates.items():
+            if field not in self._COMMON_UPDATE_FIELDS:
+                raise OperationFailure(
+                    "UNSUPPORTED_FIELD_UPDATE",
+                    "field is not allowed in common_field_updates",
+                    field=field,
+                )
             if field == "xml_name_property":
                 xml_name_property = dict(candidate.get("xml_name_property") or {})
                 xml_name_property.update(deepcopy(value))
                 candidate[field] = xml_name_property
+            else:
+                candidate[field] = deepcopy(value)
+
+        for field, value in plan.type_field_updates.items():
+            allowed_fields = TreeNodeTerm.Config.allowed_fields_per_type.get(
+                str(candidate.get("tree_node_type") or ""),
+                set(),
+            )
+            if field not in allowed_fields:
+                raise OperationFailure(
+                    "UNSUPPORTED_FIELD_UPDATE",
+                    "type field is not allowed for the current node type",
+                    field=field,
+                )
+            if field == "data_type_config":
+                try:
+                    candidate[field] = DataTypeTerm.model_validate(value).model_dump(exclude_none=True)
+                except ValidationError as exc:
+                    raise OperationFailure(
+                        "DATATYPE_VALIDATION_FAILED",
+                        "data type configuration is invalid",
+                    ) from exc
             else:
                 candidate[field] = deepcopy(value)
 
@@ -431,31 +423,6 @@ class ModifyExecutor:
                 raise OperationFailure(
                     "EXPRESSION_GENERATION_FAILED",
                     "expression generation failed",
-                ) from exc
-
-        if plan.datatype_update_query is not None:
-            if candidate.get("tree_node_type") != "simple_leaf":
-                raise OperationFailure(
-                    "DATATYPE_VALIDATION_FAILED",
-                    "data type can only be modified on simple_leaf",
-                )
-            data_type_payload = dict(candidate.get("data_type_config") or {})
-            lowered = plan.datatype_update_query.lower()
-            if any(term in lowered for term in ("金额", "money")):
-                data_type_payload["data_type"] = "money"
-            elif any(term in lowered for term in ("时间", "日期", "time", "date")):
-                data_type_payload["data_type"] = "time"
-            elif any(term in lowered for term in ("字符串", "string")):
-                data_type_payload["data_type"] = "simple_string"
-            precision = re.search(r"精度\s*(?:改成|改为|为|=)?\s*(\d+)", plan.datatype_update_query)
-            if precision:
-                data_type_payload["decimal_precision"] = precision.group(1)
-            try:
-                candidate["data_type_config"] = DataTypeTerm.model_validate(data_type_payload).model_dump(exclude_none=True)
-            except ValidationError as exc:
-                raise OperationFailure(
-                    "DATATYPE_VALIDATION_FAILED",
-                    "data type configuration is invalid",
                 ) from exc
 
         if plan.data_source_update_query is not None:
@@ -531,15 +498,13 @@ class ExistingExpressionAdapter:
 
 
 class DestructiveChangeGuard:
-    _AUTHORIZATION_TERMS = ("删除", "清空", "丢弃", "覆盖", "重建", "delete", "clear", "drop", "overwrite", "rebuild")
-
     def check(
         self,
         *,
         original_node: dict[str, Any],
         candidate_node: dict[str, Any],
-        query: str,
         allow_destructive: bool,
+        destructive_authorized: bool,
         migration_report: MigrationReport | None,
     ) -> MigrationReport | None:
         report = migration_report
@@ -568,8 +533,7 @@ class DestructiveChangeGuard:
             )
         else:
             report.destructive_risk = True
-        explicitly_authorized = any(term.lower() in query.lower() for term in self._AUTHORIZATION_TERMS)
-        if not allow_destructive or not explicitly_authorized:
+        if not allow_destructive or not destructive_authorized:
             raise OperationFailure(
                 "DESTRUCTIVE_CHANGE_NOT_ALLOWED",
                 "destructive modification requires allow_destructive and explicit query authorization",
@@ -637,8 +601,8 @@ class ModifyNodeOperation:
         plan_llm: Any | None = None,
     ):
         self.node_resolver = node_resolver or NodeResolver()
-        self.intent_router = intent_router or ModifyIntentRouter()
-        self.plan_generator = plan_generator or ModifyPlanGenerator()
+        self.intent_router = intent_router or ModifyIntentRouter(intent_llm)
+        self.plan_generator = plan_generator or ModifyPlanGenerator(plan_llm)
         self.migration_planner = migration_planner or MigrationPlanner()
         self.executor = executor or ModifyExecutor()
         self.destructive_guard = destructive_guard or DestructiveChangeGuard()
@@ -647,8 +611,6 @@ class ModifyNodeOperation:
         self.expression_adapter = expression_adapter or ExistingExpressionAdapter()
         self.data_source_adapter = data_source_adapter
         self.ab_content_adapter = ab_content_adapter
-        self.intent_llm = intent_llm
-        self.plan_llm = plan_llm
 
     def execute(self, operation_input: ModifyNodeOperationInput) -> ModifyNodeOperationOutput:
         resolved: ResolvedTargetNode | None = None
@@ -677,7 +639,10 @@ class ModifyNodeOperation:
                     raise OperationFailure("UNSUPPORTED_TYPE_MIGRATION", "target type is missing")
                 plan.migration_plan = self.migration_planner.plan(original_node, intent.target_tree_node_type)
                 candidate, migration_report = self.executor.migrate(
-                    original_node, plan.migration_plan, operation_input.query
+                    original_node,
+                    plan.migration_plan,
+                    operation_input.query,
+                    rebuild_node=plan.rebuild_node,
                 )
             else:
                 candidate = self.executor.apply_plan(
@@ -692,8 +657,8 @@ class ModifyNodeOperation:
             migration_report = self.destructive_guard.check(
                 original_node=original_node,
                 candidate_node=candidate,
-                query=operation_input.query,
                 allow_destructive=operation_input.allow_destructive,
+                destructive_authorized=plan.destructive_authorized,
                 migration_report=migration_report,
             )
             validated = TreeNodeTerm.model_validate(candidate)
@@ -737,20 +702,7 @@ class ModifyNodeOperation:
         )
 
     def _route_intent(self, query: str, current_node: dict[str, Any]) -> ModifyIntent:
-        if self.intent_llm is not None:
-            try:
-                return ModifyIntent.model_validate(self.intent_llm(query, current_node))
-            except Exception:
-                pass
-        try:
-            return self.intent_router.route(query)
-        except OperationFailure:
-            raise
-        except Exception as exc:
-            raise OperationFailure(
-                "MODIFY_INTENT_ROUTE_FAILED",
-                "modify intent routing failed",
-            ) from exc
+        return self.intent_router.route(query, current_node)
 
     def _generate_plan(
         self,
@@ -758,11 +710,4 @@ class ModifyNodeOperation:
         query: str,
         current_node: dict[str, Any],
     ) -> NodeModifyPlan:
-        if self.plan_llm is not None:
-            try:
-                plan = NodeModifyPlan.model_validate(self.plan_llm(query, current_node, intent.model_dump()))
-                plan.intent = intent
-                return plan
-            except Exception:
-                pass
-        return self.plan_generator.generate(intent, query)
+        return self.plan_generator.generate(intent, query, current_node)

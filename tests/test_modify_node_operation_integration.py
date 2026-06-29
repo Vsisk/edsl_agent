@@ -37,7 +37,20 @@ def test_replace_patch_updates_tree_with_valid_node():
             ],
         }
     }
-    result = ModifyNodeOperation().execute(
+    operation = ModifyNodeOperation(
+        intent_llm=lambda query, current_node: {
+            "intent_type": "modify_datatype",
+            "affected_fields": ["data_type_config"],
+            "reason": "test",
+        },
+        plan_llm=lambda query, current_node, intent: {
+            "intent": intent,
+            "type_field_updates": {
+                "data_type_config": {"data_type": "money", "decimal_precision": "2"}
+            },
+        },
+    )
+    result = operation.execute(
         ModifyNodeOperationInput(
             query="改成金额类型，精度 2",
             node_path="$.mapping_content.children[0]",

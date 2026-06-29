@@ -1,8 +1,12 @@
 import pytest
+from pydantic import ValidationError
 
 from agent.operation_orchestration.models import (
+    ExecuteOperationsResponse,
     ExecuteOperationsRequest,
     GenerateOperationsRequest,
+    GenerateOperationsResponse,
+    LocateOperationRequest,
     LocateOperationResponse,
     Operation,
     validate_and_sort_operations,
@@ -47,6 +51,58 @@ def test_request_models_accept_tree_payloads() -> None:
     assert generate.target_tree == {"nodes": []}
     assert execute.site_id == "site"
     assert execute.project_id == "project"
+
+
+def test_remaining_request_and_response_contracts() -> None:
+    operation = make_operation("create")
+    target_tree = {"nodes": [{"node_id": "created"}]}
+
+    generate_response = GenerateOperationsResponse(operations=[operation])
+    locate_request = LocateOperationRequest(operation=operation, target_tree=target_tree)
+    execute_response = ExecuteOperationsResponse(
+        success=True,
+        target_tree=target_tree,
+        operations=[operation],
+    )
+
+    assert generate_response.operations == [operation]
+    assert locate_request.operation == operation
+    assert locate_request.target_tree == target_tree
+    assert execute_response.success is True
+    assert execute_response.target_tree == target_tree
+    assert execute_response.operations == [operation]
+    assert execute_response.error_message is None
+
+
+@pytest.mark.parametrize(
+    "intent_type",
+    ["create_node", "modify_node", "generate_expression", "delete_node"],
+)
+def test_operation_accepts_each_intent_type(intent_type: str) -> None:
+    operation = Operation(
+        op_id="operation",
+        query="perform operation",
+        intent_type=intent_type,
+    )
+
+    assert operation.intent_type == intent_type
+
+
+def test_operation_rejects_unknown_intent_type() -> None:
+    with pytest.raises(ValidationError, match="intent_type"):
+        make_operation("invalid", intent_type="move_node")
+
+
+@pytest.mark.parametrize("status", ["pending", "located", "executed", "failed"])
+def test_operation_accepts_each_status(status: str) -> None:
+    operation = make_operation("operation", status=status)
+
+    assert operation.status == status
+
+
+def test_operation_rejects_unknown_status() -> None:
+    with pytest.raises(ValidationError, match="status"):
+        make_operation("invalid", status="cancelled")
 
 
 def test_duplicate_operation_ids_are_rejected() -> None:
@@ -139,6 +195,25 @@ def test_valid_multi_dependency_graph_is_sorted() -> None:
         "combine",
         "publish",
     ]
+
+
+def test_validation_does_not_mutate_any_input_operation() -> None:
+    operations = [
+        make_operation("finish", depends_on=["combine"], status="located"),
+        make_operation(
+            "combine",
+            depends_on=["left", "right"],
+            target_from="right",
+            target_jsonpath="$.children[0]",
+        ),
+        make_operation("right", output_node_id="right-node"),
+        make_operation("left", target_node_id="left-node"),
+    ]
+    snapshots = [operation.model_dump(mode="python") for operation in operations]
+
+    validate_and_sort_operations(operations)
+
+    assert [operation.model_dump(mode="python") for operation in operations] == snapshots
 
 
 def test_empty_operation_list_is_valid() -> None:

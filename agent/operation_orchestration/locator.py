@@ -16,8 +16,9 @@ from agent.operation_orchestration.node_index import build_node_index, is_valid_
 
 
 LLMGateway = Callable[[str, str, list[dict[str, Any]]], dict[str, Any]]
-_NonBlankText = Annotated[
-    str, StringConstraints(min_length=1)
+_VerbatimNonBlankText = Annotated[str, StringConstraints(min_length=1)]
+_DescriptiveNonBlankText = Annotated[
+    str, StringConstraints(strip_whitespace=True, min_length=1)
 ]
 
 
@@ -26,14 +27,12 @@ class LocationSelection(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    selected_node_id: _NonBlankText
-    selected_jsonpath: _NonBlankText
+    selected_node_id: _VerbatimNonBlankText
+    selected_jsonpath: _VerbatimNonBlankText
     confidence: Literal["high", "medium", "low"]
-    reason: _NonBlankText
+    reason: _DescriptiveNonBlankText
 
-    @field_validator(
-        "selected_node_id", "selected_jsonpath", "reason", mode="before"
-    )
+    @field_validator("selected_node_id", "selected_jsonpath", mode="before")
     @classmethod
     def require_verbatim_trimmed_text(cls, value: Any) -> Any:
         if isinstance(value, str) and value != value.strip():

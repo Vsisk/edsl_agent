@@ -260,6 +260,33 @@ def test_create_padded_selection_fields_trigger_root_fallback(
     assert response.operation.target_jsonpath == "$"
 
 
+def test_create_accepts_padded_reason_without_triggering_root_fallback() -> None:
+    target_tree = {
+        "node_id": "root",
+        "tree_node_type": "parent",
+        "children": [
+            {"node_id": "nested", "tree_node_type": "parent"}
+        ],
+    }
+    response = OperationLocator(
+        lambda _query, _intent, _candidates: {
+            "selected_node_id": "nested",
+            "selected_jsonpath": "$.children[0]",
+            "confidence": "high",
+            "reason": "  nested container is the target  ",
+        }
+    ).locate(
+        LocateOperationRequest(
+            operation=_operation("create_node"), target_tree=target_tree
+        )
+    )
+
+    assert response.success is True
+    assert response.operation.status == "located"
+    assert response.operation.target_node_id == "nested"
+    assert response.operation.target_jsonpath == "$.children[0]"
+
+
 def test_create_fails_when_no_valid_root_candidate_exists() -> None:
     target_tree = {
         "node_id": "leaf-root",

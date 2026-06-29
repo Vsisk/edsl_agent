@@ -114,6 +114,78 @@ def test_create_siblings_share_parent_without_artificial_sibling_dependency() ->
     assert "op_1" not in operations[2].depends_on
 
 
+def test_container_enrichment_collapses_duplicate_capability_phrases() -> None:
+    payload = {
+        "operations": [
+            {
+                "op_id": "parent",
+                "query": "创建容器，需要包含子节点；需要包含子节点。",
+                "intent_type": "create_node",
+            },
+            {
+                "op_id": "child",
+                "query": "创建字段",
+                "intent_type": "create_node",
+                "depends_on": ["parent"],
+            },
+        ]
+    }
+
+    operations = OperationGenerator(llm_gateway=lambda *_: payload).generate(request()).operations
+
+    assert operations[0].query.count("需要包含子节点") == 1
+    assert operations[0].query.endswith("需要包含子节点。")
+
+
+def test_container_enrichment_replaces_negated_capability_phrase() -> None:
+    payload = {
+        "operations": [
+            {
+                "op_id": "parent",
+                "query": "创建容器，但不需要包含子节点。",
+                "intent_type": "create_node",
+            },
+            {
+                "op_id": "child",
+                "query": "创建字段",
+                "intent_type": "create_node",
+                "depends_on": ["parent"],
+            },
+        ]
+    }
+
+    operations = OperationGenerator(llm_gateway=lambda *_: payload).generate(request()).operations
+
+    assert operations[0].query.count("需要包含子节点") == 1
+    assert "不需要包含子节点" not in operations[0].query
+    assert operations[0].query.endswith("需要包含子节点。")
+
+
+def test_valid_non_topological_response_is_validated_but_list_order_is_preserved() -> None:
+    payload = {
+        "operations": [
+            {
+                "op_id": "child-first",
+                "query": "创建子节点",
+                "intent_type": "create_node",
+                "depends_on": ["parent-later"],
+            },
+            {
+                "op_id": "parent-later",
+                "query": "创建父节点",
+                "intent_type": "create_node",
+            },
+        ]
+    }
+
+    operations = OperationGenerator(llm_gateway=lambda *_: payload).generate(request()).operations
+
+    assert [operation.op_id for operation in operations] == ["op_0", "op_1"]
+    assert operations[0].depends_on == ["op_1"]
+    assert "创建子节点" in operations[0].query
+    assert "创建父节点" in operations[1].query
+
+
 def test_multi_dependency_target_from_is_remapped_and_selects_enrichment_source() -> None:
     payload = {
         "operations": [

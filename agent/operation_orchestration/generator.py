@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Callable
 from typing import Any
 
@@ -17,6 +18,13 @@ from agent.operation_orchestration.node_index import build_node_index
 
 LLMGateway = Callable[[str, list[dict[str, Any]]], dict[str, Any]]
 _CONTAINER_CAPABILITY = "需要包含子节点"
+_CONTAINER_CAPABILITY_VARIANT = re.compile(
+    r"(?:不\s*需要|无需|需要)\s*包含\s*子节点"
+)
+_PUNCTUATION_RUN = re.compile(r"([，,；;。.!！？?])(?:\s*[，,；;。.!！？?])+")
+_DANGLING_CONNECTOR = re.compile(
+    r"(?:[，,；;]\s*)?(?:但是|但|并且|而且|同时|且|并)\s*$"
+)
 
 
 class OperationGenerator:
@@ -118,11 +126,21 @@ class OperationGenerator:
                 container_ids.add(target_source)
 
         for operation in operations:
-            if (
-                operation.op_id in container_ids
-                and _CONTAINER_CAPABILITY not in operation.query
-            ):
-                operation.query = f"{operation.query}；{_CONTAINER_CAPABILITY}。"
+            if operation.op_id in container_ids:
+                operation.query = OperationGenerator._normalize_container_query(
+                    operation.query
+                )
+
+    @staticmethod
+    def _normalize_container_query(query: str) -> str:
+        cleaned = _CONTAINER_CAPABILITY_VARIANT.sub("", query).strip()
+        cleaned = _PUNCTUATION_RUN.sub(r"\1", cleaned)
+        cleaned = cleaned.rstrip(" \t\r\n，,；;。.!！？?")
+        cleaned = _DANGLING_CONNECTOR.sub("", cleaned)
+        cleaned = cleaned.rstrip(" \t\r\n，,；;。.!！？?")
+        if not cleaned:
+            return f"{_CONTAINER_CAPABILITY}。"
+        return f"{cleaned}；{_CONTAINER_CAPABILITY}。"
 
     @staticmethod
     def _default_llm_gateway(
@@ -137,4 +155,3 @@ class OperationGenerator:
                 target_tree_summary, ensure_ascii=False
             ),
         )
-

@@ -342,7 +342,7 @@ git commit -m "feat: locate operation targets"
 - Modify: `prompt.json`
 - Modify: `tests/test_planner_prompt.py`
 
-- [ ] **Step 1: Write failing adapter and AB-parent tests**
+- [x] **Step 1: Write failing adapter and AB-parent tests**
 
 Inject fake existing operations/generator so tests assert exact request fields and real patch application. Add parameterized PathResolver tests for the three AB parent types. Test deletion removes one list element and returns its parent ID; root deletion must raise.
 
@@ -360,13 +360,13 @@ def test_path_resolver_accepts_ab_create_parent(node_type):
     assert PathResolver().resolve(payload, "$.mapping_content").children_path == "$.mapping_content.children"
 ```
 
-- [ ] **Step 2: Run adapter tests and verify RED**
+- [x] **Step 2: Run adapter tests and verify RED**
 
 Run: `python -m pytest tests/test_operation_action_adapter.py tests/test_generate_node_operation.py -q`
 
 Expected: adapter import fails and AB parent assertions fail.
 
-- [ ] **Step 3: Implement adapter and minimal compatibility change**
+- [x] **Step 3: Implement adapter and minimal compatibility change**
 
 Extend `PathResolver._CONTAINER_TYPES` to the five required create-parent types. Implement private pointer helpers that deep-copy input, accept only existing add/replace patch forms, and resolve exact list indices. Adapter methods must return dictionaries with `target_tree` plus `created_node_id` or `parent_node_id` where required. Create extracts the canonical ID from `result.generated_node["node_id"]` or `result.generated_node["field_id"]`; modify applies every patch in order; expression resolves the target and parent, calls `ValueLogicGenerator.generate(ValueLogicRequest(...))`, requires an expression result, and writes it to the schema-correct expression branch; delete rejects paths without a list parent and removes exactly one element.
 
@@ -376,13 +376,13 @@ Extend the node index so known AB field slots are indexed by `field_id` with the
 
 Inside `GenerateNodeOperation`, route AB parents to an atomic AB-field branch instead of `children`. Add a strict `ab_field_placement_prompt` for the legal slots. Ambiguous placement defaults to `detail_fields` for single-mapping tables and `group_region.group_related_fields` for two-level/pivot tables. Reuse the common-field generator and Pydantic field models. A two-level summary creation atomically adds the same-name detail field plus a `SummaryField` whose `related_detail_field_name` is that name, emits one validated parent replacement patch, and reports the summary `field_id` as the created ID.
 
-- [ ] **Step 4: Run adapter tests and verify GREEN**
+- [x] **Step 4: Run adapter tests and verify GREEN**
 
 Run: `python -m pytest tests/test_operation_action_adapter.py tests/test_generate_node_operation.py -q`
 
 Expected: all tests pass.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```powershell
 git add agent/operation_orchestration/action_adapter.py tests/test_operation_action_adapter.py agent/generate_node_operation.py tests/test_generate_node_operation.py

@@ -60,7 +60,7 @@ class NamingSqlProfileBuilder:
     def _extract_filter_fields(sql_command: str | None) -> list[str]:
         if not sql_command:
             return []
-        where_match = _WHERE_PATTERN.search(sql_command)
+        where_match = _WHERE_PATTERN.search(_sanitize_sql(sql_command))
         if not where_match:
             return []
         fields: list[str] = []
@@ -69,3 +69,45 @@ class NamingSqlProfileBuilder:
             if field not in fields:
                 fields.append(field)
         return fields
+
+
+def _sanitize_sql(sql: str) -> str:
+    """Remove comments and mask quoted contents without exposing predicate-like text."""
+    result: list[str] = []
+    index = 0
+    while index < len(sql):
+        if sql.startswith("--", index):
+            newline = sql.find("\n", index + 2)
+            if newline < 0:
+                break
+            result.append("\n")
+            index = newline + 1
+            continue
+        if sql.startswith("/*", index):
+            end = sql.find("*/", index + 2)
+            if end < 0:
+                break
+            result.append(" ")
+            index = end + 2
+            continue
+        quote = sql[index]
+        if quote in {"'", '"'}:
+            result.append(quote * 2)
+            index += 1
+            closed = False
+            while index < len(sql):
+                if sql[index] != quote:
+                    index += 1
+                    continue
+                if index + 1 < len(sql) and sql[index + 1] == quote:
+                    index += 2
+                    continue
+                index += 1
+                closed = True
+                break
+            if not closed:
+                return ""
+            continue
+        result.append(sql[index])
+        index += 1
+    return "".join(result)

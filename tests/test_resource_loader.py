@@ -509,10 +509,14 @@ class ResourceLoaderTest(unittest.TestCase):
         loader = PayloadLoader()
         first = loader.load_resource("site-a", "project-a", {})
         second = loader.load_resource("site-a", "project-b", {})
+        third = loader.load_resource("site-a", "project-a", {})
 
         self.assertEqual(list(loader.naming_sql_profile_cache), ["site-a"])
+        self.assertEqual(first.bo_registry["BB_BAK_TRANS"].naming_sql_list[0].sql_name, first.naming_sql_profiles["BB_BAK_TRANS"][0].sql_name)
         self.assertEqual(second.naming_sql_profiles["BB_BAK_TRANS"][0].sql_name, "project-b")
         self.assertEqual(second.naming_sql_profiles["BB_BAK_TRANS"][0].site_id, "site-a")
+        self.assertEqual(third.bo_registry["BB_BAK_TRANS"].naming_sql_list[0].sql_name, third.naming_sql_profiles["BB_BAK_TRANS"][0].sql_name)
+        self.assertEqual(third.naming_sql_profiles["BB_BAK_TRANS"][0].sql_name, "project-a")
 
     def test_empty_bo_registry_is_still_cached(self):
         class ChangingLoader(ResourceLoader):

@@ -84,6 +84,34 @@ class NamingSqlProfileBuilderTest(unittest.TestCase):
         )
         self.assertEqual(profile.filter_fields, ["LEFT_ID", "NAME", "AMOUNT", "CLOSED_AT", "KIND"])
 
+    def test_ignores_predicate_text_in_line_comment(self):
+        profile = NamingSqlProfileBuilder().build(
+            "site-a", "BB_TRANS", definition("SELECT * FROM T WHERE 1=1 -- FAKE_ID = :x")
+        )
+        self.assertEqual(profile.filter_fields, [])
+        self.assertTrue(profile.is_full_table)
+
+    def test_ignores_predicate_text_in_block_comment(self):
+        profile = NamingSqlProfileBuilder().build(
+            "site-a", "BB_TRANS", definition("SELECT * FROM T WHERE 1=1 /* FAKE_ID = :x */")
+        )
+        self.assertEqual(profile.filter_fields, [])
+        self.assertTrue(profile.is_full_table)
+
+    def test_ignores_predicate_text_inside_quoted_text(self):
+        profile = NamingSqlProfileBuilder().build(
+            "site-a", "BB_TRANS", definition("SELECT * FROM T WHERE 1=1 AND 'FAKE_ID = :x' = 'it''s text'")
+        )
+        self.assertEqual(profile.filter_fields, [])
+        self.assertTrue(profile.is_full_table)
+
+    def test_unterminated_quoted_rhs_is_conservatively_full_table(self):
+        profile = NamingSqlProfileBuilder().build(
+            "site-a", "BB_TRANS", definition("SELECT * FROM T WHERE REAL_ID = 'FAKE_ID = :x")
+        )
+        self.assertEqual(profile.filter_fields, [])
+        self.assertTrue(profile.is_full_table)
+
     def test_profile_forbids_unknown_fields(self):
         with self.assertRaises(ValidationError):
             NamingSqlProfile(

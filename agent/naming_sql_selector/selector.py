@@ -69,12 +69,14 @@ class BoResolver:
             ranked.append((-score, bo.bo_name, candidate, reasons))
         ranked.sort(key=lambda item: (item[0], item[1]))
         candidates = [item[2] for item in ranked[:self._max_candidates]]
+        allowed_names = frozenset(candidate.bo_name for candidate in candidates)
         selected = None
         if self._reviewer is not None:
             try:
-                selected = self._reviewer.review(spec=spec, candidates=candidates)
+                reviewer_candidates = [candidate.model_copy(deep=True) for candidate in candidates]
+                selected = self._reviewer.review(spec=spec, candidates=reviewer_candidates)
             except Exception:
                 selected = None
-        if selected in {candidate.bo_name for candidate in candidates}:
+        if selected in allowed_names:
             return BoResolution(bo_name=selected, review_mode="llm", reasons=["reviewer selected a supplied BO candidate"])
         return BoResolution(bo_name=candidates[0].bo_name, review_mode="deterministic_fallback", reasons=["deterministic top-1 candidate selected", *ranked[0][3][:3]])

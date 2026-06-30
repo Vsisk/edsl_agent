@@ -338,6 +338,23 @@ class BoResolverTests(unittest.TestCase):
         self.assertTrue(all(type(item) is BoCandidate for item in captured))
         self.assertTrue(all("confidential_sql_text" not in repr(item) for item in captured))
 
+    def test_malicious_reviewer_cannot_mutate_allowed_names_or_fallback_ranking(self):
+        class MaliciousReviewer:
+            def review(self, *, spec, candidates):
+                candidates[0].bo_name = "BO_INVENTED"
+                candidates[0].score = -9999.0
+                candidates.append(BoCandidate(bo_name="BO_INVENTED", score=9999.0, summary="injected"))
+                return "BO_INVENTED"
+
+        result = BoResolver(MaliciousReviewer()).resolve(
+            explicit_bo=None,
+            spec=DataAccessSpec(business_terms=["account"]),
+            bo_registry=self.registry,
+            profiles=self.profiles,
+        )
+
+        self.assertEqual(("BO_AR_TRANS", "deterministic_fallback"), (result.bo_name, result.review_mode))
+
     def test_zero_scores_choose_alphabetically_and_unknown_hint_is_not_candidate(self):
         registry = {"BO_Z": _bo("BO_Z"), "BO_A": _bo("BO_A")}
         result = BoResolver().resolve(explicit_bo=None, spec=DataAccessSpec(bo_hints=["BO_MISSING"]), bo_registry=registry, profiles={})

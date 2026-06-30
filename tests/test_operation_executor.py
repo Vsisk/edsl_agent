@@ -283,6 +283,37 @@ def test_locator_failure_propagates_and_stops():
     assert response.operations[0].error_message == "cannot locate target"
 
 
+@pytest.mark.parametrize("failure_mode", ["locator", "adapter", "postcondition"])
+def test_failed_retry_clears_stale_output_node_id(failure_mode):
+    operation = op("retry")
+    operation.output_node_id = "stale-output"
+
+    if failure_mode == "locator":
+        locator = RecordingLocator(failure="cannot locate target")
+        adapter = RecordingAdapter()
+    elif failure_mode == "adapter":
+        locator = RecordingLocator(targets={"retry": ("a", "$.root.children[0]")})
+        adapter = RecordingAdapter(actions={"retry": RuntimeError("boom")})
+    else:
+        locator = RecordingLocator(targets={"retry": ("a", "$.root.children[0]")})
+        invalid_tree = {
+            "root": {
+                "node_id": "root",
+                "tree_node_type": "parent",
+                "children": [{"node_id": "b", "tree_node_type": "simple_leaf"}],
+            }
+        }
+        adapter = RecordingAdapter(
+            actions={"retry": lambda current, path: {"target_tree": invalid_tree}}
+        )
+
+    response = execute([operation], locator=locator, adapter=adapter)
+
+    assert not response.success
+    assert response.operations[0].status == "failed"
+    assert response.operations[0].output_node_id is None
+
+
 @pytest.mark.parametrize(
     ("locator", "message"),
     [

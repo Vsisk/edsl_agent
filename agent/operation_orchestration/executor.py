@@ -60,6 +60,7 @@ class OperationExecutor:
             )
 
         for operation in execution_order:
+            operation.output_node_id = None
             try:
                 if operation.depends_on:
                     candidate = self._resolve_dependency_target(

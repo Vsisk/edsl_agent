@@ -38,6 +38,10 @@ def _bounded_unique(values: list[str]) -> list[str]:
 def _safe_text(value: Any) -> str:
     if value is None:
         return ""
+    try:
+        return json.dumps(value, ensure_ascii=False, default=str)[:MAX_COMBINED_QUERY_CHARS]
+    except (TypeError, ValueError, RecursionError):
+        return ""
 
 
 def _bounded_combined_text(parts: tuple[str, ...]) -> str:
@@ -47,14 +51,6 @@ def _bounded_combined_text(parts: tuple[str, ...]) -> str:
     separator_chars = len(present) - 1
     per_part = max((MAX_COMBINED_QUERY_CHARS - separator_chars) // len(present), 1)
     return " ".join(part[:per_part] for part in present)[:MAX_COMBINED_QUERY_CHARS]
-    if isinstance(value, str):
-        return value
-    try:
-        return json.dumps(value, ensure_ascii=False, default=str)
-    except (TypeError, ValueError, RecursionError):
-        if isinstance(value, (int, float, bool)):
-            return str(value)
-        return ""
 
 
 def _semantic_tokens(*values: str) -> list[str]:

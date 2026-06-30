@@ -175,6 +175,31 @@ class DataAccessSpecGeneratorTests(unittest.TestCase):
         self.assertFalse(spec.requires_naming_sql)
         self.assertIn("fee", retriever.query)
 
+    def test_node_annotation_alone_triggers_lookup_inference(self):
+        request = NamingSqlSelectionRequest(site_id="s", query="ordinary", node={"annotation": "请查表"})
+        self.assertTrue(DataAccessSpecGenerator().generate(request).requires_naming_sql)
+
+    def test_parent_annotation_alone_triggers_lookup_inference(self):
+        request = NamingSqlSelectionRequest(
+            site_id="s", query="ordinary", parent_node={"annotation": "use data source"}
+        )
+        self.assertTrue(DataAccessSpecGenerator().generate(request).requires_naming_sql)
+
+    def test_raw_nonstandard_structured_content_participates_in_retrieval(self):
+        class CapturingRetriever:
+            query = ""
+
+            def retrieve(self, site_id, query, limit=5):
+                self.query = query
+                return []
+
+        retriever = CapturingRetriever()
+        request = NamingSqlSelectionRequest(
+            site_id="s", query="ordinary", structured_spec={"domain_annotation": "special-fee-context"}
+        )
+        DataAccessSpecGenerator(retriever).generate(request)
+        self.assertIn("special-fee-context", retriever.query)
+
 
 class StaticDevelopmentKnowledgeRetrieverTests(unittest.TestCase):
     def test_relevance_site_isolation_limit_and_deterministic_order(self):

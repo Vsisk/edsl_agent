@@ -76,6 +76,8 @@ class NamingSqlDefTerm(BaseModel):
     naming_sql_id: str = Field(..., description="Named SQL id")
     sql_name: str = Field(..., description="SQL name")
     sql_description: Optional[str] = Field(None, description="SQL description")
+    label_name: Optional[str] = Field(None, description="Source label name")
+    sql_command: Optional[str] = Field(None, description="Source SQL command")
     param_list: List[ParamTerm] = Field(..., description="Parameter list")
 
 

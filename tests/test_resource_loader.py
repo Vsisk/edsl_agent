@@ -51,6 +51,8 @@ def sample_bo_payload():
                                 "naming_sql_id": "2025112610460822566018",
                                 "sql_name": "BB_BAK_TRANS_queryDataLoadData",
                                 "sql_description": "Query the BB_BAK_TRANS table.",
+                                "label_name": "Query AR transaction by end date",
+                                "sql_command": "SELECT LOG_ID FROM BB_BAK_TRANS WHERE END_DATE = :END_DATE",
                                 "param_list": [
                                     {
                                         "param_name": "END_DATE",
@@ -420,6 +422,17 @@ class ResourceLoaderTest(unittest.TestCase):
         self.assertEqual(registry[1].bo_name, "CUSTOM_ACCOUNT")
         self.assertEqual(registry[1].tag, ["CUSTOM_ACCOUNT", "CUSTOM", "ACCOUNT", "Custom", "account", "table", "CUSTOM_ID", "ID", "id", "long"])
         self.assertIn("BB_BAK_TRANS", registry_by_name)
+
+    def test_bo_loader_preserves_naming_sql_profile_source_fields(self):
+        registry = load_bo_registry_by_json(sample_bo_payload())
+
+        naming_sql = registry["BB_BAK_TRANS"].naming_sql_list[0]
+
+        self.assertEqual(naming_sql.label_name, "Query AR transaction by end date")
+        self.assertEqual(
+            naming_sql.sql_command,
+            "SELECT LOG_ID FROM BB_BAK_TRANS WHERE END_DATE = :END_DATE",
+        )
 
     def test_collect_naming_sql_list_normalizes_terms(self):
         bo_payload = sample_bo_payload()["sys_bo_list"][0]

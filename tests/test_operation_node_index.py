@@ -250,14 +250,41 @@ def test_create_rejects_leaf_nodes() -> None:
 
 
 @pytest.mark.parametrize(
-    "intent_type", ["modify_node", "generate_expression", "delete_node"]
+    ("candidate", "expected"),
+    [
+        (NodeLocateCandidate(node_id="leaf", jsonpath="$", tree_node_type="simple_leaf", identity_field="node_id"), True),
+        (NodeLocateCandidate(node_id="field", jsonpath="$", tree_node_type="ab_field", identity_field="field_id"), True),
+        (NodeLocateCandidate(node_id="summary", jsonpath="$", tree_node_type="ab_summary_field", identity_field="field_id"), False),
+        (NodeLocateCandidate(node_id="parent", jsonpath="$", tree_node_type="parent", identity_field="node_id"), False),
+        (NodeLocateCandidate(node_id="ab", jsonpath="$", tree_node_type="ab_pivot_table", identity_field="node_id"), False),
+    ],
 )
-def test_existing_node_intents_accept_any_indexed_node(intent_type: str) -> None:
-    candidate = NodeLocateCandidate(
-        node_id="leaf", jsonpath="$", tree_node_type="field"
-    )
+def test_generate_expression_accepts_only_expression_capable_candidates(candidate, expected) -> None:
+    assert is_valid_candidate("generate_expression", candidate) is expected
 
-    assert is_valid_candidate(intent_type, candidate) is True
+
+@pytest.mark.parametrize(
+    ("candidate", "expected"),
+    [
+        (NodeLocateCandidate(node_id="leaf", jsonpath="$", tree_node_type="simple_leaf", identity_field="node_id"), True),
+        (NodeLocateCandidate(node_id="field", jsonpath="$", tree_node_type="ab_field", identity_field="field_id"), False),
+        (NodeLocateCandidate(node_id="legacy", jsonpath="$", tree_node_type="simple_leaf"), False),
+    ],
+)
+def test_modify_accepts_only_canonical_standard_node_id_candidates(candidate, expected) -> None:
+    assert is_valid_candidate("modify_node", candidate) is expected
+
+
+@pytest.mark.parametrize(
+    "candidate",
+    [
+        NodeLocateCandidate(node_id="leaf", jsonpath="$", tree_node_type="simple_leaf", identity_field="node_id"),
+        NodeLocateCandidate(node_id="field", jsonpath="$", tree_node_type="ab_field", identity_field="field_id"),
+        NodeLocateCandidate(node_id="summary", jsonpath="$", tree_node_type="ab_summary_field", identity_field="field_id"),
+    ],
+)
+def test_delete_accepts_every_indexed_candidate(candidate) -> None:
+    assert is_valid_candidate("delete_node", candidate) is True
 
 
 def test_unknown_intent_is_rejected() -> None:

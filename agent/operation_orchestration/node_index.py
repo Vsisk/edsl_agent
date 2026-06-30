@@ -15,7 +15,6 @@ CREATE_PARENT_TYPES = {
 }
 
 _IDENTIFIER_KEY = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-_EXISTING_NODE_INTENTS = {"modify_node", "generate_expression", "delete_node"}
 _AB_FIELD_SLOTS = {
     "detail_fields",
     "group_by_fields",
@@ -135,4 +134,10 @@ def build_node_index(target_tree: dict[str, Any]) -> dict[str, NodeLocateCandida
 def is_valid_candidate(intent_type: str, candidate: NodeLocateCandidate) -> bool:
     if intent_type == "create_node":
         return candidate.tree_node_type in CREATE_PARENT_TYPES
-    return intent_type in _EXISTING_NODE_INTENTS
+    if intent_type == "generate_expression":
+        return candidate.tree_node_type in {"simple_leaf", "ab_field"}
+    if intent_type == "modify_node":
+        return candidate.identity_field == "node_id"
+    if intent_type == "delete_node":
+        return True
+    return False

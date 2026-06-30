@@ -136,6 +136,26 @@ class OperationActionAdapter:
         parent_node = _nearest_node(ancestors)
         if parent_node is None:
             raise ValueError("delete_node failed: parent node_id is missing")
+        ab_parent, _ = _nearest_ab_parent(ancestors, tokens)
+        field_slot = next(
+            (
+                token
+                for token in reversed(tokens)
+                if token in {"detail_fields", "group_by_fields", "group_related_fields", "sum_fields", "summary_fields"}
+            ),
+            None,
+        )
+        if ab_parent is not None and ab_parent.get("tree_node_type") == "ab_two_level_table" and field_slot == "detail_fields":
+            xml_name_property = target.get("xml_name_property")
+            xml_name = xml_name_property.get("xml_name") if isinstance(xml_name_property, dict) else None
+            ab_content = ab_parent.get("ab_content")
+            group_region = ab_content.get("group_region") if isinstance(ab_content, dict) else None
+            summaries = group_region.get("summary_fields") if isinstance(group_region, dict) else None
+            if isinstance(summaries, list) and any(
+                isinstance(summary, dict) and summary.get("related_detail_field_name") == xml_name
+                for summary in summaries
+            ):
+                raise ValueError("delete_node failed: detail field is referenced by summary field")
 
         updated = deepcopy(target_tree)
         container = _value_at_tokens(updated, tokens[:-1])
@@ -159,7 +179,7 @@ def _apply_patch(document: dict[str, Any], patch: dict[str, Any]) -> dict[str, A
     if operation not in {"add", "replace"}:
         raise ValueError(f"patch operation is unsupported: {operation!r}")
     path = patch.get("path")
-    if not isinstance(path, str) or (path and not path.startswith("/")) or path == "/":
+    if not isinstance(path, str) or (path and not path.startswith("/")):
         raise ValueError("patch path is malformed")
     if "value" not in patch:
         raise ValueError("patch value is missing")

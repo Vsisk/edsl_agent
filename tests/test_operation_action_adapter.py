@@ -311,6 +311,32 @@ def test_delete_node_removes_exact_ab_field_and_returns_ab_parent_id():
     TreeNodeTerm.model_validate(result["target_tree"])
 
 
+@pytest.mark.parametrize("related_name", ["AMOUNT", "OTHER"])
+def test_delete_two_level_detail_field_respects_summary_references(related_name):
+    tree = ab_tree_with_field("ab_two_level_table", "detail_fields")
+    summary = SummaryField(
+        field_id="summary-ref",
+        xml_name_property={"xml_name": "TOTAL"},
+        summary_type="sum",
+        related_detail_field_name=related_name,
+    ).model_dump(mode="json", exclude_none=True)
+    tree["ab_content"]["group_region"]["summary_fields"].append(summary)
+    tree = GenerateNodeOperation._serialize_node(TreeNodeTerm.model_validate(tree))
+    before = deepcopy(tree)
+    path = build_node_index(tree)["field-detail_fields"].jsonpath
+
+    if related_name == "AMOUNT":
+        with pytest.raises(
+            ValueError, match="delete_node failed: detail field is referenced by summary field"
+        ):
+            OperationActionAdapter().delete_node(path, tree)
+        assert tree == before
+    else:
+        result = OperationActionAdapter().delete_node(path, tree)
+        assert result["target_tree"]["ab_content"]["detail_region"]["detail_fields"] == []
+        assert tree == before
+
+
 @pytest.mark.parametrize(
     ("path", "tree", "message"),
     [
@@ -397,6 +423,42 @@ def test_index_resolver_and_adapter_create_ab_field_under_quoted_key():
     fields = result["target_tree"]["a.b"]["ab_content"]["group_region"]["sum_fields"]
     assert fields[0]["field_id"] == result["created_node_id"]
     TreeNodeTerm.model_validate(result["target_tree"]["a.b"])
+
+
+def test_empty_key_index_path_creates_ab_field_with_pointer_slash_replacement():
+    tree = {"": ab_tree_with_field("ab_pivot_table", "group_by_fields")}
+    tree[""]["ab_content"]["group_by_fields"] = []
+    operation = GenerateNodeOperation(
+        common_fields_llm=lambda query: {
+            "xml_name_property": {"xml_name": "AMOUNT"},
+            "annotation": "amount",
+            "reference_logic_area_id_list": [],
+        },
+        ab_field_placement_llm=lambda *args: {
+            "placement": "sum_fields",
+            "summary_type": None,
+            "reason": "sum field",
+        },
+    )
+    path = build_node_index(tree)["ab-parent"].jsonpath
+
+    result = OperationActionAdapter(generate_node_operation=operation).create_node("create amount", path, tree)
+
+    assert path == "$['']"
+    fields = result["target_tree"][""]["ab_content"]["group_region"]["sum_fields"]
+    assert fields[0]["field_id"] == result["created_node_id"]
+
+
+def test_replace_patch_slash_targets_empty_string_property():
+    operation = RecordingOperation(
+        SimpleNamespace(success=True, patch_list=[{"op": "replace", "path": "/", "value": "new"}])
+    )
+
+    result = OperationActionAdapter(modify_node_operation=operation).modify_node(
+        "q", "$['']", {"": "old"}
+    )
+
+    assert result["target_tree"] == {"": "new"}
 
 
 def test_json_pointer_dot_and_dotdot_are_ordinary_property_keys():

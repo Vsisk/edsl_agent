@@ -10,6 +10,12 @@ from agent.naming_sql_selector import (
     NamingSqlSelectionRequest,
     StaticDevelopmentKnowledgeRetriever,
 )
+from agent.naming_sql_selector.spec_generator import (
+    MAX_AVAILABLE_CONTEXT,
+    MAX_COMBINED_QUERY_CHARS,
+    MAX_MERGED_TERMS,
+    MAX_TERM_CHARS,
+)
 
 
 class DataAccessSpecGeneratorTests(unittest.TestCase):
@@ -114,6 +120,61 @@ class DataAccessSpecGeneratorTests(unittest.TestCase):
         )
         self.assertEqual(["BO_1", "BO_2", "BO_3", "BO_4", "BO_5"], spec.bo_hints)
 
+    def test_structured_business_term_participates_in_retrieval(self):
+        retriever = StaticDevelopmentKnowledgeRetriever({
+            "s": [DevelopmentKnowledge(text="fee schedule", bo_names=["BO_FEE"])]
+        })
+        request = NamingSqlSelectionRequest(
+            site_id="s", query="ordinary", structured_spec={"business_terms": ["fee"]}
+        )
+        self.assertIn("BO_FEE", DataAccessSpecGenerator(retriever).generate(request).bo_hints)
+
+    def test_bounds_and_normalizes_request_and_knowledge_data(self):
+        class CapturingRetriever:
+            query = ""
+
+            def retrieve(self, site_id, query, limit=5):
+                self.query = query
+                return [DevelopmentKnowledge(
+                    text="knowledge",
+                    bo_names=[f"  BO_{index}\n detail  " for index in range(60)],
+                    semantic_tags=[f"  tag {index}\n value  " + ("x" * 200) for index in range(60)],
+                )]
+
+        retriever = CapturingRetriever()
+        request = NamingSqlSelectionRequest(
+            site_id="s",
+            query="q" * 5000,
+            node={"payload": "n" * 5000},
+            structured_spec={"bo_hints": [f"REQ_{index}" for index in range(60)]},
+            available_context=[{"name": f"value {index}", "source_ref": f"path/{index}"} for index in range(120)],
+        )
+        spec = DataAccessSpecGenerator(retriever).generate(request)
+
+        self.assertLessEqual(len(retriever.query), MAX_COMBINED_QUERY_CHARS)
+        self.assertEqual(MAX_MERGED_TERMS, len(spec.bo_hints))
+        self.assertLessEqual(len(spec.business_terms), MAX_MERGED_TERMS)
+        self.assertTrue(all("\n" not in value and len(value) <= MAX_TERM_CHARS for value in spec.business_terms))
+        self.assertEqual(MAX_AVAILABLE_CONTEXT, len(spec.available_values))
+
+    def test_circular_node_is_nonfatal_and_query_is_still_retrieved(self):
+        class CapturingRetriever:
+            query = ""
+
+            def retrieve(self, site_id, query, limit=5):
+                self.query = query
+                return []
+
+        circular = {}
+        circular["self"] = circular
+        retriever = CapturingRetriever()
+        request = NamingSqlSelectionRequest(site_id="s", query="fee", node=circular)
+
+        spec = DataAccessSpecGenerator(retriever).generate(request)
+
+        self.assertFalse(spec.requires_naming_sql)
+        self.assertIn("fee", retriever.query)
+
 
 class StaticDevelopmentKnowledgeRetrieverTests(unittest.TestCase):
     def test_relevance_site_isolation_limit_and_deterministic_order(self):
@@ -140,6 +201,13 @@ class StaticDevelopmentKnowledgeRetrieverTests(unittest.TestCase):
 
         self.assertEqual(5, len(recalled))
         self.assertEqual([f"BO_{number}" for number in range(5)], [item.bo_names[0] for item in recalled])
+
+    def test_chinese_term_matches_inside_longer_chinese_query(self):
+        retriever = StaticDevelopmentKnowledgeRetriever({
+            "site": [DevelopmentKnowledge(text="账户", bo_names=["BO_ACCOUNT"])]
+        })
+        recalled = retriever.retrieve("site", "查询账户明细")
+        self.assertEqual(["BO_ACCOUNT"], [item.bo_names[0] for item in recalled])
 
 
 class NamingSqlSelectorModelTests(unittest.TestCase):

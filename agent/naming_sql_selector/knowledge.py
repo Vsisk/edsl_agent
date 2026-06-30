@@ -27,6 +27,13 @@ def _tokens(value: str) -> set[str]:
     return set(re.findall(r"[a-z0-9]+|[\u4e00-\u9fff]+", value.lower()))
 
 
+def _cjk_bigrams(value: str) -> set[str]:
+    bigrams: set[str] = set()
+    for sequence in re.findall(r"[\u4e00-\u9fff]+", value):
+        bigrams.update(sequence[index:index + 2] for index in range(len(sequence) - 1))
+    return bigrams
+
+
 class StaticDevelopmentKnowledgeRetriever:
     def __init__(self, entries_by_site: dict[str, list[DevelopmentKnowledge]]):
         self._entries_by_site = entries_by_site
@@ -36,12 +43,15 @@ class StaticDevelopmentKnowledgeRetriever:
         if bounded_limit == 0:
             return []
         query_tokens = _tokens(query)
+        query_cjk = _cjk_bigrams(query)
         scored: list[tuple[int, int, DevelopmentKnowledge]] = []
         for index, entry in enumerate(self._entries_by_site.get(site_id, [])):
             searchable = [entry.text, *entry.bo_names, *entry.naming_sql_names, *entry.semantic_tags]
             for name, aliases in entry.param_aliases.items():
                 searchable.extend((name, *aliases))
-            score = len(query_tokens.intersection(_tokens(" ".join(searchable))))
+            searchable_text = " ".join(searchable)
+            score = len(query_tokens.intersection(_tokens(searchable_text)))
+            score += len(query_cjk.intersection(_cjk_bigrams(searchable_text)))
             if score:
                 scored.append((-score, index, entry))
         scored.sort(key=lambda item: (item[0], item[1]))

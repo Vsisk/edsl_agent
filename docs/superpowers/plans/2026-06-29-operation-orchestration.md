@@ -493,7 +493,7 @@ git commit -m "feat: expose operation orchestrator"
 - Verify: all files above
 - Modify only if verification exposes a defect in the new orchestration code or its tests.
 
-- [ ] **Step 1: Run focused orchestration tests**
+- [x] **Step 1: Run focused orchestration tests**
 
 Run:
 
@@ -503,7 +503,7 @@ python -m pytest tests/test_operation_models.py tests/test_operation_node_index.
 
 Expected: all focused tests pass with no new warnings.
 
-- [ ] **Step 2: Run existing node-operation regressions**
+- [x] **Step 2: Run existing node-operation regressions**
 
 Run:
 
@@ -513,13 +513,13 @@ python -m pytest tests/test_generate_node_operation.py tests/test_generate_node_
 
 Expected: all tests pass.
 
-- [ ] **Step 3: Run the full repository suite**
+- [x] **Step 3: Run the full repository suite**
 
 Run: `python -m pytest -q`
 
 Expected: all existing 197 tests plus the new orchestration tests pass; the pre-existing Pydantic class-config deprecation warning may remain.
 
-- [ ] **Step 4: Check formatting, JSON validity, and worktree scope**
+- [x] **Step 4: Check formatting, JSON validity, and worktree scope**
 
 Run:
 
@@ -531,7 +531,7 @@ git status --short
 
 Expected: JSON parsing and diff checks succeed; status contains only intended orchestration files if the per-task commits were intentionally skipped.
 
-- [ ] **Step 5: Commit final verification fixes if any**
+- [x] **Step 5: Commit final verification fixes if any**
 
 ```powershell
 git add agent/operation_orchestration agent/generate_node_operation.py prompt.json tests

@@ -270,6 +270,29 @@ def test_graph_errors_happen_before_external_calls_and_preserve_copied_inputs(op
     assert locator.calls == [] and adapter.calls == []
 
 
+def test_initial_index_failure_clears_stale_output_as_runtime_failure():
+    operation = op("retry")
+    operation.output_node_id = "stale-output"
+    duplicate_tree = {
+        "items": [
+            {"node_id": "duplicate", "tree_node_type": "simple_leaf"},
+            {"node_id": "duplicate", "tree_node_type": "simple_leaf"},
+        ]
+    }
+    locator = RecordingLocator()
+    adapter = RecordingAdapter()
+
+    response = execute(
+        [operation], locator=locator, adapter=adapter, target_tree=duplicate_tree
+    )
+
+    assert not response.success
+    assert response.operations[0].status == "failed"
+    assert response.operations[0].output_node_id is None
+    assert "duplicate node_id" in response.error_message
+    assert locator.calls == [] and adapter.calls == []
+
+
 def test_locator_failure_propagates_and_stops():
     response = execute(
         [op("a")],

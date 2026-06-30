@@ -243,6 +243,7 @@ class OperationExecutor:
             message = str(reason)
         else:
             message = f"operation {operation.op_id} failed: {reason}"
+        operation.output_node_id = None
         operation.status = "failed"
         operation.error_message = message
         return ExecuteOperationsResponse(

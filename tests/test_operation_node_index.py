@@ -40,6 +40,7 @@ def test_build_node_index_records_paths_metadata_parents_and_child_count() -> No
             xml_name="Root",
             annotation="root annotation",
             child_count=0,
+            identity_field="node_id",
         ),
         "mapping": NodeLocateCandidate(
             node_id="mapping",
@@ -49,6 +50,7 @@ def test_build_node_index_records_paths_metadata_parents_and_child_count() -> No
             parent_xml_name="Root",
             parent_node_id="root",
             child_count=1,
+            identity_field="node_id",
         ),
         "leaf": NodeLocateCandidate(
             node_id="leaf",
@@ -58,6 +60,7 @@ def test_build_node_index_records_paths_metadata_parents_and_child_count() -> No
             parent_xml_name="Mapping",
             parent_node_id="mapping",
             child_count=0,
+            identity_field="node_id",
         ),
     }
 
@@ -131,6 +134,81 @@ def test_duplicate_indexed_node_id_is_rejected() -> None:
 
     with pytest.raises(ValueError, match="duplicate node_id"):
         build_node_index(target_tree)
+
+
+@pytest.mark.parametrize(
+    ("tree_node_type", "slot", "field_path", "expected_type"),
+    [
+        ("ab_single_mapping_table", "detail_fields", "ab_content.detail_fields", "ab_field"),
+        ("ab_two_level_table", "group_by_fields", "ab_content.group_by_fields", "ab_field"),
+        ("ab_two_level_table", "group_related_fields", "ab_content.group_region.group_related_fields", "ab_field"),
+        ("ab_two_level_table", "summary_fields", "ab_content.group_region.summary_fields", "ab_summary_field"),
+        ("ab_two_level_table", "detail_fields", "ab_content.detail_region.detail_fields", "ab_field"),
+        ("ab_pivot_table", "group_by_fields", "ab_content.group_by_fields", "ab_field"),
+        ("ab_pivot_table", "group_related_fields", "ab_content.group_region.group_related_fields", "ab_field"),
+        ("ab_pivot_table", "sum_fields", "ab_content.group_region.sum_fields", "ab_field"),
+    ],
+)
+def test_indexes_ab_fields_in_every_known_slot(
+    tree_node_type: str, slot: str, field_path: str, expected_type: str
+) -> None:
+    field = {
+        "field_id": f"field-{slot}",
+        "xml_name_property": {"xml_name": "Amount"},
+        "annotation": "field annotation",
+    }
+    content: dict = {}
+    current = content
+    parts = field_path.split(".")[1:]
+    for part in parts[:-1]:
+        current[part] = {}
+        current = current[part]
+    current[parts[-1]] = [field]
+    tree = {
+        "node_id": "ab-parent",
+        "tree_node_type": tree_node_type,
+        "xml_name_property": {"xml_name": "AB Parent"},
+        "ab_content": content,
+    }
+
+    candidate = build_node_index(tree)[field["field_id"]]
+
+    assert candidate.identity_field == "field_id"
+    assert candidate.field_slot == slot
+    assert candidate.tree_node_type == expected_type
+    assert candidate.parent_node_id == "ab-parent"
+    assert candidate.parent_xml_name == "AB Parent"
+    assert candidate.jsonpath == f"$.{field_path}[0]"
+
+
+def test_does_not_index_field_id_outside_known_ab_slots() -> None:
+    tree = {
+        "node_id": "ab",
+        "tree_node_type": "ab_pivot_table",
+        "ab_content": {"unknown_fields": [{"field_id": "ignored"}]},
+    }
+
+    assert list(build_node_index(tree)) == ["ab"]
+
+
+@pytest.mark.parametrize(
+    "tree",
+    [
+        {
+            "node_id": "same",
+            "tree_node_type": "ab_single_mapping_table",
+            "ab_content": {"detail_fields": [{"field_id": "same"}]},
+        },
+        {
+            "node_id": "ab",
+            "tree_node_type": "ab_single_mapping_table",
+            "ab_content": {"detail_fields": [{"field_id": "same"}, {"field_id": "same"}]},
+        },
+    ],
+)
+def test_rejects_identity_collisions_across_node_and_ab_field_ids(tree: dict) -> None:
+    with pytest.raises(ValueError, match="duplicate node_id"):
+        build_node_index(tree)
 
 
 @pytest.mark.parametrize(

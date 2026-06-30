@@ -1,19 +1,25 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass
+import json
 import re
 from typing import Any, Literal
 
-from jsonpath_ng import parse
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 from agent.llm.generate_by_llm import generate_by_llm
 
 from models import (
+    CommonFieldTerm,
     DataExpressionTerm,
     DataSourceTerm,
     DataTypeTerm,
+    DetailRegion,
     PivotTableTerm,
+    PivotTableGroupRegion,
+    SummaryField,
     SupportBigCustAcctTerm,
+    TwoLevelTableGroupRegion,
     TwoLevelTableTerm,
     TreeNodeTerm,
     XmlNamePropertyTerm,
@@ -76,13 +82,11 @@ class ResolvedValuePath:
     normalized_path: str
     pointer_path: str
     value: Any
+    tokens: tuple[str | int, ...]
 
 
 class PathResolver:
-    _SUPPORTED_PATH = re.compile(
-        r"^\$(?:\.[A-Za-z_][A-Za-z0-9_]*|\[[0-9]+\])+$"
-    )
-    _SEGMENT = re.compile(r"\.([A-Za-z_][A-Za-z0-9_]*)|\[([0-9]+)\]")
+    _IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
     _CONTAINER_TYPES = {
         "parent",
         "parent_list",
@@ -131,40 +135,31 @@ class PathResolver:
         missing_error_code: str = "TARGET_NODE_NOT_FOUND",
     ) -> ResolvedValuePath:
         normalized_path = self._normalize(node_path)
-        if not self._SUPPORTED_PATH.fullmatch(normalized_path):
-            raise OperationFailure(
-                "INVALID_NODE_PATH",
-                "node_path must use simple JSONPath property and numeric index segments",
-                node_path=node_path,
-            )
-
+        tokens = self.parse_tokens(normalized_path)
+        value: Any = edsl_tree
         try:
-            matches = parse(normalized_path).find(edsl_tree)
-        except Exception as exc:
-            raise OperationFailure(
-                "INVALID_NODE_PATH",
-                "node_path could not be parsed",
-                node_path=node_path,
-            ) from exc
-
-        if not matches:
+            for token in tokens:
+                if isinstance(token, int):
+                    if not isinstance(value, list):
+                        raise KeyError(token)
+                    value = value[token]
+                else:
+                    if not isinstance(value, dict):
+                        raise KeyError(token)
+                    value = value[token]
+        except (KeyError, IndexError):
             raise OperationFailure(
                 missing_error_code,
                 "target node does not exist",
                 node_path=normalized_path,
-            )
-        if len(matches) != 1:
-            raise OperationFailure(
-                "INVALID_NODE_PATH",
-                "node_path must resolve to exactly one parent",
-                node_path=normalized_path,
-            )
+            ) from None
 
-        pointer_segments = self._pointer_segments(normalized_path)
+        pointer_segments = [str(token).replace("~", "~0").replace("/", "~1") for token in tokens]
         return ResolvedValuePath(
             normalized_path=normalized_path,
-            pointer_path="/" + "/".join(pointer_segments),
-            value=matches[0].value,
+            pointer_path="/" + "/".join(pointer_segments) if pointer_segments else "",
+            value=value,
+            tokens=tuple(tokens),
         )
 
     @staticmethod
@@ -174,12 +169,69 @@ class PathResolver:
             path = f"$.{path.lstrip('.')}"
         return path
 
-    def _pointer_segments(self, node_path: str) -> list[str]:
-        segments: list[str] = []
-        for match in self._SEGMENT.finditer(node_path):
-            segment = match.group(1) or match.group(2)
-            segments.append(segment.replace("~", "~0").replace("/", "~1"))
-        return segments
+    @classmethod
+    def parse_tokens(cls, node_path: str) -> list[str | int]:
+        if not isinstance(node_path, str) or not node_path.startswith("$"):
+            raise OperationFailure(
+                "INVALID_NODE_PATH",
+                "node_path must use index-compatible JSONPath syntax",
+                node_path=node_path,
+            )
+        tokens: list[str | int] = []
+        position = 1
+        while position < len(node_path):
+            if node_path[position] == ".":
+                match = cls._IDENTIFIER.match(node_path, position + 1)
+                if match is None:
+                    break
+                tokens.append(match.group(0))
+                position = match.end()
+                continue
+            if node_path[position] != "[":
+                break
+            position += 1
+            if position < len(node_path) and node_path[position] == "'":
+                position += 1
+                chars: list[str] = []
+                while position < len(node_path) and node_path[position] != "'":
+                    if node_path[position] == "\\":
+                        position += 1
+                        if position >= len(node_path) or node_path[position] not in {"\\", "'"}:
+                            position = len(node_path) + 1
+                            break
+                    chars.append(node_path[position])
+                    position += 1
+                if position >= len(node_path) or node_path[position] != "'":
+                    raise OperationFailure(
+                        "INVALID_NODE_PATH",
+                        "node_path must use index-compatible JSONPath syntax",
+                        node_path=node_path,
+                    )
+                position += 1
+                if position >= len(node_path) or node_path[position] != "]":
+                    raise OperationFailure(
+                        "INVALID_NODE_PATH",
+                        "node_path must use index-compatible JSONPath syntax",
+                        node_path=node_path,
+                    )
+                position += 1
+                tokens.append("".join(chars))
+                continue
+            end = node_path.find("]", position)
+            if end < 0:
+                break
+            index_text = node_path[position:end]
+            if not re.fullmatch(r"0|[1-9][0-9]*", index_text):
+                break
+            tokens.append(int(index_text))
+            position = end + 1
+        if position != len(node_path):
+            raise OperationFailure(
+                "INVALID_NODE_PATH",
+                "node_path must use index-compatible JSONPath syntax",
+                node_path=node_path,
+            )
+        return tokens
 
 
 class NodeRouteResult(BaseModel):
@@ -194,6 +246,42 @@ class CommonNodeFields(BaseModel):
     xml_name_property: XmlNamePropertyTerm
     annotation: str = ""
     reference_logic_area_id_list: list[str] = Field(default_factory=list)
+
+
+class ABFieldPlacementDecision(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    placement: Literal["default", "detail_fields", "group_by_fields", "group_related_fields", "summary_fields", "sum_fields"]
+    summary_type: Literal["sum", "count"] | None = None
+    reason: str = Field(min_length=1)
+
+    @field_validator("reason")
+    @classmethod
+    def reason_must_be_nonblank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("reason must be nonblank")
+        return value.strip()
+
+
+class ABFieldPlacementGateway:
+    def __init__(self, llm_gateway: Any | None = None):
+        self.llm_gateway = llm_gateway
+
+    def decide(self, query: str, parent_tree_node_type: str, allowed_slots: list[str]) -> ABFieldPlacementDecision:
+        allowed_slots_json = json.dumps(allowed_slots, ensure_ascii=False)
+        try:
+            payload = (
+                self.llm_gateway(query, parent_tree_node_type, allowed_slots_json)
+                if self.llm_gateway is not None
+                else generate_by_llm(
+                    "ab_field_placement_prompt",
+                    query=query,
+                    parent_tree_node_type=parent_tree_node_type,
+                    allowed_slots_json=allowed_slots_json,
+                )
+            )
+            return ABFieldPlacementDecision.model_validate(payload)
+        except Exception as exc:
+            raise OperationFailure("AB_FIELD_PLACEMENT_FAILED", "AB field placement generation failed") from exc
 
 
 class NodeTypeRouter:
@@ -345,6 +433,17 @@ class NodePatchBuilder:
 
 
 class GenerateNodeOperation:
+    _AB_LEGAL_SLOTS = {
+        "ab_single_mapping_table": ["detail_fields"],
+        "ab_two_level_table": ["group_by_fields", "group_related_fields", "summary_fields", "detail_fields"],
+        "ab_pivot_table": ["group_by_fields", "group_related_fields", "sum_fields"],
+    }
+    _AB_DEFAULT_SLOT = {
+        "ab_single_mapping_table": "detail_fields",
+        "ab_two_level_table": "group_related_fields",
+        "ab_pivot_table": "group_related_fields",
+    }
+
     def __init__(
         self,
         *,
@@ -358,6 +457,8 @@ class GenerateNodeOperation:
         common_fields_llm: Any | None = None,
         content_intent_llm: Any | None = None,
         content_intent_generator: NodeContentIntentGenerator | None = None,
+        ab_field_placement_llm: Any | None = None,
+        ab_field_placement_gateway: ABFieldPlacementGateway | None = None,
     ):
         self.path_resolver = path_resolver or PathResolver()
         self.node_type_router = node_type_router or NodeTypeRouter(route_llm)
@@ -368,11 +469,19 @@ class GenerateNodeOperation:
         )
         self.node_assembler = node_assembler or NodeAssembler()
         self.patch_builder = patch_builder or NodePatchBuilder()
+        self.ab_field_placement_gateway = ab_field_placement_gateway or ABFieldPlacementGateway(ab_field_placement_llm)
 
     def execute(self, operation_input: GenerateNodeOperationInput) -> GenerateNodeOperationOutput:
         resolved: ResolvedNodePath | None = None
         route: NodeRouteResult | None = None
         try:
+            located_parent = self.path_resolver.resolve_value(
+                operation_input.edsl_tree,
+                operation_input.node_path,
+                missing_error_code="TARGET_PARENT_NOT_FOUND",
+            )
+            if isinstance(located_parent.value, dict) and located_parent.value.get("tree_node_type") in self._AB_LEGAL_SLOTS:
+                return self._create_ab_field(operation_input, located_parent)
             resolved = self.path_resolver.resolve(
                 operation_input.edsl_tree,
                 operation_input.node_path,
@@ -420,6 +529,94 @@ class GenerateNodeOperation:
                     for error in exc.errors(include_url=False)
                 ],
             )
+
+    def _create_ab_field(
+        self, operation_input: GenerateNodeOperationInput, resolved: ResolvedValuePath
+    ) -> GenerateNodeOperationOutput:
+        parent_type = resolved.value["tree_node_type"]
+        legal_slots = self._AB_LEGAL_SLOTS[parent_type]
+        decision = self.ab_field_placement_gateway.decide(
+            operation_input.query, parent_type, ["default", *legal_slots]
+        )
+        placement = self._AB_DEFAULT_SLOT[parent_type] if decision.placement == "default" else decision.placement
+        if placement not in legal_slots:
+            raise OperationFailure(
+                "AB_FIELD_PLACEMENT_FAILED",
+                "AB field placement is not legal for the parent type",
+                parent_tree_node_type=parent_type,
+                placement=placement,
+            )
+        if placement == "summary_fields" and decision.summary_type is None:
+            raise OperationFailure("AB_FIELD_PLACEMENT_FAILED", "summary_fields placement requires summary_type")
+
+        common = self._common_fields(operation_input.query)
+        field = CommonFieldTerm(xml_name_property=common.xml_name_property, annotation=common.annotation)
+        updated_parent = deepcopy(resolved.value)
+        content = updated_parent["ab_content"]
+        if placement == "summary_fields":
+            self._ensure_ab_region(content, parent_type, "detail_region")
+            self._ensure_ab_region(content, parent_type, "group_region")
+            content["detail_region"]["detail_fields"].append(field.model_dump(mode="json", exclude_none=True))
+            summary = SummaryField(
+                xml_name_property=common.xml_name_property,
+                annotation=common.annotation,
+                summary_type=decision.summary_type,
+                related_detail_field_name=common.xml_name_property.xml_name,
+            )
+            content["group_region"]["summary_fields"].append(summary.model_dump(mode="json", exclude_none=True))
+            generated_id = summary.field_id
+        else:
+            self._ab_field_list(content, parent_type, placement).append(
+                field.model_dump(mode="json", exclude_none=True)
+            )
+            generated_id = field.field_id
+
+        serialized_parent = self._serialize_node(TreeNodeTerm.model_validate(updated_parent))
+        generated_node = self._find_ab_field(serialized_parent, generated_id)
+        return GenerateNodeOperationOutput(
+            success=True,
+            node_path=operation_input.node_path,
+            parent_path=resolved.normalized_path,
+            generated_node=generated_node,
+            patch={"op": "replace", "path": resolved.pointer_path, "value": serialized_parent},
+            route_result=decision.model_dump(mode="json"),
+        )
+
+    @staticmethod
+    def _ensure_ab_region(content: dict[str, Any], parent_type: str, region: str) -> None:
+        if content.get(region) is not None:
+            return
+        if region == "detail_region":
+            model = DetailRegion()
+        elif parent_type == "ab_two_level_table":
+            model = TwoLevelTableGroupRegion()
+        else:
+            model = PivotTableGroupRegion()
+        content[region] = model.model_dump(mode="json", exclude_none=True)
+
+    def _ab_field_list(self, content: dict[str, Any], parent_type: str, placement: str) -> list[dict[str, Any]]:
+        if placement == "group_by_fields":
+            return content["group_by_fields"]
+        if placement == "detail_fields" and parent_type == "ab_single_mapping_table":
+            return content["detail_fields"]
+        if placement == "detail_fields":
+            self._ensure_ab_region(content, parent_type, "detail_region")
+            return content["detail_region"]["detail_fields"]
+        self._ensure_ab_region(content, parent_type, "group_region")
+        return content["group_region"][placement]
+
+    @staticmethod
+    def _find_ab_field(parent: dict[str, Any], field_id: str) -> dict[str, Any]:
+        stack: list[Any] = [parent.get("ab_content")]
+        while stack:
+            value = stack.pop()
+            if isinstance(value, dict):
+                if value.get("field_id") == field_id:
+                    return value
+                stack.extend(value.values())
+            elif isinstance(value, list):
+                stack.extend(value)
+        raise OperationFailure("NODE_SCHEMA_VALIDATION_FAILED", "validated AB field could not be located")
 
     def _route(self, query: str) -> NodeRouteResult:
         try:

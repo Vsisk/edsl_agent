@@ -396,10 +396,9 @@ class SummaryField(StrictModel):
                 self.related_detail_field_number = None
 
         elif self.summary_type == "count":
-            if self.related_detail_field_name is not None:
-                self.related_detail_field_number = None
-            if self.related_detail_field_number is None:
-                self.related_detail_field_name = 0
+            if self.related_detail_field_name is None:
+                self.related_detail_field_name = ""
+            self.related_detail_field_number = None
 
         return self
 

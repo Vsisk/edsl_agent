@@ -42,11 +42,11 @@ class NodeResolver:
                 node_path=resolved.normalized_path,
             )
 
-        segments = self.path_resolver._pointer_segments(resolved.normalized_path)
+        segments = resolved.tokens
         value: Any = edsl_tree
         ancestor_nodes: list[dict[str, Any]] = []
         for segment in segments:
-            value = value[int(segment)] if isinstance(value, list) else value[segment]
+            value = value[segment]
             if (
                 isinstance(value, dict)
                 and "tree_node_type" in value

@@ -179,6 +179,23 @@ class PlannerPromptTest(unittest.TestCase):
         self.assertIn('"requires_expression_generation"', prompt)
         self.assertNotIn('"patch"', prompt)
 
+    def test_ab_field_placement_prompt_is_narrow_strict_and_treats_query_as_authoritative(self):
+        prompt = prompt_manager.render(
+            "ab_field_placement_prompt",
+            query="生成金额汇总字段",
+            parent_tree_node_type="ab_two_level_table",
+            allowed_slots_json='["group_by_fields","summary_fields"]',
+        )
+
+        self.assertIn("生成金额汇总字段", prompt)
+        self.assertIn('"placement"', prompt)
+        self.assertIn('"summary_type"', prompt)
+        self.assertIn("authoritative", prompt)
+        self.assertIn("untrusted", prompt)
+        self.assertIn("default", prompt)
+        self.assertNotIn('"patch"', prompt)
+        self.assertNotIn('"generated_node"', prompt)
+
 
 if __name__ == "__main__":
     unittest.main()

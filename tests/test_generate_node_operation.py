@@ -1,3 +1,6 @@
+from copy import deepcopy
+import json
+
 import pytest
 
 from agent.generate_node_operation import (
@@ -11,7 +14,7 @@ from agent.generate_node_operation import (
     PathResolver,
     TypeSpecificFieldGenerator,
 )
-from models import PivotTableTerm, TwoLevelTableTerm
+from models import PivotTableTerm, TreeNodeTerm, TwoLevelTableTerm
 
 
 @pytest.fixture(autouse=True)
@@ -114,9 +117,50 @@ def test_resolver_accepts_all_create_parent_types(tree_node_type):
         }
     }
 
+
+def serialized_ab_parent(tree_node_type: str) -> dict:
+    return GenerateNodeOperation._serialize_node(
+        TreeNodeTerm.model_validate(
+            {
+                "node_id": f"{tree_node_type}-id",
+                "tree_node_type": tree_node_type,
+                "xml_name_property": {"xml_name": "AB_TABLE"},
+                "annotation": "existing",
+                "ab_content": {},
+            }
+        )
+    )
+
+
+def value_at_path(value: dict, path: tuple[str, ...]):
+    for token in path:
+        value = value[token]
+    return value
+
     result = PathResolver().resolve(tree, "$.target")
 
     assert result.patch_path == "/target/children/-"
+
+
+def test_resolver_supports_root_and_quoted_property_tokens():
+    tree = {"node_id": "root", "tree_node_type": "parent", "children": [], "a'b\\c": {"value": 1}}
+
+    root = PathResolver().resolve(tree, "$")
+    quoted = PathResolver().resolve_value(tree, "$['a\\'b\\\\c'].value")
+
+    assert root.parent_path == "$"
+    assert root.patch_path == "/children/-"
+    assert quoted.pointer_path == "/a'b\\c/value"
+    assert quoted.value == 1
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["$['unterminated]", "$['bad\\nescape']", "$[01]", '$["double"]', "$.bad-key"],
+)
+def test_resolver_rejects_paths_outside_index_grammar(path):
+    with pytest.raises(OperationFailure, match="node_path"):
+        PathResolver().resolve_value({}, path)
 
 
 def test_rejects_leaf_as_parent(sample_tree):
@@ -403,6 +447,211 @@ def test_valid_llm_common_fields_are_constrained_and_used(sample_tree):
     assert result.success is True
     assert result.generated_node["xml_name_property"]["xml_name"] == "CUSTOM_ACCT"
     assert "children" not in result.generated_node
+
+
+@pytest.mark.parametrize(
+    ("tree_node_type", "placement", "storage_path"),
+    [
+        ("ab_single_mapping_table", "default", ("ab_content", "detail_fields")),
+        ("ab_two_level_table", "default", ("ab_content", "group_region", "group_related_fields")),
+        ("ab_pivot_table", "default", ("ab_content", "group_region", "group_related_fields")),
+        ("ab_single_mapping_table", "detail_fields", ("ab_content", "detail_fields")),
+        ("ab_two_level_table", "group_by_fields", ("ab_content", "group_by_fields")),
+        ("ab_two_level_table", "group_related_fields", ("ab_content", "group_region", "group_related_fields")),
+        ("ab_two_level_table", "detail_fields", ("ab_content", "detail_region", "detail_fields")),
+        ("ab_pivot_table", "group_by_fields", ("ab_content", "group_by_fields")),
+        ("ab_pivot_table", "group_related_fields", ("ab_content", "group_region", "group_related_fields")),
+        ("ab_pivot_table", "sum_fields", ("ab_content", "group_region", "sum_fields")),
+    ],
+)
+def test_creates_ab_common_field_atomically_in_default_and_explicit_slots(
+    tree_node_type, placement, storage_path
+):
+    original = serialized_ab_parent(tree_node_type)
+    before = deepcopy(original)
+    calls = []
+
+    def placement_gateway(query, parent_type, allowed_slots_json):
+        calls.append((query, parent_type, allowed_slots_json))
+        return {"placement": placement, "summary_type": None, "reason": "requested slot"}
+
+    class ForbiddenNodeRouter:
+        def route(self, query):
+            raise AssertionError("AB field creation must not route a new TreeNode type")
+
+    result = GenerateNodeOperation(
+        node_type_router=ForbiddenNodeRouter(), ab_field_placement_llm=placement_gateway
+    ).execute(GenerateNodeOperationInput(query="生成账户ID字段", node_path="$", edsl_tree=original))
+
+    assert result.success is True
+    assert result.patch["op"] == "replace"
+    assert result.patch["path"] == ""
+    assert result.generated_node["field_id"]
+    assert "node_id" not in result.generated_node
+    stored = value_at_path(result.patch["value"], storage_path)
+    assert stored[-1] == result.generated_node
+    assert TreeNodeTerm.model_validate(result.patch["value"]).tree_node_type == tree_node_type
+    assert original == before
+    assert calls and calls[0][0:2] == ("生成账户ID字段", tree_node_type)
+    assert placement in calls[0][2] or placement == "default"
+
+
+def test_two_level_summary_creation_adds_linked_detail_and_returns_summary_as_primary():
+    original = serialized_ab_parent("ab_two_level_table")
+    result = GenerateNodeOperation(
+        ab_field_placement_llm=lambda query, parent_type, allowed: {
+            "placement": "summary_fields",
+            "summary_type": "sum",
+            "reason": "summary requested",
+        }
+    ).execute(GenerateNodeOperationInput(query="生成账户ID字段汇总", node_path="$", edsl_tree=original))
+
+    assert result.success is True
+    patched = result.patch["value"]
+    details = patched["ab_content"]["detail_region"]["detail_fields"]
+    summaries = patched["ab_content"]["group_region"]["summary_fields"]
+    assert len(details) == len(summaries) == 1
+    assert details[0]["xml_name_property"] == summaries[0]["xml_name_property"]
+    assert details[0]["annotation"] == summaries[0]["annotation"]
+    assert summaries[0]["summary_type"] == "sum"
+    assert summaries[0]["related_detail_field_name"] == details[0]["xml_name_property"]["xml_name"]
+    assert result.generated_node == summaries[0]
+    assert result.generated_node["field_id"] != details[0]["field_id"]
+    TreeNodeTerm.model_validate(patched)
+
+
+def test_two_level_count_summary_keeps_same_name_detail_link():
+    result = GenerateNodeOperation(
+        ab_field_placement_llm=lambda *args: {
+            "placement": "summary_fields",
+            "summary_type": "count",
+            "reason": "count requested",
+        }
+    ).execute(
+        GenerateNodeOperationInput(
+            query="生成账户数量汇总", node_path="$", edsl_tree=serialized_ab_parent("ab_two_level_table")
+        )
+    )
+
+    detail = result.patch["value"]["ab_content"]["detail_region"]["detail_fields"][0]
+    summary = result.generated_node
+    assert summary["summary_type"] == "count"
+    assert summary["related_detail_field_name"] == detail["xml_name_property"]["xml_name"]
+    TreeNodeTerm.model_validate(result.patch["value"])
+
+
+@pytest.mark.parametrize(
+    "decision",
+    [
+        {"placement": "detail_fields", "summary_type": None, "reason": "illegal for pivot"},
+        {"placement": "summary_fields", "summary_type": None, "reason": "missing summary type"},
+    ],
+)
+def test_illegal_or_incomplete_ab_placement_returns_structured_failure(decision):
+    tree_type = "ab_pivot_table" if decision["placement"] == "detail_fields" else "ab_two_level_table"
+    result = GenerateNodeOperation(
+        ab_field_placement_llm=lambda query, parent_type, allowed: decision
+    ).execute(
+        GenerateNodeOperationInput(query="生成字段", node_path="$", edsl_tree=serialized_ab_parent(tree_type))
+    )
+
+    assert result.success is False
+    assert result.failure_reason == "AB_FIELD_PLACEMENT_FAILED"
+    assert result.patch is None
+    assert result.generated_node is None
+
+
+def test_ab_placement_gateway_runtime_failure_returns_structured_failure():
+    def fail(*args):
+        raise RuntimeError("gateway unavailable")
+
+    result = GenerateNodeOperation(ab_field_placement_llm=fail).execute(
+        GenerateNodeOperationInput(
+            query="生成字段", node_path="$", edsl_tree=serialized_ab_parent("ab_single_mapping_table")
+        )
+    )
+
+    assert result.success is False
+    assert result.failure_reason == "AB_FIELD_PLACEMENT_FAILED"
+    assert result.patch is None
+
+
+def test_default_ab_placement_gateway_uses_narrow_prompt_inputs(monkeypatch):
+    calls = []
+
+    def fake_generate(prompt_key, **variables):
+        calls.append((prompt_key, variables))
+        if prompt_key == "ab_field_placement_prompt":
+            return {"placement": "default", "summary_type": None, "reason": "ambiguous"}
+        if prompt_key == "common_node_field_prompt":
+            return {
+                "xml_name_property": {"xml_name": "AMOUNT"},
+                "annotation": "amount",
+                "reference_logic_area_id_list": [],
+            }
+        raise AssertionError(prompt_key)
+
+    monkeypatch.setattr("agent.generate_node_operation.generate_by_llm", fake_generate)
+    result = GenerateNodeOperation().execute(
+        GenerateNodeOperationInput(
+            query="生成金额字段", node_path="$", edsl_tree=serialized_ab_parent("ab_pivot_table")
+        )
+    )
+
+    assert result.success is True
+    prompt_call = calls[0]
+    assert prompt_call[0] == "ab_field_placement_prompt"
+    assert prompt_call[1]["query"] == "生成金额字段"
+    assert prompt_call[1]["parent_tree_node_type"] == "ab_pivot_table"
+    assert json.loads(prompt_call[1]["allowed_slots_json"]) == [
+        "default",
+        "group_by_fields",
+        "group_related_fields",
+        "sum_fields",
+    ]
+
+
+def test_strict_ab_placement_rejects_extra_gateway_fields():
+    result = GenerateNodeOperation(
+        ab_field_placement_llm=lambda *args: {
+            "placement": "default",
+            "summary_type": None,
+            "reason": "ambiguous",
+            "patch": {},
+        }
+    ).execute(
+        GenerateNodeOperationInput(
+            query="生成字段", node_path="$", edsl_tree=serialized_ab_parent("ab_single_mapping_table")
+        )
+    )
+
+    assert result.success is False
+    assert result.failure_reason == "AB_FIELD_PLACEMENT_FAILED"
+
+
+@pytest.mark.parametrize(
+    ("tree_node_type", "placement", "null_region"),
+    [
+        ("ab_two_level_table", "group_related_fields", "group_region"),
+        ("ab_two_level_table", "detail_fields", "detail_region"),
+        ("ab_pivot_table", "sum_fields", "group_region"),
+    ],
+)
+def test_ab_field_creation_initializes_null_optional_regions(tree_node_type, placement, null_region):
+    tree = serialized_ab_parent(tree_node_type)
+    tree["ab_content"][null_region] = None
+
+    result = GenerateNodeOperation(
+        ab_field_placement_llm=lambda *args: {
+            "placement": placement,
+            "summary_type": None,
+            "reason": "explicit",
+        }
+    ).execute(GenerateNodeOperationInput(query="生成账户ID字段", node_path="$", edsl_tree=tree))
+
+    assert result.success is True
+    assert result.patch["value"]["ab_content"][null_region] is not None
+    TreeNodeTerm.model_validate(result.patch["value"])
 
 
 def test_llm_router_uses_gateway_result_without_keyword_rules():

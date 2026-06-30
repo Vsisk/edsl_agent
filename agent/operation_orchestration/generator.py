@@ -133,7 +133,9 @@ class OperationGenerator:
         summary: list[dict[str, Any]] = []
         candidates = islice(node_index.values(), MAX_TREE_SUMMARY_CANDIDATES)
         for candidate in candidates:
-            item = candidate.model_dump(mode="json")
+            item = candidate.model_dump(
+                mode="json", exclude={"identity_field", "field_slot"}
+            )
             for field_name in (
                 "xml_name",
                 "annotation",

@@ -117,6 +117,49 @@ def test_executes_topologically_but_returns_operations_in_input_order_and_locate
     assert response.operations[0].target_node_id == "root"
 
 
+def test_reuses_valid_prelocated_root_without_calling_locator():
+    operation = op("ready")
+    operation.status = "located"
+    operation.target_node_id = "a"
+    operation.target_jsonpath = "$.root.children[0]"
+
+    class ForbiddenLocator:
+        def locate(self, request):
+            raise AssertionError("valid prelocated operation must not call locator")
+
+    response = execute(
+        [operation], locator=ForbiddenLocator(), adapter=RecordingAdapter()
+    )
+
+    assert response.success
+    assert response.operations[0].status == "executed"
+    assert response.operations[0].output_node_id == "a"
+
+
+@pytest.mark.parametrize(
+    ("intent", "node_id", "path", "located_target"),
+    [
+        ("modify_node", "missing", "$.root.children[0]", ("a", "$.root.children[0]")),
+        ("modify_node", "a", "$.root.children[1]", ("a", "$.root.children[0]")),
+        ("create_node", "a", "$.root.children[0]", ("root", "$.root")),
+    ],
+)
+def test_stale_or_incapable_prelocated_root_falls_back_to_locator(
+    intent, node_id, path, located_target
+):
+    operation = op("retry", intent=intent)
+    operation.status = "located"
+    operation.target_node_id = node_id
+    operation.target_jsonpath = path
+    locator = RecordingLocator(targets={"retry": located_target})
+
+    response = execute([operation], locator=locator, adapter=RecordingAdapter())
+
+    assert response.success
+    assert len(locator.calls) == 1
+    assert response.operations[0].target_node_id == located_target[0]
+
+
 def test_fanout_and_multiple_dependencies_use_selected_upstream_output_without_locator_calls():
     operations = [
         op("a", intent="create_node"),
@@ -322,6 +365,49 @@ def test_adapter_exception_fails_fast_with_prior_success_and_partial_tree_only()
     assert "created-first" in str(response.target_tree)
     assert [call[1] for call in adapter.calls] == ["first", "second"]
     assert request == before
+
+
+def test_mutating_adapter_input_then_raising_cannot_leak_attempted_changes():
+    original = tree()
+
+    class MutateThenRaise:
+        def modify_node(self, query, path, current, site_id=None, project_id=None):
+            current["poison"] = "raised"
+            current["root"]["children"].clear()
+            raise RuntimeError("boom")
+
+    response = execute(
+        [op("a")],
+        locator=RecordingLocator(targets={"a": ("a", "$.root.children[0]")}),
+        adapter=MutateThenRaise(),
+        target_tree=original,
+    )
+
+    assert not response.success
+    assert response.target_tree == original
+    assert "poison" not in response.target_tree
+
+
+def test_mutating_adapter_input_then_returning_invalid_output_cannot_leak_changes():
+    original = tree()
+
+    class MutateThenInvalid:
+        def modify_node(self, query, path, current, site_id=None, project_id=None):
+            current["poison"] = "invalid"
+            current["root"]["children"] = []
+            return {"target_tree": current}
+
+    response = execute(
+        [op("a")],
+        locator=RecordingLocator(targets={"a": ("a", "$.root.children[0]")}),
+        adapter=MutateThenInvalid(),
+        target_tree=original,
+    )
+
+    assert not response.success
+    assert "output node ID is absent" in response.error_message
+    assert response.target_tree == original
+    assert "poison" not in response.target_tree
 
 
 def test_empty_operations_succeed_with_deep_copied_tree():

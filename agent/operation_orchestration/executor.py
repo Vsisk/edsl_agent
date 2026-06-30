@@ -70,7 +70,16 @@ class OperationExecutor:
                     operation.status = "located"
                     operation.error_message = None
                 else:
-                    candidate = self._locate_root(operation, current_tree, current_index)
+                    candidate = self._prelocated_candidate(operation, current_index)
+                    if candidate is None:
+                        candidate = self._locate_root(
+                            operation, current_tree, current_index
+                        )
+                    else:
+                        operation.target_node_id = candidate.node_id
+                        operation.target_jsonpath = candidate.jsonpath
+                        operation.status = "located"
+                        operation.error_message = None
 
                 if not is_valid_candidate(operation.intent_type, candidate):
                     raise ValueError(
@@ -144,6 +153,26 @@ class OperationExecutor:
         return candidate
 
     @staticmethod
+    def _prelocated_candidate(
+        operation: Operation,
+        current_index: dict[str, NodeLocateCandidate],
+    ) -> NodeLocateCandidate | None:
+        if (
+            operation.status != "located"
+            or not _nonblank(operation.target_node_id)
+            or not _nonblank(operation.target_jsonpath)
+        ):
+            return None
+        candidate = current_index.get(operation.target_node_id)
+        if (
+            candidate is None
+            or candidate.jsonpath != operation.target_jsonpath
+            or not is_valid_candidate(operation.intent_type, candidate)
+        ):
+            return None
+        return candidate
+
+    @staticmethod
     def _resolve_dependency_target(
         operation: Operation,
         operation_by_id: dict[str, Operation],
@@ -169,13 +198,14 @@ class OperationExecutor:
         request: ExecuteOperationsRequest,
     ) -> dict[str, Any]:
         path = operation.target_jsonpath
+        attempt_tree = deepcopy(current_tree)
         if operation.intent_type == "create_node":
-            return self._action_adapter.create_node(operation.query, path, current_tree)
+            return self._action_adapter.create_node(operation.query, path, attempt_tree)
         if operation.intent_type == "modify_node":
             return self._action_adapter.modify_node(
                 operation.query,
                 path,
-                current_tree,
+                attempt_tree,
                 site_id=request.site_id,
                 project_id=request.project_id,
             )
@@ -183,12 +213,12 @@ class OperationExecutor:
             return self._action_adapter.generate_expression(
                 operation.query,
                 path,
-                current_tree,
+                attempt_tree,
                 site_id=request.site_id,
                 project_id=request.project_id,
             )
         if operation.intent_type == "delete_node":
-            return self._action_adapter.delete_node(path, current_tree)
+            return self._action_adapter.delete_node(path, attempt_tree)
         raise ValueError(f"unsupported operation intent: {operation.intent_type}")
 
     @staticmethod

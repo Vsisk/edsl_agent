@@ -6,7 +6,7 @@ import json
 import re
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 from agent.llm.generate_by_llm import generate_by_llm
 
 from models import (
@@ -260,6 +260,14 @@ class ABFieldPlacementDecision(BaseModel):
         if not value.strip():
             raise ValueError("reason must be nonblank")
         return value.strip()
+
+    @model_validator(mode="after")
+    def validate_summary_type_pair(self) -> "ABFieldPlacementDecision":
+        if self.placement == "summary_fields" and self.summary_type is None:
+            raise ValueError("summary_type is required for summary_fields placement")
+        if self.placement != "summary_fields" and self.summary_type is not None:
+            raise ValueError("summary_type must be null unless placement is summary_fields")
+        return self
 
 
 class ABFieldPlacementGateway:
@@ -534,6 +542,16 @@ class GenerateNodeOperation:
         self, operation_input: GenerateNodeOperationInput, resolved: ResolvedValuePath
     ) -> GenerateNodeOperationOutput:
         parent_type = resolved.value["tree_node_type"]
+        normalized_parent = TreeNodeTerm.model_validate(deepcopy(resolved.value))
+        if normalized_parent.tree_node_type != parent_type or parent_type not in self._AB_LEGAL_SLOTS:
+            raise OperationFailure(
+                "NODE_SCHEMA_VALIDATION_FAILED",
+                "normalized AB parent type differs from located parent type",
+                located_tree_node_type=parent_type,
+                normalized_tree_node_type=normalized_parent.tree_node_type,
+            )
+        updated_parent = self._serialize_node(normalized_parent)
+
         legal_slots = self._AB_LEGAL_SLOTS[parent_type]
         decision = self.ab_field_placement_gateway.decide(
             operation_input.query, parent_type, ["default", *legal_slots]
@@ -546,12 +564,8 @@ class GenerateNodeOperation:
                 parent_tree_node_type=parent_type,
                 placement=placement,
             )
-        if placement == "summary_fields" and decision.summary_type is None:
-            raise OperationFailure("AB_FIELD_PLACEMENT_FAILED", "summary_fields placement requires summary_type")
-
         common = self._common_fields(operation_input.query)
         field = CommonFieldTerm(xml_name_property=common.xml_name_property, annotation=common.annotation)
-        updated_parent = deepcopy(resolved.value)
         content = updated_parent["ab_content"]
         if placement == "summary_fields":
             self._ensure_ab_region(content, parent_type, "detail_region")

@@ -4,6 +4,7 @@ import json
 import pytest
 
 from agent.generate_node_operation import (
+    ABFieldPlacementDecision,
     CommonFieldGenerator,
     GenerateNodeOperation,
     GenerateNodeOperationInput,
@@ -576,6 +577,58 @@ def test_ab_placement_gateway_runtime_failure_returns_structured_failure():
     assert result.patch is None
 
 
+@pytest.mark.parametrize(
+    ("placement", "summary_type"),
+    [
+        ("default", None),
+        ("detail_fields", None),
+        ("sum_fields", None),
+        ("summary_fields", "sum"),
+        ("summary_fields", "count"),
+    ],
+)
+def test_ab_field_placement_decision_accepts_only_valid_summary_pairs(placement, summary_type):
+    decision = ABFieldPlacementDecision(
+        placement=placement, summary_type=summary_type, reason="valid pair"
+    )
+
+    assert decision.summary_type == summary_type
+
+
+@pytest.mark.parametrize(
+    ("placement", "summary_type"),
+    [
+        ("summary_fields", None),
+        ("default", "sum"),
+        ("detail_fields", "count"),
+        ("sum_fields", "sum"),
+    ],
+)
+def test_ab_field_placement_decision_rejects_invalid_summary_pairs(placement, summary_type):
+    with pytest.raises(ValueError, match="summary_type"):
+        ABFieldPlacementDecision(
+            placement=placement, summary_type=summary_type, reason="invalid pair"
+        )
+
+
+def test_invalid_summary_pair_from_gateway_returns_structured_failure():
+    result = GenerateNodeOperation(
+        ab_field_placement_llm=lambda *args: {
+            "placement": "sum_fields",
+            "summary_type": "sum",
+            "reason": "invalid pair",
+        }
+    ).execute(
+        GenerateNodeOperationInput(
+            query="生成金额", node_path="$", edsl_tree=serialized_ab_parent("ab_pivot_table")
+        )
+    )
+
+    assert result.success is False
+    assert result.failure_reason == "AB_FIELD_PLACEMENT_FAILED"
+    assert result.patch is None
+
+
 def test_default_ab_placement_gateway_uses_narrow_prompt_inputs(monkeypatch):
     calls = []
 
@@ -652,6 +705,88 @@ def test_ab_field_creation_initializes_null_optional_regions(tree_node_type, pla
     assert result.success is True
     assert result.patch["value"]["ab_content"][null_region] is not None
     TreeNodeTerm.model_validate(result.patch["value"])
+
+
+@pytest.mark.parametrize(
+    ("tree_node_type", "placement", "remove_path"),
+    [
+        ("ab_single_mapping_table", "detail_fields", ("detail_fields",)),
+        ("ab_two_level_table", "group_by_fields", ("group_by_fields",)),
+        ("ab_pivot_table", "sum_fields", ("group_region", "sum_fields")),
+    ],
+)
+def test_ab_field_creation_normalizes_missing_content_regions_and_slot_lists(
+    tree_node_type, placement, remove_path
+):
+    tree = serialized_ab_parent(tree_node_type)
+    content = tree["ab_content"]
+    owner = content
+    for token in remove_path[:-1]:
+        owner = owner[token]
+    del owner[remove_path[-1]]
+    before = deepcopy(tree)
+
+    result = GenerateNodeOperation(
+        ab_field_placement_llm=lambda *args: {
+            "placement": placement,
+            "summary_type": None,
+            "reason": "explicit",
+        }
+    ).execute(GenerateNodeOperationInput(query="生成账户ID字段", node_path="$", edsl_tree=tree))
+
+    assert result.success is True
+    assert tree == before
+    TreeNodeTerm.model_validate(result.patch["value"])
+
+
+def test_ab_field_creation_defaults_completely_missing_ab_content():
+    tree = {
+        "node_id": "ab",
+        "tree_node_type": "ab_single_mapping_table",
+        "xml_name_property": {"xml_name": "AB"},
+    }
+    before = deepcopy(tree)
+
+    result = GenerateNodeOperation(
+        ab_field_placement_llm=lambda *args: {
+            "placement": "default",
+            "summary_type": None,
+            "reason": "default",
+        }
+    ).execute(GenerateNodeOperationInput(query="生成账户ID字段", node_path="$", edsl_tree=tree))
+
+    assert result.success is True
+    assert result.patch["value"]["ab_content"]["detail_fields"][0] == result.generated_node
+    assert tree == before
+    TreeNodeTerm.model_validate(result.patch["value"])
+
+
+@pytest.mark.parametrize(
+    "ab_content",
+    ["not-an-object", {"detail_fields": None}],
+)
+def test_malformed_ab_content_returns_schema_failure_without_partial_patch(ab_content):
+    tree = {
+        "node_id": "ab",
+        "tree_node_type": "ab_single_mapping_table",
+        "xml_name_property": {"xml_name": "AB"},
+        "ab_content": ab_content,
+    }
+    before = deepcopy(tree)
+
+    result = GenerateNodeOperation(
+        ab_field_placement_llm=lambda *args: {
+            "placement": "default",
+            "summary_type": None,
+            "reason": "default",
+        }
+    ).execute(GenerateNodeOperationInput(query="生成账户ID字段", node_path="$", edsl_tree=tree))
+
+    assert result.success is False
+    assert result.failure_reason == "NODE_SCHEMA_VALIDATION_FAILED"
+    assert result.patch is None
+    assert result.generated_node is None
+    assert tree == before
 
 
 def test_llm_router_uses_gateway_result_without_keyword_rules():

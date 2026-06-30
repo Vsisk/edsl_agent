@@ -46,6 +46,8 @@ The B and C operations both depend directly on A; no artificial B-to-C dependenc
 
 `build_node_index()` walks dictionaries and lists using DFS. Each node-like dictionary with a non-empty `node_id` becomes a `NodeLocateCandidate` containing its exact local JSONPath, node type, XML name, annotation, parent metadata, and child count. Duplicate node IDs are rejected because dependent lookup would otherwise be ambiguous.
 
+AB fields are also indexed even though they do not live in `children`. Dictionaries in the known AB field slots use `field_id` as their canonical candidate ID and record that the identity came from `field_id`, together with the containing AB slot. Common AB fields and two-level summary fields receive distinct synthetic candidate types. Duplicate values across `node_id` and `field_id` are rejected. Consequently an AB create operation may return `output_node_id=<field_id>`, and later operations resolve that ID to its real nested JSONPath through the same index.
+
 The locator only accepts operations with no dependencies. It filters candidates locally by intent before invoking the LLM. Create operations accept `parent`, `parent_list`, `ab_single_mapping_table`, `ab_two_level_table`, and `ab_pivot_table`; the other intents accept existing node candidates.
 
 `operation_locator_prompt` receives only the operation query, intent type, and candidate summaries. Its strict response includes `selected_node_id`, `selected_jsonpath`, `confidence`, and `reason`. Local code verifies that the ID exists and that the returned path exactly matches the same candidate. The LLM cannot introduce a path.
@@ -62,6 +64,20 @@ If LLM location fails for `create_node`, the locator falls back to the first roo
 - Delete resolves the already-located target deterministically, rejects deleting a root/no-parent target, removes exactly one list child from a deep copy, and returns its parent node ID plus the updated tree. It performs no semantic search and contains no LLM logic.
 
 Patch application helpers support only the add/replace operations emitted by the existing modules and fail on malformed or unsupported patches.
+
+### AB Field Creation Branch
+
+When the located create parent is an AB table, `GenerateNodeOperation` handles the field as an internal atomic branch instead of appending a `TreeNodeTerm` to `children`. A narrow placement decision selects among the slots that are valid for the concrete AB type:
+
+- `ab_single_mapping_table`: `detail_fields` only; ambiguous placement defaults there.
+- `ab_two_level_table`: `group_by_fields`, `group_region.group_related_fields`, `group_region.summary_fields`, or `detail_region.detail_fields`; ambiguous placement defaults to `group_region.group_related_fields`.
+- `ab_pivot_table`: `group_by_fields`, `group_region.group_related_fields`, or `group_region.sum_fields`; ambiguous placement defaults to `group_region.group_related_fields`.
+
+The branch reuses the existing narrow common-field generation contract and validates the resulting field and complete AB parent with the existing Pydantic models. It returns the created field's `field_id` as `created_node_id`.
+
+Creating a two-level `summary_fields` item is one internal atomic branch closure. The operation creates a same-name `CommonFieldTerm` in `detail_region.detail_fields`, creates the requested `SummaryField` in `group_region.summary_fields`, and sets the summary's `related_detail_field_name` to that shared XML field name. The replace patch is emitted only after the complete AB node validates, so failure cannot leave only one half. The external operation still returns the summary field's `field_id` as `output_node_id`.
+
+Expression write-back is capability-aware: ordinary `simple_leaf` nodes store `data_expression` directly, while AB common fields store it through their `data_source` expression branch. Summary fields and container nodes reject expression generation. Modify calls forward optional site/project IDs. Delete continues to remove the exact located list element and returns the containing AB table's node ID when deleting an AB field.
 
 ## Execution
 

@@ -5,6 +5,33 @@ class SelectorModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class AvailableValue(SelectorModel):
+    name: str
+    source_ref: str
+    data_type: str = ""
+    semantic_tags: list[str] = Field(default_factory=list)
+
+
+class DataAccessSpec(SelectorModel):
+    requires_naming_sql: bool = False
+    business_terms: list[str] = Field(default_factory=list)
+    scope_terms: list[str] = Field(default_factory=list)
+    bo_hints: list[str] = Field(default_factory=list)
+    filter_requirements: list[str] = Field(default_factory=list)
+    available_values: list[AvailableValue] = Field(default_factory=list)
+    allow_full_table: bool = False
+
+
+class NamingSqlSelectionRequest(SelectorModel):
+    site_id: str
+    query: str
+    node: dict = Field(default_factory=dict)
+    parent_node: dict | None = None
+    structured_spec: dict = Field(default_factory=dict)
+    bo_name: str | None = None
+    available_context: list[dict] = Field(default_factory=list)
+
+
 class NamingSqlParamProfile(SelectorModel):
     name: str
     data_type: str = ""

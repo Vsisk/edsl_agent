@@ -212,7 +212,7 @@ class NamingSqlSelector:
         if survivors:
             chosen, mode = survivors[0], "not_required"
             if len(survivors) > 1:
-                mode = "deterministic_fallback"; top = survivors[:5]; allowed = {x.naming_sql_id: x for x in top} | {x.sql_name: x for x in top}
+                mode = "deterministic_fallback"; top = survivors[:5]; allowed = {x.naming_sql_id: x for x in top}
                 if self._reviewer:
                     try:
                         reply = self._reviewer.review(spec=spec.model_copy(deep=True), candidates=[NamingSqlReviewCandidate(naming_sql_id=x.naming_sql_id, sql_name=x.sql_name, score=x.score, reasons=list(x.reasons)) for x in top])
@@ -221,6 +221,6 @@ class NamingSqlSelector:
         elif spec.allow_full_table and fallbacks:
             profile, plan = fallbacks.pop(0); chosen = SelectedNamingSql(naming_sql_id=profile.naming_sql_id, sql_name=profile.sql_name, score=0.0, binding_plan=plan, reasons=["full table explicitly allowed"])
         fallback_models = [FallbackNamingSql(naming_sql_id=p.naming_sql_id, sql_name=p.sql_name) for p, _ in fallbacks]
-        return NamingSqlSelectionResult(status="selected" if chosen else "needs_review", selected_bo=resolution,
+        return NamingSqlSelectionResult(status="selected" if chosen else "needs_review", selected_bo=resolution.bo_name,
             selected=chosen.model_copy(deep=True) if chosen else None, fallback_candidates=fallback_models,
             rejected_candidates=rejected, review_mode=mode)

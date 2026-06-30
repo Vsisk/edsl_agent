@@ -7,7 +7,6 @@ from .knowledge import (
 from .models import (
     AvailableValue,
     BoCandidate,
-    BoResolution,
     DataAccessSpec,
     NamingSqlParamProfile,
     NamingSqlProfile,
@@ -23,7 +22,6 @@ from .spec_generator import DataAccessSpecGenerator
 __all__ = [
     "AvailableValue",
     "BoCandidate",
-    "BoResolution",
     "BoResolver",
     "BoReviewer",
     "DataAccessSpec",

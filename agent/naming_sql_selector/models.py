@@ -115,7 +115,7 @@ class NamingSqlReviewCandidate(SelectionOutputModel):
 
 class NamingSqlSelectionResult(SelectionOutputModel):
     status: Literal["selected", "needs_review"]
-    selected_bo: BoResolution
+    selected_bo: str
     selected: SelectedNamingSql | None = None
     fallback_candidates: list[FallbackNamingSql] = Field(default_factory=list)
     rejected_candidates: list[RejectedNamingSql] = Field(default_factory=list)

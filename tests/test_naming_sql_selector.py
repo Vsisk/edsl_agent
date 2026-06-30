@@ -14,6 +14,7 @@ from agent.naming_sql_selector import (
     NamingSqlProfile,
     NamingSqlParamProfile,
     NamingSqlSelector,
+    NamingSqlSelectionResult,
     ParamBindingPlan,
 )
 from agent.resource_manager.loader.resource_loader import LoadedResource
@@ -267,6 +268,10 @@ class NamingSqlSelectorModelTests(unittest.TestCase):
         first.unbound_params.append("x")
         self.assertEqual([], second.unbound_params)
 
+    def test_selection_result_exposes_selected_bo_as_string(self):
+        result = NamingSqlSelectionResult(status="needs_review", selected_bo="BO_AR_TRANS", review_mode="deterministic_fallback")
+        self.assertEqual("BO_AR_TRANS", result.selected_bo)
+
 
 def _loaded(profiles):
     registry = {"BO": _bo("BO", "orders")}
@@ -312,6 +317,16 @@ class NamingSqlSelectionTests(unittest.TestCase):
         spec = DataAccessSpec(business_terms=["orders"], filter_requirements=["year"])
         result = NamingSqlSelector(reviewer=Reviewer()).select(NamingSqlSelectionRequest(site_id="s", query="orders", bo_name="BO"), _loaded(profiles), spec)
         self.assertEqual(("b", "llm"), (result.selected.naming_sql_id, result.review_mode))
+
+    def test_reviewer_sql_name_is_not_an_allowed_selection_key(self):
+        profiles = [
+            NamingSqlProfile(site_id="s", bo_name="BO", naming_sql_id="id-a", sql_name="sql-a", is_full_table=False, search_text="orders"),
+            NamingSqlProfile(site_id="s", bo_name="BO", naming_sql_id="id-b", sql_name="sql-b", is_full_table=False, search_text="orders"),
+        ]
+        class Reviewer:
+            def review(self, *, spec, candidates): return "sql-b"
+        result = NamingSqlSelector(reviewer=Reviewer()).select(NamingSqlSelectionRequest(site_id="s", query="orders", bo_name="BO"), _loaded(profiles), DataAccessSpec(business_terms=["orders"]))
+        self.assertEqual(("id-a", "deterministic_fallback"), (result.selected.naming_sql_id, result.review_mode))
 
     def test_filter_expression_matches_profile_field(self):
         profile = NamingSqlProfile(site_id="s", bo_name="BO", naming_sql_id="a", sql_name="a", filter_fields=["year"], is_full_table=False, search_text="orders")

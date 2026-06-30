@@ -7,7 +7,7 @@ from collections.abc import Callable
 from itertools import islice
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, ValidationError
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, ValidationError
 
 from agent.operation_orchestration.models import (
     GenerateOperationsRequest,
@@ -25,6 +25,12 @@ LLMGateway = Callable[[str, list[dict[str, Any]]], dict[str, Any]]
 MAX_TREE_SUMMARY_CANDIDATES = 200
 MAX_SUMMARY_TEXT_LENGTH = 256
 MAX_SUMMARY_PATH_LENGTH = 512
+MAX_GENERATOR_QUERY_BYTES = 4096
+MAX_GENERATOR_PROMPT_BYTES = 32000
+GENERATOR_PROMPT_TEMPLATE_OVERHEAD_BYTES = 4096
+GENERATOR_PROMPT_INPUT_OVERHEAD_BYTES = len(
+    "query:\ntarget_tree_summary_json:\n".encode("utf-8")
+)
 _CONTAINER_CAPABILITY = "需要包含子节点"
 _CONTAINER_CAPABILITY_VARIANT = re.compile(
     r"(?:(?:不\s*(?:需要|应该|需|必)|无\s*(?:需|须)|需要)\s*包含\s*子节点)"
@@ -35,30 +41,42 @@ _DANGLING_CONNECTOR = re.compile(
     r"(?:[，,；;]\s*)?(?:但是|但|并且|而且|同时|且|并)\s*$"
 )
 
-_NonBlankText = Annotated[
-    str,
-    StringConstraints(strip_whitespace=True, min_length=1),
-]
+def _validate_operation_identifier(value: str) -> str:
+    if not value or value != value.strip():
+        raise ValueError("operation identifier must be nonblank and already trimmed")
+    if len(value.encode("utf-8")) > 64:
+        raise ValueError("operation identifier exceeds 64 UTF-8 bytes")
+    return value
+
+
+def _normalize_generated_query(value: str) -> str:
+    normalized = value.strip()
+    if not normalized:
+        raise ValueError("operation query must be nonblank")
+    if len(normalized.encode("utf-8")) > MAX_GENERATOR_QUERY_BYTES:
+        raise ValueError("operation query exceeds 4096 UTF-8 bytes")
+    return normalized
+
+
+_OperationIdentifier = Annotated[str, AfterValidator(_validate_operation_identifier)]
+_GeneratedQuery = Annotated[str, AfterValidator(_normalize_generated_query)]
 
 
 class _LLMOperation(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    op_id: _NonBlankText
-    query: _NonBlankText
+    op_id: _OperationIdentifier
+    query: _GeneratedQuery
     intent_type: Literal[
         "create_node",
         "modify_node",
         "generate_expression",
         "delete_node",
     ]
-    depends_on: list[_NonBlankText] = Field(default_factory=list)
-    target_from: _NonBlankText | None = None
-    target_jsonpath: str | None = None
-    target_node_id: str | None = None
-    output_node_id: str | None = None
-    status: Literal["pending", "located", "executed", "failed"] = "pending"
-    error_message: str | None = None
+    depends_on: list[_OperationIdentifier] = Field(
+        default_factory=list, max_length=100
+    )
+    target_from: _OperationIdentifier | None = None
 
 
 class _LLMGenerateOperationsResponse(BaseModel):
@@ -76,12 +94,15 @@ class OperationGenerator:
     def generate(
         self, request: GenerateOperationsRequest
     ) -> GenerateOperationsResponse:
+        if len(request.query.encode("utf-8")) > MAX_GENERATOR_QUERY_BYTES:
+            raise ValueError("operation generation query exceeds 4096 UTF-8 bytes")
+
         try:
             node_index = build_node_index(request.target_tree)
         except ValueError as exc:
             raise ValueError(f"failed to summarize target tree: {exc}") from exc
 
-        summary = self._build_target_tree_summary(node_index)
+        summary = self._build_target_tree_summary(node_index, request.query)
         try:
             payload = self._llm_gateway(request.query, summary)
         except Exception as exc:
@@ -129,6 +150,7 @@ class OperationGenerator:
     @staticmethod
     def _build_target_tree_summary(
         node_index: dict[str, NodeLocateCandidate],
+        query: str,
     ) -> list[dict[str, Any]]:
         summary: list[dict[str, Any]] = []
         candidates = islice(node_index.values(), MAX_TREE_SUMMARY_CANDIDATES)
@@ -149,8 +171,28 @@ class OperationGenerator:
                 item[field_name] = OperationGenerator._sanitize_summary_text(
                     item[field_name], MAX_SUMMARY_PATH_LENGTH
                 )
+            prospective_summary = [*summary, item]
+            prospective_json = json.dumps(
+                prospective_summary, ensure_ascii=False
+            )
+            if (
+                OperationGenerator._accounted_prompt_bytes(
+                    query, prospective_json
+                )
+                > MAX_GENERATOR_PROMPT_BYTES
+            ):
+                break
             summary.append(item)
         return summary
+
+    @staticmethod
+    def _accounted_prompt_bytes(query: str, summary_json: str) -> int:
+        return (
+            GENERATOR_PROMPT_TEMPLATE_OVERHEAD_BYTES
+            + GENERATOR_PROMPT_INPUT_OVERHEAD_BYTES
+            + len(query.encode("utf-8"))
+            + len(summary_json.encode("utf-8"))
+        )
 
     @staticmethod
     def _sanitize_summary_text(value: Any, max_length: int) -> Any:

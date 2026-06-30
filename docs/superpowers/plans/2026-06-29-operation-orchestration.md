@@ -447,7 +447,7 @@ git commit -m "feat: execute operation dependency graphs"
 - Create: `agent/operation_orchestration/__init__.py`
 - Create: `tests/test_operation_orchestrator.py`
 
-- [ ] **Step 1: Write failing facade and acceptance tests**
+- [x] **Step 1: Write failing facade and acceptance tests**
 
 Test that `run()` passes the original query/tree into the generator and generated operations plus site/project IDs into the executor. Add deterministic end-to-end fakes for the required scenarios: single create, chained create, create then expression, modify existing, delete existing, and branch `A -> {B, C}`. Assert final tree shape, target/output IDs, statuses, and that only dependency-free operations use location.
 
@@ -464,23 +464,23 @@ def test_orchestrator_forwards_generated_operations_to_executor():
     assert result.success
 ```
 
-- [ ] **Step 2: Run facade tests and verify RED**
+- [x] **Step 2: Run facade tests and verify RED**
 
 Run: `python -m pytest tests/test_operation_orchestrator.py -q`
 
 Expected: orchestrator import fails.
 
-- [ ] **Step 3: Implement facade and exports**
+- [x] **Step 3: Implement facade and exports**
 
 Implement `OperationOrchestrator.__init__(generator=None, locator=None, executor=None, action_adapter=None)` so defaults share the supplied/default locator and adapter consistently. `run()` constructs `GenerateOperationsRequest`, then `ExecuteOperationsRequest`, and returns the executor response. Export all public models, components, `build_node_index`, and `is_valid_candidate` from `__init__.py`.
 
-- [ ] **Step 4: Run acceptance tests and verify GREEN**
+- [x] **Step 4: Run acceptance tests and verify GREEN**
 
 Run: `python -m pytest tests/test_operation_orchestrator.py -q`
 
 Expected: all tests pass.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```powershell
 git add agent/operation_orchestration/orchestrator.py agent/operation_orchestration/__init__.py tests/test_operation_orchestrator.py

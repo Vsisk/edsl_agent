@@ -24,6 +24,10 @@ class OperationOrchestrator:
         executor=None,
         action_adapter=None,
     ) -> None:
+        if executor is not None and (locator is not None or action_adapter is not None):
+            raise ValueError(
+                "executor cannot be combined with locator or action_adapter"
+            )
         self.generator = generator if generator is not None else OperationGenerator()
         if executor is not None:
             self.executor = executor
@@ -53,12 +57,12 @@ class OperationOrchestrator:
                     target_tree=deepcopy(pristine_tree),
                 )
             )
-        except Exception as exc:
+        except Exception:
             return ExecuteOperationsResponse(
                 success=False,
                 target_tree=pristine_tree,
                 operations=[],
-                error_message=f"operation generation failed: {exc}",
+                error_message="operation generation failed",
             )
 
         return self.executor.execute(

@@ -5,6 +5,7 @@ from typing import Any
 
 import pytest
 
+import agent.operation_orchestration as public_api
 from agent.operation_orchestration import (
     ExecuteOperationsResponse,
     GenerateOperationsResponse,
@@ -98,6 +99,22 @@ def test_explicit_executor_avoids_unused_default_dependencies(monkeypatch) -> No
     assert orchestrator.run("noop", _tree()).success
 
 
+@pytest.mark.parametrize(
+    "conflicting",
+    [
+        {"locator": object()},
+        {"action_adapter": object()},
+        {"locator": object(), "action_adapter": object()},
+    ],
+)
+def test_explicit_executor_rejects_locator_or_adapter_conflicts(conflicting) -> None:
+    with pytest.raises(
+        ValueError,
+        match="^executor cannot be combined with locator or action_adapter$",
+    ):
+        OperationOrchestrator(executor=object(), **conflicting)
+
+
 def test_default_executor_shares_the_chosen_locator_and_adapter() -> None:
     locator = object()
     adapter = object()
@@ -110,13 +127,14 @@ def test_default_executor_shares_the_chosen_locator_and_adapter() -> None:
     assert orchestrator.executor._action_adapter is adapter
 
 
-def test_generation_failure_returns_stable_private_tree_copy() -> None:
+def test_generation_failure_returns_stable_private_tree_copy_without_secrets() -> None:
     tree = _tree()
+    secret = "api-key-super-secret"
 
     class BrokenGenerator:
         def generate(self, request):
             request.target_tree["poison"] = True
-            raise RuntimeError("gateway offline")
+            raise RuntimeError(f"gateway offline: {secret}")
 
     response = OperationOrchestrator(
         generator=BrokenGenerator(), executor=object()
@@ -126,11 +144,11 @@ def test_generation_failure_returns_stable_private_tree_copy() -> None:
         success=False,
         target_tree=tree,
         operations=[],
-        error_message="operation generation failed: gateway offline",
+        error_message="operation generation failed",
     )
     assert response.target_tree is not tree
     assert "poison" not in tree
-    assert "RuntimeError" not in response.error_message
+    assert secret not in response.error_message
 
 
 class _RecordingAdapter:
@@ -229,23 +247,33 @@ def _accept(payload, tree=None, selected="bill"):
             locator=OperationLocator(llm_gateway=locate), action_adapter=adapter
         ),
     )
-    response = orchestrator.run("acceptance", tree or _tree(), "S", "P")
+    response = orchestrator.run(
+        "acceptance", _tree() if tree is None else tree, "S", "P"
+    )
     return response, locator_calls, adapter
 
 
 @pytest.mark.parametrize(
-    ("payload", "selected", "outputs", "targets", "final_ids", "root_calls", "empty_tree"),
+    (
+        "payload",
+        "selected",
+        "outputs",
+        "targets",
+        "final_ids",
+        "expected_calls",
+        "empty_tree",
+    ),
     [
-        ({"operations": [{"op_id": "x", "query": "NEW_FIELD", "intent_type": "create_node"}]}, "bill", ["new-field"], ["bill"], ["bill", "acct-id", "new-field"], 1, False),
-        ({"operations": [{"op_id": "a", "query": "ACCT_INFO", "intent_type": "create_node"}, {"op_id": "b", "query": "ACCT_ID", "intent_type": "create_node", "depends_on": ["a"]}]}, "bill", ["acct-info", "acct-id"], ["bill", "acct-info"], ["bill", "acct-info", "acct-id"], 1, True),
-        ({"operations": [{"op_id": "a", "query": "NEW_FIELD", "intent_type": "create_node"}, {"op_id": "b", "query": "formula", "intent_type": "generate_expression", "depends_on": ["a"]}]}, "bill", ["new-field", "new-field"], ["bill", "new-field"], ["bill", "acct-id", "new-field"], 1, False),
-        ({"operations": [{"op_id": "x", "query": "rename", "intent_type": "modify_node"}]}, "acct-id", ["acct-id"], ["acct-id"], ["bill", "acct-id"], 1, False),
-        ({"operations": [{"op_id": "x", "query": "delete", "intent_type": "delete_node"}]}, "acct-id", ["bill"], ["acct-id"], ["bill"], 1, False),
-        ({"operations": [{"op_id": "a", "query": "A", "intent_type": "create_node"}, {"op_id": "b", "query": "B", "intent_type": "create_node", "depends_on": ["a"]}, {"op_id": "c", "query": "C", "intent_type": "create_node", "depends_on": ["a"]}]}, "bill", ["a", "b", "c"], ["bill", "a", "a"], ["bill", "acct-id", "a", "b", "c"], 1, False),
+        ({"operations": [{"op_id": "x", "query": "NEW_FIELD", "intent_type": "create_node"}]}, "bill", ["new-field"], ["bill"], ["bill", "acct-id", "new-field"], [("create", "bill", None, None)], False),
+        ({"operations": [{"op_id": "a", "query": "ACCT_INFO", "intent_type": "create_node"}, {"op_id": "b", "query": "ACCT_ID", "intent_type": "create_node", "depends_on": ["a"]}]}, "bill", ["acct-info", "acct-id"], ["bill", "acct-info"], ["bill", "acct-info", "acct-id"], [("create", "bill", None, None), ("create", "acct-info", None, None)], True),
+        ({"operations": [{"op_id": "a", "query": "NEW_FIELD", "intent_type": "create_node"}, {"op_id": "b", "query": "formula", "intent_type": "generate_expression", "depends_on": ["a"]}]}, "bill", ["new-field", "new-field"], ["bill", "new-field"], ["bill", "acct-id", "new-field"], [("create", "bill", None, None), ("expression", "new-field", "S", "P")], False),
+        ({"operations": [{"op_id": "x", "query": "rename", "intent_type": "modify_node"}]}, "acct-id", ["acct-id"], ["acct-id"], ["bill", "acct-id"], [("modify", "acct-id", "S", "P")], False),
+        ({"operations": [{"op_id": "x", "query": "delete", "intent_type": "delete_node"}]}, "acct-id", ["bill"], ["acct-id"], ["bill"], [("delete", "acct-id", None, None)], False),
+        ({"operations": [{"op_id": "a", "query": "A", "intent_type": "create_node"}, {"op_id": "b", "query": "B", "intent_type": "create_node", "depends_on": ["a"]}, {"op_id": "c", "query": "C", "intent_type": "create_node", "depends_on": ["a"]}]}, "bill", ["a", "b", "c"], ["bill", "a", "a"], ["bill", "acct-id", "a", "b", "c"], [("create", "bill", None, None), ("create", "a", None, None), ("create", "a", None, None)], False),
     ],
 )
 def test_real_components_accept_deterministic_operation_flows(
-    payload, selected, outputs, targets, final_ids, root_calls, empty_tree
+    payload, selected, outputs, targets, final_ids, expected_calls, empty_tree
 ) -> None:
     initial_tree = _tree()
     if empty_tree:
@@ -257,8 +285,12 @@ def test_real_components_accept_deterministic_operation_flows(
     assert [op.output_node_id for op in response.operations] == outputs
     assert [op.target_node_id for op in response.operations] == targets
     assert list(build_node_index(response.target_tree)) == final_ids
-    assert len(locator_calls) == root_calls
-    assert all(call[2:] == ("S", "P") for call in adapter.calls if call[0] in {"modify", "expression"})
+    assert len(locator_calls) == 1
+    assert adapter.calls == expected_calls
+    if expected_calls[-1][0] == "modify":
+        assert _RecordingAdapter._node(response.target_tree, "acct-id")["modified"] == "rename"
+    if expected_calls[-1][0] == "expression":
+        assert _RecordingAdapter._node(response.target_tree, "new-field")["expression"] == "formula"
     if outputs == ["a", "b", "c"]:
         a = _RecordingAdapter._node(response.target_tree, "a")
         assert [child["node_id"] for child in a["children"]] == ["b", "c"]
@@ -273,7 +305,7 @@ def test_real_components_support_ab_field_id_output() -> None:
     }
     payload = {"operations": [{"op_id": "f", "query": "AB_FIELD", "intent_type": "create_node"}]}
 
-    response, locator_calls, _ = _accept(payload, tree=tree, selected="ab")
+    response, locator_calls, adapter = _accept(payload, tree=tree, selected="ab")
 
     assert response.success
     assert response.operations[0].output_node_id == "field-amount"
@@ -281,9 +313,32 @@ def test_real_components_support_ab_field_id_output() -> None:
     assert field.identity_field == "field_id"
     assert field.field_slot == "detail_fields"
     assert len(locator_calls) == 1
+    assert adapter.calls == [("create", "ab", None, None)]
 
 
 def test_public_exports_are_explicit_and_importable() -> None:
-    assert OperationActionAdapter and OperationGenerator and OperationLocator
-    assert OperationExecutor and OperationOrchestrator and NodeLocateCandidate
-    assert validate_and_sort_operations and build_node_index and is_valid_candidate
+    expected = {
+        "ExecuteOperationsRequest",
+        "ExecuteOperationsResponse",
+        "GenerateOperationsRequest",
+        "GenerateOperationsResponse",
+        "IntentType",
+        "LocateOperationRequest",
+        "LocateOperationResponse",
+        "NodeLocateCandidate",
+        "Operation",
+        "OperationActionAdapter",
+        "OperationExecutor",
+        "OperationGenerator",
+        "OperationLocator",
+        "OperationOrchestrator",
+        "OperationStatus",
+        "build_node_index",
+        "is_valid_candidate",
+        "validate_and_sort_operations",
+    }
+
+    assert set(public_api.__all__) == expected
+    assert len(public_api.__all__) == len(expected)
+    for name in expected:
+        assert getattr(public_api, name) is not None

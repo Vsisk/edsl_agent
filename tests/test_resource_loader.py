@@ -496,6 +496,7 @@ class ResourceLoaderTest(unittest.TestCase):
         self.assertEqual(loaded.domain_registry.bo_domains, ["BB_BAK_TRANS", "CUSTOM_ACCOUNT"])
         self.assertEqual(loaded.domain_registry.func_domains, ["DacsDataTrans", "deOrg"])
         self.assertEqual(loaded.domain_registry.namingsql_domains, ["BB_BAK_TRANS"])
+        self.assertEqual(loaded.naming_sql_profiles["CUSTOM_ACCOUNT"], [])
         self.assertEqual(loaded.edsl_tree, {"root": []})
 
     def test_naming_sql_profile_cache_is_scoped_only_by_site(self):

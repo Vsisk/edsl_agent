@@ -34,13 +34,15 @@ class NamingSqlProfileBuilderTest(unittest.TestCase):
         self.assertEqual(profile.filter_fields, ["ACCT_ID", "TRANS_DATE"])
         self.assertFalse(profile.is_full_table)
         self.assertEqual([param.name for param in profile.params], ["ACCT_ID", "START_DATE"])
-        self.assertEqual(profile.params[0].data_type, "basic")
+        self.assertEqual(profile.params[0].data_type, "long")
         self.assertFalse(profile.params[0].is_list)
         self.assertEqual(profile.site_id, "site-a")
         self.assertNotIn("project_id", NamingSqlProfile.model_fields)
         self.assertNotIn("source_key", NamingSqlProfile.model_fields)
-        self.assertIn("ACCT_ID", profile.scope_tags)
-        self.assertIn("account", profile.search_text.lower())
+        self.assertIn("ACCT", profile.scope_tags)
+        self.assertIn("account", profile.scope_tags)
+        self.assertNotIn("Account transaction search", profile.scope_tags)
+        self.assertEqual(profile.search_text, " ".join(profile.scope_tags).lower())
 
     def test_tautology_only_is_full_table(self):
         profile = NamingSqlProfileBuilder().build("site-a", "BB_TRANS", definition("SELECT * FROM BB_TRANS WHERE 1=1"))
@@ -49,6 +51,11 @@ class NamingSqlProfileBuilderTest(unittest.TestCase):
 
     def test_missing_sql_is_conservatively_full_table(self):
         profile = NamingSqlProfileBuilder().build("site-a", "BB_TRANS", definition(None))
+        self.assertTrue(profile.is_full_table)
+
+    def test_malformed_predicate_without_rhs_is_full_table(self):
+        profile = NamingSqlProfileBuilder().build("site-a", "BB_TRANS", definition("SELECT * FROM T WHERE ACCT_ID ="))
+        self.assertEqual(profile.filter_fields, [])
         self.assertTrue(profile.is_full_table)
 
     def test_profile_forbids_unknown_fields(self):

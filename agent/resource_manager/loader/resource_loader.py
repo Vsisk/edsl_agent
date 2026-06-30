@@ -57,9 +57,8 @@ class ResourceLoader:
             self.bo_registry_cache[source_key] = load_bo_registry_by_json(payload.get("bo") or {})
             builder = NamingSqlProfileBuilder()
             self.naming_sql_profile_cache[site_id] = {
-                bo.bo_name: [builder.build(site_id, bo.bo_name, definition) for definition in bo.naming_sql_list]
-                for bo in self.bo_registry_cache[source_key].values()
-                if bo.naming_sql_list
+                registry_key: [builder.build(site_id, bo.bo_name, definition) for definition in bo.naming_sql_list]
+                for registry_key, bo in self.bo_registry_cache[source_key].items()
             }
         if not self.function_registry_cache.get(source_key):
             self.function_registry_cache[source_key] = load_function_registry_by_json(payload.get("function") or {})

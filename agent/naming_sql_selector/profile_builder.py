@@ -1,15 +1,20 @@
 import re
 
 from agent.resource_manager.loader.registry_models import NamingSqlDefTerm
-from agent.resource_manager.loader.tag_utils import build_tags
+from agent.resource_manager.loader.tag_utils import tokenize_text
 
 from .models import NamingSqlParamProfile, NamingSqlProfile
 
 
 _WHERE_PATTERN = re.compile(r"\bWHERE\b(?P<predicate>.*)", re.IGNORECASE | re.DOTALL)
+_IDENTIFIER = r"[A-Za-z_][\w$]*"
+_VALUE = rf"(?::(?:{_IDENTIFIER})|'(?:''|[^'])*'|\"(?:\"\"|[^\"])*\"|[-+]?\d+(?:\.\d+)?|{_IDENTIFIER}(?:\.{_IDENTIFIER})?)"
 _PREDICATE_PATTERN = re.compile(
-    r"(?<![\w])(?:[A-Za-z_][\w$]*\.)?(?P<field>[A-Za-z_][\w$]*)\s*"
-    r"(?:=|!=|<>|<=|>=|<|>|LIKE\b|IN\b|BETWEEN\b|IS\b)",
+    rf"(?<![\w])(?:{_IDENTIFIER}\.)?(?P<field>{_IDENTIFIER})\s*(?:"
+    rf"(?:=|!=|<>|<=|>=|<|>|LIKE\b)\s*{_VALUE}"
+    rf"|IN\s*(?:\([^)]*\)|:{_IDENTIFIER})"
+    rf"|BETWEEN\s+{_VALUE}\s+AND\s+{_VALUE}"
+    rf"|IS\s+(?:NOT\s+)?NULL\b)",
     re.IGNORECASE,
 )
 
@@ -18,7 +23,7 @@ class NamingSqlProfileBuilder:
     def build(self, site_id: str, bo_name: str, definition: NamingSqlDefTerm) -> NamingSqlProfile:
         fields = self._extract_filter_fields(definition.sql_command)
         params = [
-            NamingSqlParamProfile(name=param.param_name, data_type=str(param.data_type or ""), is_list=param.is_list)
+            NamingSqlParamProfile(name=param.param_name, data_type=str(param.data_type_name or ""), is_list=param.is_list)
             for param in definition.param_list
         ]
         text_values = [
@@ -28,7 +33,7 @@ class NamingSqlProfileBuilder:
             *fields,
             *(param.name for param in params),
         ]
-        scope_tags = build_tags(*text_values)
+        scope_tags = tokenize_text(" ".join(text_values))
         return NamingSqlProfile(
             site_id=site_id,
             bo_name=bo_name,

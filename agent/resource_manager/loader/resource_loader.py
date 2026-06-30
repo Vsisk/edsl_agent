@@ -1,7 +1,8 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import json
 from pathlib import Path
 from typing import Dict, Any
+from agent.naming_sql_selector import NamingSqlProfile, NamingSqlProfileBuilder
 from agent.resource_manager.loader.bo_loader import load_bo_registry_by_json
 from agent.resource_manager.loader.context_loader import load_context_registry_by_json
 from agent.resource_manager.loader.function_loader import load_function_registry_by_json
@@ -22,6 +23,7 @@ class LoadedResource:
     function_registry: Dict[str, FunctionRegistry]
     edsl_tree: Dict[str, Any]
     domain_registry: DomainRegistry
+    naming_sql_profiles: dict[str, list[NamingSqlProfile]] = field(default_factory=dict)
 
     def get_visible_local_context_registry(self, node_path: str) -> Dict[str, LocalContextRegistry]:
         return {
@@ -42,6 +44,7 @@ class ResourceLoader:
         self.context_registry_cache: Dict[str, Dict[str, ContextRegistry]] = {}
         self.bo_registry_cache: Dict[str, Dict[str, BoRegistry]] = {}
         self.function_registry_cache: Dict[str, Dict[str, FunctionRegistry]] = {}
+        self.naming_sql_profile_cache: dict[str, dict[str, list[NamingSqlProfile]]] = {}
     
     def load_resource(self, site_id: str, project_id: str, edsl_tree: Dict[str, Any]) -> LoadedResource:
         payload = self.get_resource_data(site_id, project_id)
@@ -49,8 +52,15 @@ class ResourceLoader:
         source_key = site_id + ":" + project_id
         if not self.context_registry_cache.get(source_key):
             self.context_registry_cache[source_key] = load_context_registry_by_json(payload.get("context") or {})
-        if not self.bo_registry_cache.get(source_key):
+        bo_cache_built = source_key not in self.bo_registry_cache
+        if bo_cache_built:
             self.bo_registry_cache[source_key] = load_bo_registry_by_json(payload.get("bo") or {})
+            builder = NamingSqlProfileBuilder()
+            self.naming_sql_profile_cache[site_id] = {
+                bo.bo_name: [builder.build(site_id, bo.bo_name, definition) for definition in bo.naming_sql_list]
+                for bo in self.bo_registry_cache[source_key].values()
+                if bo.naming_sql_list
+            }
         if not self.function_registry_cache.get(source_key):
             self.function_registry_cache[source_key] = load_function_registry_by_json(payload.get("function") or {})
 
@@ -64,6 +74,7 @@ class ResourceLoader:
                 bo_registry=self.bo_registry_cache[source_key],
                 function_registry=self.function_registry_cache[source_key],
             ),
+            naming_sql_profiles=self.naming_sql_profile_cache.get(site_id, {}),
         )
 
     def get_resource_data(self, site_id: str, project_id: str) -> Dict[str, Any]:

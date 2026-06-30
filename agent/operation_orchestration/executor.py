@@ -42,6 +42,7 @@ class OperationExecutor:
                 error_message=f"operation graph validation failed: {exc}",
             )
 
+        self._normalize_runtime_state(operations)
         if not execution_order:
             return ExecuteOperationsResponse(
                 success=True, target_tree=current_tree, operations=operations
@@ -154,12 +155,28 @@ class OperationExecutor:
         return candidate
 
     @staticmethod
+    def _normalize_runtime_state(operations: list[Operation]) -> None:
+        for operation in operations:
+            preserve_prelocation = (
+                not operation.depends_on
+                and operation.status == "located"
+                and _nonblank(operation.target_node_id)
+                and _nonblank(operation.target_jsonpath)
+            )
+            if not preserve_prelocation:
+                operation.target_node_id = None
+                operation.target_jsonpath = None
+            operation.output_node_id = None
+            operation.error_message = None
+            operation.status = "pending"
+
+    @staticmethod
     def _prelocated_candidate(
         operation: Operation,
         current_index: dict[str, NodeLocateCandidate],
     ) -> NodeLocateCandidate | None:
         if (
-            operation.status != "located"
+            operation.status != "pending"
             or not _nonblank(operation.target_node_id)
             or not _nonblank(operation.target_jsonpath)
         ):

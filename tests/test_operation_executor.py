@@ -293,6 +293,38 @@ def test_initial_index_failure_clears_stale_output_as_runtime_failure():
     assert locator.calls == [] and adapter.calls == []
 
 
+def test_initial_index_failure_normalizes_unvisited_tail_runtime_state():
+    first = op("first")
+    first.status = "executed"
+    first.output_node_id = "old-first"
+    tail = op("tail")
+    tail.status = "failed"
+    tail.target_node_id = "old-target"
+    tail.target_jsonpath = "$.old"
+    tail.output_node_id = "old-output"
+    tail.error_message = "old-error"
+    operations = [first, tail]
+    before = deepcopy(operations)
+    duplicate_tree = {
+        "items": [
+            {"node_id": "duplicate", "tree_node_type": "simple_leaf"},
+            {"node_id": "duplicate", "tree_node_type": "simple_leaf"},
+        ]
+    }
+
+    response = execute(operations, target_tree=duplicate_tree)
+
+    assert not response.success
+    assert response.operations[0].status == "failed"
+    assert response.operations[0].output_node_id is None
+    assert response.operations[1].status == "pending"
+    assert response.operations[1].target_node_id is None
+    assert response.operations[1].target_jsonpath is None
+    assert response.operations[1].output_node_id is None
+    assert response.operations[1].error_message is None
+    assert operations == before
+
+
 def test_locator_failure_propagates_and_stops():
     response = execute(
         [op("a")],
@@ -419,6 +451,49 @@ def test_adapter_exception_fails_fast_with_prior_success_and_partial_tree_only()
     assert "created-first" in str(response.target_tree)
     assert [call[1] for call in adapter.calls] == ["first", "second"]
     assert request == before
+
+
+def test_failure_leaves_all_unvisited_operations_in_normalized_pending_state():
+    first = op("first")
+    incoming_executed = op("incoming-executed")
+    incoming_executed.status = "executed"
+    incoming_executed.target_node_id = "a"
+    incoming_executed.target_jsonpath = "$.root.children[0]"
+    incoming_executed.output_node_id = "old-executed-output"
+    incoming_executed.error_message = "old-executed-error"
+    incoming_failed = op("incoming-failed")
+    incoming_failed.status = "failed"
+    incoming_failed.target_node_id = "b"
+    incoming_failed.target_jsonpath = "$.root.children[1]"
+    incoming_failed.output_node_id = "old-failed-output"
+    incoming_failed.error_message = "old-failed-error"
+    incoming_located = op("incoming-located")
+    incoming_located.status = "located"
+    incoming_located.target_node_id = "b"
+    incoming_located.target_jsonpath = "$.root.children[1]"
+    incoming_located.output_node_id = "old-located-output"
+    incoming_located.error_message = "old-located-error"
+    operations = [first, incoming_executed, incoming_failed, incoming_located]
+    before = deepcopy(operations)
+    locator = RecordingLocator(targets={"first": ("a", "$.root.children[0]")})
+    adapter = RecordingAdapter(actions={"first": RuntimeError("boom")})
+
+    response = execute(operations, locator=locator, adapter=adapter)
+
+    assert not response.success
+    assert response.operations[0].status == "failed"
+    executed_tail, failed_tail, located_tail = response.operations[1:]
+    for tail in (executed_tail, failed_tail, located_tail):
+        assert tail.status == "pending"
+        assert tail.output_node_id is None
+        assert tail.error_message is None
+    assert (executed_tail.target_node_id, executed_tail.target_jsonpath) == (None, None)
+    assert (failed_tail.target_node_id, failed_tail.target_jsonpath) == (None, None)
+    assert (located_tail.target_node_id, located_tail.target_jsonpath) == (
+        "b",
+        "$.root.children[1]",
+    )
+    assert operations == before
 
 
 def test_mutating_adapter_input_then_raising_cannot_leak_attempted_changes():

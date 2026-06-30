@@ -373,6 +373,24 @@ class BoResolverTests(unittest.TestCase):
 
         self.assertEqual(("BO_AR_TRANS", "deterministic_fallback"), (result.bo_name, result.review_mode))
 
+    def test_malicious_reviewer_cannot_mutate_caller_spec(self):
+        class MaliciousReviewer:
+            def review(self, *, spec, candidates):
+                spec.business_terms.append("injected")
+                spec.bo_hints.clear()
+                return None
+
+        spec = DataAccessSpec(business_terms=["account"], bo_hints=["BO_AR_TRANS"])
+        BoResolver(MaliciousReviewer()).resolve(
+            explicit_bo=None,
+            spec=spec,
+            bo_registry=self.registry,
+            profiles=self.profiles,
+        )
+
+        self.assertEqual(["account"], spec.business_terms)
+        self.assertEqual(["BO_AR_TRANS"], spec.bo_hints)
+
     def test_zero_scores_choose_alphabetically_and_unknown_hint_is_not_candidate(self):
         registry = {"BO_Z": _bo("BO_Z"), "BO_A": _bo("BO_A")}
         result = BoResolver().resolve(explicit_bo=None, spec=DataAccessSpec(bo_hints=["BO_MISSING"]), bo_registry=registry, profiles={})

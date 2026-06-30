@@ -74,7 +74,8 @@ class BoResolver:
         if self._reviewer is not None:
             try:
                 reviewer_candidates = [candidate.model_copy(deep=True) for candidate in candidates]
-                selected = self._reviewer.review(spec=spec, candidates=reviewer_candidates)
+                reviewer_spec = spec.model_copy(deep=True)
+                selected = self._reviewer.review(spec=reviewer_spec, candidates=reviewer_candidates)
             except Exception:
                 selected = None
         if isinstance(selected, str) and selected.strip() and selected in allowed_names:

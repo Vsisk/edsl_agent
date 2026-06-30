@@ -313,7 +313,7 @@ class NamingSqlSelectionTests(unittest.TestCase):
     def test_candidate_retriever_bounds_scoped_profiles_before_binding(self):
         class CapturingRetriever:
             seen = 0
-            def retrieve(self, *, spec, profiles, knowledge, limit=30):
+            def retrieve(self, *, query, spec, profiles, knowledge, limit=30):
                 self.seen = len(profiles)
                 return profiles[:2]
         profiles = [NamingSqlProfile(site_id="s", bo_name="BO", naming_sql_id=str(i), sql_name=str(i), is_full_table=False, search_text="orders") for i in range(101)]
@@ -325,9 +325,32 @@ class NamingSqlSelectionTests(unittest.TestCase):
     def test_local_candidate_retriever_clamps_and_prioritizes_knowledge_name(self):
         profiles = [NamingSqlProfile(site_id="s", bo_name="BO", naming_sql_id=str(i), sql_name=f"sql_{i}", is_full_table=False, search_text="common") for i in range(100)]
         knowledge = [DevelopmentKnowledge(text="common", naming_sql_names=["sql_99"])]
-        recalled = LocalNamingSqlCandidateRetriever(max_candidates=999).retrieve(spec=DataAccessSpec(business_terms=["common"]), profiles=profiles, knowledge=knowledge)
+        recalled = LocalNamingSqlCandidateRetriever(max_candidates=999).retrieve(query="", spec=DataAccessSpec(business_terms=["common"]), profiles=profiles, knowledge=knowledge)
         self.assertEqual(30, len(recalled))
         self.assertEqual("sql_99", recalled[0].sql_name)
+
+    def test_explicit_query_name_is_recalled_beyond_limit_without_prefix_collision(self):
+        profiles = [NamingSqlProfile(site_id="s", bo_name="BO", naming_sql_id=str(i), sql_name=f"sql_{i}", is_full_table=False, search_text="common") for i in range(100)]
+        recalled = LocalNamingSqlCandidateRetriever().retrieve(query="use sql_99 now", spec=DataAccessSpec(business_terms=["common"]), profiles=profiles, knowledge=[])
+        self.assertEqual("sql_99", recalled[0].sql_name)
+        self.assertNotEqual("sql_9", recalled[0].sql_name)
+        result = NamingSqlSelector().select(NamingSqlSelectionRequest(site_id="s", query="use sql_99 now", bo_name="BO"), _loaded(profiles), DataAccessSpec(business_terms=["common"]))
+        self.assertEqual("sql_99", result.selected.sql_name)
+
+    def test_type_suffix_collisions_do_not_bind_as_int_or_date(self):
+        request = NamingSqlSelectionRequest(site_id="s", query="orders", bo_name="BO")
+        for bad_type, param_type in (("point", "int"), ("constraint", "integer"), ("update", "date")):
+            with self.subTest(bad_type=bad_type):
+                profile = NamingSqlProfile(site_id="s", bo_name="BO", naming_sql_id="a", sql_name="a", params=[NamingSqlParamProfile(name="customer value", data_type=param_type)], is_full_table=False, search_text="orders")
+                spec = DataAccessSpec(business_terms=["orders"], available_values=[AvailableValue(name="customer other", source_ref="x", data_type=bad_type, semantic_tags=["customer"])])
+                result = NamingSqlSelector().select(request, _loaded([profile]), spec)
+                self.assertEqual("PARAM_UNBOUND", result.rejected_candidates[0].reject_codes[0])
+
+    def test_exact_name_binding_intentionally_allows_unknown_type(self):
+        profile = NamingSqlProfile(site_id="s", bo_name="BO", naming_sql_id="a", sql_name="a", params=[NamingSqlParamProfile(name="customer_id", data_type="integer")], is_full_table=False, search_text="orders")
+        spec = DataAccessSpec(business_terms=["orders"], available_values=[AvailableValue(name="customer-id", source_ref="x", data_type="")])
+        result = NamingSqlSelector().select(NamingSqlSelectionRequest(site_id="s", query="orders", bo_name="BO"), _loaded([profile]), spec)
+        self.assertEqual(1.0, result.selected.binding_plan.bindings[0].confidence)
     def test_exact_alias_semantic_tie_and_parameterless_binding(self):
         profiles = [
             NamingSqlProfile(site_id="s", bo_name="BO", naming_sql_id="exact", sql_name="exact", params=[NamingSqlParamProfile(name="account_id", data_type="integer")], is_full_table=False, search_text="orders account"),

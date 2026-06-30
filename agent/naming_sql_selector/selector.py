@@ -20,7 +20,7 @@ class NamingSqlReviewer(Protocol):
 
 
 class NamingSqlCandidateRetriever(Protocol):
-    def retrieve(self, *, spec: DataAccessSpec, profiles: list[NamingSqlProfile],
+    def retrieve(self, *, query: str, spec: DataAccessSpec, profiles: list[NamingSqlProfile],
                  knowledge: list[DevelopmentKnowledge], limit: int = 30) -> list[NamingSqlProfile]: ...
 
 
@@ -116,9 +116,9 @@ _GENERIC_SEMANTIC = {"id", "identifier", "date", "code", "no", "number", "name",
 
 def _type_family(value: str) -> str:
     normalized = _key(value)
-    # Qualified Java/.NET wrapper names normalize to a suffix such as java.lang.Long -> javalanglong.
+    terminal = _key(re.split(r"::|[.$]", _compact(value))[-1])
     for family, aliases in _TYPE_FAMILIES.items():
-        if normalized in aliases or any(normalized.endswith(alias) for alias in aliases): return family
+        if normalized in aliases or terminal in aliases: return family
     return ""
 
 
@@ -139,7 +139,7 @@ class LocalNamingSqlCandidateRetriever:
     def __init__(self, max_candidates: int = 30):
         self._max_candidates = min(max(int(max_candidates), 1), 30)
 
-    def retrieve(self, *, spec: DataAccessSpec, profiles: list[NamingSqlProfile],
+    def retrieve(self, *, query: str, spec: DataAccessSpec, profiles: list[NamingSqlProfile],
                  knowledge: list[DevelopmentKnowledge], limit: int = 30) -> list[NamingSqlProfile]:
         bounded = min(max(int(limit), 1), self._max_candidates, 30)
         terms = _tokens(" ".join((*spec.business_terms, *spec.scope_terms, *spec.filter_requirements, *spec.bo_hints)))
@@ -148,12 +148,22 @@ class LocalNamingSqlCandidateRetriever:
         for profile in profiles:
             searchable = " ".join((profile.sql_name, profile.label_name, profile.sql_description,
                 profile.search_text, *profile.filter_fields, *profile.scope_tags, *(p.name for p in profile.params)))
-            explicit = _key(profile.sql_name) in recommended or _key(profile.naming_sql_id) in recommended
+            explicit = (_key(profile.sql_name) in recommended or _key(profile.naming_sql_id) in recommended
+                        or _contains_normalized_name(query, profile.sql_name)
+                        or _contains_normalized_name(query, profile.naming_sql_id))
             overlap = len(terms.intersection(_tokens(searchable)))
             if explicit or overlap or not terms:
                 ranked.append((-(10000 if explicit else 0) - overlap, profile.sql_name, profile.naming_sql_id, profile))
         ranked.sort(key=lambda item: item[:3])
         return [item[3] for item in ranked[:bounded]]
+
+
+def _contains_normalized_name(query: str, name: str) -> bool:
+    query_parts = _TOKEN_PATTERN.findall(query[:4000].lower()) if isinstance(query, str) else []
+    name_parts = _TOKEN_PATTERN.findall(_compact(name).lower())
+    if not name_parts or len(name_parts) > len(query_parts): return False
+    width = len(name_parts)
+    return any(query_parts[index:index + width] == name_parts for index in range(len(query_parts) - width + 1))
 
 
 class NamingSqlSelector:
@@ -234,7 +244,7 @@ class NamingSqlSelector:
         recommended = {_key(x) for k in knowledge for x in k.naming_sql_names if _key(x)}
         requirements = [_canonical_requirement(x) for x in spec.filter_requirements if _canonical_requirement(x)]
         scoped_profiles = [p for p in profiles if not p.is_full_table]
-        recalled = self._candidate_retriever.retrieve(spec=spec.model_copy(deep=True), profiles=list(scoped_profiles), knowledge=list(knowledge), limit=30)
+        recalled = self._candidate_retriever.retrieve(query=request.query[:4000], spec=spec.model_copy(deep=True), profiles=list(scoped_profiles), knowledge=list(knowledge), limit=30)
         loaded_by_key = {(p.naming_sql_id, p.sql_name): p for p in scoped_profiles}
         recalled_keys = list(dict.fromkeys((p.naming_sql_id, p.sql_name) for p in recalled[:30] if isinstance(p, NamingSqlProfile)))
         candidates = [loaded_by_key[key] for key in recalled_keys if key in loaded_by_key] + [p for p in profiles if p.is_full_table]
@@ -262,7 +272,7 @@ class NamingSqlSelector:
                 else: fallbacks.append((profile, plan))
                 continue
             text = " ".join((profile.sql_name, profile.label_name, profile.sql_description, profile.search_text, *profile.scope_tags))
-            explicit = _key(profile.sql_name) in _key(request.query) or _key(profile.sql_name) in recommended
+            explicit = _contains_normalized_name(request.query, profile.sql_name) or _key(profile.sql_name) in recommended
             coverage = 1.0 if not requirements else sum(covered(r) for r in requirements) / len(requirements)
             avg = sum(x.confidence for x in plan.bindings) / len(plan.bindings) if plan.bindings else 0.0
             business = _tokens(" ".join((*spec.business_terms, *spec.scope_terms)))

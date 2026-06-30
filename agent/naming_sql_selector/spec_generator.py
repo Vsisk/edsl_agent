@@ -117,6 +117,7 @@ class DataAccessSpecGenerator:
                 source_ref=normalized_source_ref,
                 data_type=_normalize_string(data_type) if isinstance(data_type, str) else "",
                 semantic_tags=_bounded_unique(explicit_tags + _semantic_tokens(normalized_name, normalized_source_ref)),
+                is_list=item.get("is_list", False) if isinstance(item.get("is_list", False), bool) else False,
             ))
 
         if knowledge is None:

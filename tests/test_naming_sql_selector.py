@@ -15,6 +15,7 @@ from agent.naming_sql_selector import (
     NamingSqlParamProfile,
     NamingSqlSelector,
     NamingSqlSelectionResult,
+    LocalNamingSqlCandidateRetriever,
     ParamBindingPlan,
 )
 from agent.resource_manager.loader.resource_loader import LoadedResource
@@ -279,6 +280,54 @@ def _loaded(profiles):
 
 
 class NamingSqlSelectionTests(unittest.TestCase):
+    def test_binding_requires_matching_list_shape(self):
+        def run(param_list, value_list):
+            profile = NamingSqlProfile(site_id="s", bo_name="BO", naming_sql_id="a", sql_name="a", params=[NamingSqlParamProfile(name="ids", data_type="integer", is_list=param_list)], is_full_table=False, search_text="orders")
+            spec = DataAccessSpec(business_terms=["orders"], available_values=[AvailableValue(name="ids", source_ref="ctx.ids", data_type="int", is_list=value_list)])
+            return NamingSqlSelector().select(NamingSqlSelectionRequest(site_id="s", query="orders", bo_name="BO"), _loaded([profile]), spec)
+        self.assertIsNotNone(run(True, True).selected)
+        self.assertEqual("PARAM_UNBOUND", run(True, False).rejected_candidates[0].reject_codes[0])
+        self.assertEqual("PARAM_UNBOUND", run(False, True).rejected_candidates[0].reject_codes[0])
+
+    def test_semantic_binding_excludes_generic_id_and_requires_known_compatible_types(self):
+        profile = NamingSqlProfile(site_id="s", bo_name="BO", naming_sql_id="a", sql_name="a", params=[NamingSqlParamProfile(name="customer_id", data_type="integer")], is_full_table=False, search_text="orders")
+        request = NamingSqlSelectionRequest(site_id="s", query="orders", bo_name="BO")
+        bad = DataAccessSpec(business_terms=["orders"], available_values=[AvailableValue(name="account_id", source_ref="account", data_type="int")])
+        self.assertEqual("PARAM_UNBOUND", NamingSqlSelector().select(request, _loaded([profile]), bad).rejected_candidates[0].reject_codes[0])
+        good = DataAccessSpec(business_terms=["orders"], available_values=[AvailableValue(name="customer identifier", source_ref="customer", data_type="java.lang.Long", semantic_tags=["customer"])])
+        self.assertEqual(.85, NamingSqlSelector().select(request, _loaded([profile]), good).selected.binding_plan.bindings[0].confidence)
+        wrong_type = good.model_copy(update={"available_values": [AvailableValue(name="customer identifier", source_ref="customer", data_type="timestamp", semantic_tags=["customer"])]})
+        self.assertEqual("PARAM_UNBOUND", NamingSqlSelector().select(request, _loaded([profile]), wrong_type).rejected_candidates[0].reject_codes[0])
+
+    def test_qualified_instant_is_temporal_not_numeric_int(self):
+        profile = NamingSqlProfile(site_id="s", bo_name="BO", naming_sql_id="a", sql_name="a", params=[NamingSqlParamProfile(name="customer_time", data_type="java.time.Instant")], is_full_table=False, search_text="orders")
+        spec = DataAccessSpec(business_terms=["orders"], available_values=[AvailableValue(name="customer time", source_ref="customer", data_type="int", semantic_tags=["customer"])])
+        result = NamingSqlSelector().select(NamingSqlSelectionRequest(site_id="s", query="orders", bo_name="BO"), _loaded([profile]), spec)
+        self.assertEqual("PARAM_UNBOUND", result.rejected_candidates[0].reject_codes[0])
+
+    def test_filter_coverage_is_exact_not_substring(self):
+        profile = NamingSqlProfile(site_id="s", bo_name="BO", naming_sql_id="a", sql_name="a", filter_fields=["unrelated_identifier"], scope_tags=["id"], is_full_table=False, search_text="orders")
+        result = NamingSqlSelector().select(NamingSqlSelectionRequest(site_id="s", query="orders", bo_name="BO"), _loaded([profile]), DataAccessSpec(business_terms=["orders"], filter_requirements=["id = 3"]))
+        self.assertEqual(["FILTER_NOT_COVERED"], result.rejected_candidates[0].reject_codes)
+
+    def test_candidate_retriever_bounds_scoped_profiles_before_binding(self):
+        class CapturingRetriever:
+            seen = 0
+            def retrieve(self, *, spec, profiles, knowledge, limit=30):
+                self.seen = len(profiles)
+                return profiles[:2]
+        profiles = [NamingSqlProfile(site_id="s", bo_name="BO", naming_sql_id=str(i), sql_name=str(i), is_full_table=False, search_text="orders") for i in range(101)]
+        retriever = CapturingRetriever()
+        result = NamingSqlSelector(candidate_retriever=retriever).select(NamingSqlSelectionRequest(site_id="s", query="orders", bo_name="BO"), _loaded(profiles), DataAccessSpec(business_terms=["orders"]))
+        self.assertEqual(101, retriever.seen)
+        self.assertEqual("0", result.selected.naming_sql_id)
+
+    def test_local_candidate_retriever_clamps_and_prioritizes_knowledge_name(self):
+        profiles = [NamingSqlProfile(site_id="s", bo_name="BO", naming_sql_id=str(i), sql_name=f"sql_{i}", is_full_table=False, search_text="common") for i in range(100)]
+        knowledge = [DevelopmentKnowledge(text="common", naming_sql_names=["sql_99"])]
+        recalled = LocalNamingSqlCandidateRetriever(max_candidates=999).retrieve(spec=DataAccessSpec(business_terms=["common"]), profiles=profiles, knowledge=knowledge)
+        self.assertEqual(30, len(recalled))
+        self.assertEqual("sql_99", recalled[0].sql_name)
     def test_exact_alias_semantic_tie_and_parameterless_binding(self):
         profiles = [
             NamingSqlProfile(site_id="s", bo_name="BO", naming_sql_id="exact", sql_name="exact", params=[NamingSqlParamProfile(name="account_id", data_type="integer")], is_full_table=False, search_text="orders account"),

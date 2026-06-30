@@ -19,6 +19,11 @@ class NamingSqlReviewer(Protocol):
     def review(self, *, spec: DataAccessSpec, candidates: list[NamingSqlReviewCandidate]) -> str | None: ...
 
 
+class NamingSqlCandidateRetriever(Protocol):
+    def retrieve(self, *, spec: DataAccessSpec, profiles: list[NamingSqlProfile],
+                 knowledge: list[DevelopmentKnowledge], limit: int = 30) -> list[NamingSqlProfile]: ...
+
+
 _TOKEN_PATTERN = re.compile(r"[a-z0-9]+|[\u4e00-\u9fff]+")
 
 
@@ -100,22 +105,67 @@ def _key(value: Any) -> str:
     return "".join(_TOKEN_PATTERN.findall(_compact(value).lower()))
 
 
+_TYPE_FAMILIES = {
+    "numeric": {"byte", "short", "int", "integer", "long", "float", "double", "decimal", "numeric", "number", "bigdecimal"},
+    "string": {"str", "string", "char", "varchar", "text", "character"},
+    "boolean": {"bool", "boolean"}, "date": {"date", "localdate"},
+    "datetime": {"datetime", "timestamp", "instant", "localdatetime"},
+}
+_GENERIC_SEMANTIC = {"id", "identifier", "date", "code", "no", "number", "name", "value", "type", "key"}
+
+
+def _type_family(value: str) -> str:
+    normalized = _key(value)
+    # Qualified Java/.NET wrapper names normalize to a suffix such as java.lang.Long -> javalanglong.
+    for family, aliases in _TYPE_FAMILIES.items():
+        if normalized in aliases or any(normalized.endswith(alias) for alias in aliases): return family
+    return ""
+
+
 def _type_ok(param_type: str, value_type: str) -> bool:
-    left, right = _key(param_type), _key(value_type)
-    if not left or not right or left in {"unknown", "any"} or right in {"unknown", "any"}:
+    left, right = _type_family(param_type), _type_family(value_type)
+    if not left or not right:
         return True
-    numeric = {"int", "integer", "long", "short", "float", "double", "decimal", "number", "numeric"}
-    return left == right or left in numeric and right in numeric
+    return left == right
+
+
+def _canonical_requirement(value: str) -> str:
+    # The left operand is the field for ordinary predicates; plain requirements remain intact.
+    match = re.match(r"\s*([A-Za-z_][\w$]*(?:\.[A-Za-z_][\w$]*)?)\s*(?:=|!=|<>|<=|>=|<|>|\bIN\b|\bLIKE\b|\bBETWEEN\b|\bIS\b)", value, re.I)
+    return _key(match.group(1).split(".")[-1] if match else value)
+
+
+class LocalNamingSqlCandidateRetriever:
+    def __init__(self, max_candidates: int = 30):
+        self._max_candidates = min(max(int(max_candidates), 1), 30)
+
+    def retrieve(self, *, spec: DataAccessSpec, profiles: list[NamingSqlProfile],
+                 knowledge: list[DevelopmentKnowledge], limit: int = 30) -> list[NamingSqlProfile]:
+        bounded = min(max(int(limit), 1), self._max_candidates, 30)
+        terms = _tokens(" ".join((*spec.business_terms, *spec.scope_terms, *spec.filter_requirements, *spec.bo_hints)))
+        recommended = {_key(name) for item in knowledge for name in item.naming_sql_names if _key(name)}
+        ranked = []
+        for profile in profiles:
+            searchable = " ".join((profile.sql_name, profile.label_name, profile.sql_description,
+                profile.search_text, *profile.filter_fields, *profile.scope_tags, *(p.name for p in profile.params)))
+            explicit = _key(profile.sql_name) in recommended or _key(profile.naming_sql_id) in recommended
+            overlap = len(terms.intersection(_tokens(searchable)))
+            if explicit or overlap or not terms:
+                ranked.append((-(10000 if explicit else 0) - overlap, profile.sql_name, profile.naming_sql_id, profile))
+        ranked.sort(key=lambda item: item[:3])
+        return [item[3] for item in ranked[:bounded]]
 
 
 class NamingSqlSelector:
     def __init__(self, knowledge_retriever: DevelopmentKnowledgeRetriever | None = None,
                  spec_generator: DataAccessSpecGenerator | None = None,
-                 bo_resolver: BoResolver | None = None, reviewer: NamingSqlReviewer | None = None):
+                 bo_resolver: BoResolver | None = None, reviewer: NamingSqlReviewer | None = None,
+                 candidate_retriever: NamingSqlCandidateRetriever | None = None):
         self._retriever = knowledge_retriever or getattr(spec_generator, "_retriever", None) or NoOpDevelopmentKnowledgeRetriever()
         self._spec_generator = spec_generator
         self._bo_resolver = bo_resolver or BoResolver()
         self._reviewer = reviewer
+        self._candidate_retriever = candidate_retriever or LocalNamingSqlCandidateRetriever()
 
     def _knowledge(self, request: NamingSqlSelectionRequest) -> list[DevelopmentKnowledge]:
         try:
@@ -147,13 +197,14 @@ class NamingSqlSelector:
             pk = _key(param.name)
             scored: list[tuple[float, Any, str]] = []
             for value in spec.available_values:
+                if param.is_list != value.is_list: continue
                 if not _type_ok(param.data_type, value.data_type): continue
                 vk = _key(value.name)
                 if pk and pk == vk: scored.append((1.0, value, "exact normalized name")); continue
                 if vk and vk in aliases.get(pk, set()): scored.append((.95, value, "development alias")); continue
-                param_tags = _tokens(param.name)
-                value_tags = {_key(tag) for tag in value.semantic_tags if _key(tag)}
-                if {_key(tag) for tag in param_tags}.intersection(value_tags):
+                param_tags = _tokens(param.name) - _GENERIC_SEMANTIC
+                value_tags = (_tokens(value.name) | _tokens(" ".join(value.semantic_tags))) - _GENERIC_SEMANTIC
+                if param_tags.intersection(value_tags) and _type_family(param.data_type) and _type_family(param.data_type) == _type_family(value.data_type):
                     scored.append((.85, value, "semantic tag and type"))
             if not scored:
                 unbound.append(_compact(param.name)); continue
@@ -181,15 +232,29 @@ class NamingSqlSelector:
             profiles.extend(p for p in values if p.site_id == request.site_id and p.bo_name == resolution.bo_name)
         rejected, fallbacks, survivors = [], [], []
         recommended = {_key(x) for k in knowledge for x in k.naming_sql_names if _key(x)}
-        requirements = [_key(x) for x in spec.filter_requirements if _key(x)]
-        for profile in profiles:
+        requirements = [_canonical_requirement(x) for x in spec.filter_requirements if _canonical_requirement(x)]
+        scoped_profiles = [p for p in profiles if not p.is_full_table]
+        recalled = self._candidate_retriever.retrieve(spec=spec.model_copy(deep=True), profiles=list(scoped_profiles), knowledge=list(knowledge), limit=30)
+        loaded_by_key = {(p.naming_sql_id, p.sql_name): p for p in scoped_profiles}
+        recalled_keys = list(dict.fromkeys((p.naming_sql_id, p.sql_name) for p in recalled[:30] if isinstance(p, NamingSqlProfile)))
+        candidates = [loaded_by_key[key] for key in recalled_keys if key in loaded_by_key] + [p for p in profiles if p.is_full_table]
+        alias_pairs: set[tuple[str, str]] = set()
+        for item in knowledge:
+            try: alias_items = item.param_aliases.items()
+            except Exception: continue
+            for name, aliases in alias_items:
+                if not isinstance(aliases, list): continue
+                for alias in aliases[:50]:
+                    pair = (_key(name), _key(alias))
+                    if pair[0] and pair[1]: alias_pairs.add(pair)
+        for profile in candidates:
             plan = self._bind(profile, spec, knowledge)
             codes = []
             if plan.unbound_params: codes.append("PARAM_UNBOUND")
             if plan.ambiguous_params: codes.append("PARAM_AMBIGUOUS")
-            searchable_filters = {_key(x) for x in (*profile.filter_fields, *(p.name for p in profile.params), *profile.scope_tags) if _key(x)}
+            searchable_filters = {_key(x) for x in (*profile.filter_fields, *(p.name for p in profile.params)) if _key(x)}
             def covered(req: str) -> bool:
-                return any(req == item or req in item or item in req for item in searchable_filters)
+                return req in searchable_filters or any((item, req) in alias_pairs or (req, item) in alias_pairs for item in searchable_filters)
             if not all(covered(req) for req in requirements): codes.append("FILTER_NOT_COVERED")
             if profile.is_full_table:
                 binding_codes = [code for code in codes if code.startswith("PARAM_")]
@@ -198,7 +263,7 @@ class NamingSqlSelector:
                 continue
             text = " ".join((profile.sql_name, profile.label_name, profile.sql_description, profile.search_text, *profile.scope_tags))
             explicit = _key(profile.sql_name) in _key(request.query) or _key(profile.sql_name) in recommended
-            coverage = 1.0 if not requirements else sum(any(r == x or r in x or x in r for x in searchable_filters) for r in requirements) / len(requirements)
+            coverage = 1.0 if not requirements else sum(covered(r) for r in requirements) / len(requirements)
             avg = sum(x.confidence for x in plan.bindings) / len(plan.bindings) if plan.bindings else 0.0
             business = _tokens(" ".join((*spec.business_terms, *spec.scope_terms)))
             overlap = min(len(business.intersection(_tokens(text))) / max(len(business), 1), 1)

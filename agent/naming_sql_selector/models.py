@@ -12,6 +12,7 @@ class AvailableValue(SelectorModel):
     source_ref: str
     data_type: str = ""
     semantic_tags: list[str] = Field(default_factory=list)
+    is_list: bool = False
 
 
 class DataAccessSpec(SelectorModel):

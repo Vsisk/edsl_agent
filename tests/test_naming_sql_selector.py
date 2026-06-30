@@ -129,6 +129,18 @@ class StaticDevelopmentKnowledgeRetrieverTests(unittest.TestCase):
         self.assertEqual(first, second)
         self.assertEqual([], retriever.retrieve("missing", "account"))
 
+    def test_retriever_caps_oversized_limit_at_five(self):
+        entries = [
+            DevelopmentKnowledge(text=f"account {number}", bo_names=[f"BO_{number}"])
+            for number in range(8)
+        ]
+        retriever = StaticDevelopmentKnowledgeRetriever({"site": entries})
+
+        recalled = retriever.retrieve("site", "account", limit=100)
+
+        self.assertEqual(5, len(recalled))
+        self.assertEqual([f"BO_{number}" for number in range(5)], [item.bo_names[0] for item in recalled])
+
 
 class NamingSqlSelectorModelTests(unittest.TestCase):
     def test_development_knowledge_requires_text(self):

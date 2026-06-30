@@ -32,7 +32,8 @@ class StaticDevelopmentKnowledgeRetriever:
         self._entries_by_site = entries_by_site
 
     def retrieve(self, site_id: str, query: str, limit: int = 5) -> list[DevelopmentKnowledge]:
-        if limit <= 0:
+        bounded_limit = min(max(limit, 0), 5)
+        if bounded_limit == 0:
             return []
         query_tokens = _tokens(query)
         scored: list[tuple[int, int, DevelopmentKnowledge]] = []
@@ -44,4 +45,4 @@ class StaticDevelopmentKnowledgeRetriever:
             if score:
                 scored.append((-score, index, entry))
         scored.sort(key=lambda item: (item[0], item[1]))
-        return [entry for _, _, entry in scored[:limit]]
+        return [entry for _, _, entry in scored[:bounded_limit]]

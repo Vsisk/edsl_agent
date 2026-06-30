@@ -395,7 +395,7 @@ git commit -m "feat: adapt node actions for orchestration"
 - Create: `agent/operation_orchestration/executor.py`
 - Create: `tests/test_operation_executor.py`
 
-- [ ] **Step 1: Write failing executor tests**
+- [x] **Step 1: Write failing executor tests**
 
 Use recording fake locator/adapter objects. Test: roots invoke locator; dependent operations never invoke it; single/multiple dependency target resolution; output-ID rules; the second operation sees paths from a rebuilt index; and adapter failure returns prior tree changes while leaving later operations pending.
 
@@ -417,23 +417,23 @@ def test_dependent_operation_uses_upstream_output_without_locator():
     assert result.operations[1].target_node_id == result.operations[0].output_node_id
 ```
 
-- [ ] **Step 2: Run executor tests and verify RED**
+- [x] **Step 2: Run executor tests and verify RED**
 
 Run: `python -m pytest tests/test_operation_executor.py -q`
 
 Expected: executor import fails.
 
-- [ ] **Step 3: Implement execution**
+- [x] **Step 3: Implement execution**
 
 Deep-copy operations and tree at entry. Validate/sort before mutation. For roots call locator and require success; for dependent operations use the sole dependency or `target_from`, require an executed upstream output ID, rebuild the current index, and populate both target fields. Dispatch to the four adapter methods, replace the current tree from the result, rebuild the index immediately, fill output ID according to intent, require it to be non-empty, and mark executed. Catch the first exception, mark only the current operation failed, preserve unvisited statuses, and return the partial tree.
 
-- [ ] **Step 4: Run executor tests and verify GREEN**
+- [x] **Step 4: Run executor tests and verify GREEN**
 
 Run: `python -m pytest tests/test_operation_executor.py -q`
 
 Expected: all tests pass.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```powershell
 git add agent/operation_orchestration/executor.py tests/test_operation_executor.py

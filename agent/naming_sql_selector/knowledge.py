@@ -7,7 +7,7 @@ from .models import SelectorModel
 
 
 class DevelopmentKnowledge(SelectorModel):
-    text: str = ""
+    text: str
     bo_names: list[str] = Field(default_factory=list)
     naming_sql_names: list[str] = Field(default_factory=list)
     semantic_tags: list[str] = Field(default_factory=list)

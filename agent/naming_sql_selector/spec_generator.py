@@ -2,7 +2,11 @@ import json
 import re
 from typing import Any
 
-from .knowledge import DevelopmentKnowledgeRetriever, NoOpDevelopmentKnowledgeRetriever
+from .knowledge import (
+    DevelopmentKnowledge,
+    DevelopmentKnowledgeRetriever,
+    NoOpDevelopmentKnowledgeRetriever,
+)
 from .models import AvailableValue, DataAccessSpec, NamingSqlSelectionRequest
 
 
@@ -39,10 +43,14 @@ class DataAccessSpecGenerator:
         if isinstance(structured.get("requires_naming_sql"), bool):
             requires_naming_sql = structured["requires_naming_sql"]
         else:
-            normalized = re.sub(r"[\s_-]+", "", combined.lower())
             requires_naming_sql = any(
-                signal in normalized
-                for signal in ("查表", "查询表", "datasource", "namingsql")
+                re.search(pattern, combined, flags=re.IGNORECASE)
+                for pattern in (
+                    r"(?<![a-z0-9])查表(?![a-z0-9])",
+                    r"(?<![a-z0-9])查询表(?![a-z0-9])",
+                    r"(?<![a-z0-9])data[\s_-]*source(?![a-z0-9])",
+                    r"(?<![a-z0-9])naming[\s_-]*sql(?![a-z0-9])",
+                )
             )
 
         available_values: list[AvailableValue] = []
@@ -63,9 +71,18 @@ class DataAccessSpecGenerator:
         business_terms = _strings(structured.get("business_terms", []))
         bo_hints = _strings(structured.get("bo_hints", []))
         try:
-            knowledge = self._retriever.retrieve(request.site_id, combined, limit=5)
+            returned_knowledge = self._retriever.retrieve(request.site_id, combined, limit=5)
         except Exception:
-            knowledge = []
+            returned_knowledge = []
+        knowledge: list[DevelopmentKnowledge] = []
+        for item in returned_knowledge if isinstance(returned_knowledge, list) else []:
+            try:
+                entry = item if isinstance(item, DevelopmentKnowledge) else DevelopmentKnowledge.model_validate(item)
+            except Exception:
+                continue
+            knowledge.append(entry)
+            if len(knowledge) == 5:
+                break
         for entry in knowledge:
             bo_hints.extend(_strings(entry.bo_names))
             business_terms.extend(_strings(entry.semantic_tags))

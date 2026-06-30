@@ -55,6 +55,13 @@ class DataAccessSpecGeneratorTests(unittest.TestCase):
                 self.assertTrue(generator.generate(request).requires_naming_sql)
         self.assertFalse(generator.generate(NamingSqlSelectionRequest(site_id="s", query="query account totals")).requires_naming_sql)
 
+    def test_inference_terms_do_not_match_inside_larger_identifiers(self):
+        generator = DataAccessSpecGenerator()
+        for phrase in ("mydatasourcehelper", "renamingsqltable"):
+            with self.subTest(phrase=phrase):
+                request = NamingSqlSelectionRequest(site_id="s", query=phrase)
+                self.assertFalse(generator.generate(request).requires_naming_sql)
+
     def test_copies_filter_requirements_and_allow_full_table(self):
         request = NamingSqlSelectionRequest(
             site_id="s",
@@ -89,6 +96,24 @@ class DataAccessSpecGeneratorTests(unittest.TestCase):
         request = NamingSqlSelectionRequest(site_id="s", query="查表")
         self.assertTrue(DataAccessSpecGenerator(FailingRetriever()).generate(request).requires_naming_sql)
 
+    def test_generator_ignores_malformed_knowledge_and_merges_at_most_five(self):
+        class UnboundedRetriever:
+            def retrieve(self, site_id, query, limit=5):
+                return [
+                    None,
+                    {"text": "one", "bo_names": ["BO_1"]},
+                    {"wrong": "shape"},
+                    *[
+                        DevelopmentKnowledge(text=str(number), bo_names=[f"BO_{number}"])
+                        for number in range(2, 8)
+                    ],
+                ]
+
+        spec = DataAccessSpecGenerator(UnboundedRetriever()).generate(
+            NamingSqlSelectionRequest(site_id="s", query="ordinary")
+        )
+        self.assertEqual(["BO_1", "BO_2", "BO_3", "BO_4", "BO_5"], spec.bo_hints)
+
 
 class StaticDevelopmentKnowledgeRetrieverTests(unittest.TestCase):
     def test_relevance_site_isolation_limit_and_deterministic_order(self):
@@ -106,6 +131,10 @@ class StaticDevelopmentKnowledgeRetrieverTests(unittest.TestCase):
 
 
 class NamingSqlSelectorModelTests(unittest.TestCase):
+    def test_development_knowledge_requires_text(self):
+        with self.assertRaises(ValidationError):
+            DevelopmentKnowledge()
+
     def test_models_are_strict_and_request_is_session_local(self):
         for model, payload in (
             (DataAccessSpec, {"unexpected": 1}),

@@ -1,3 +1,5 @@
+from typing import Literal
+
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -50,3 +52,17 @@ class NamingSqlProfile(SelectorModel):
     scope_tags: list[str] = Field(default_factory=list)
     is_full_table: bool = True
     search_text: str = ""
+
+
+class BoCandidate(SelectorModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    bo_name: str
+    score: float
+    summary: str
+
+
+class BoResolution(SelectorModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    bo_name: str
+    review_mode: Literal["llm", "deterministic_fallback", "not_required"]
+    reasons: list[str] = Field(default_factory=list)

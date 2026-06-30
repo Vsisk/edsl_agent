@@ -4,12 +4,16 @@ from pydantic import ValidationError
 
 from agent.naming_sql_selector import (
     AvailableValue,
+    BoCandidate,
+    BoResolver,
     DataAccessSpec,
     DataAccessSpecGenerator,
     DevelopmentKnowledge,
     NamingSqlSelectionRequest,
     StaticDevelopmentKnowledgeRetriever,
+    NamingSqlProfile,
 )
+from agent.resource_manager.models import BoRegistry, DataTypeEnum, PropertyTerm
 from agent.naming_sql_selector.spec_generator import (
     MAX_AVAILABLE_CONTEXT,
     MAX_COMBINED_QUERY_CHARS,
@@ -252,6 +256,102 @@ class NamingSqlSelectorModelTests(unittest.TestCase):
                     model(**payload)
         self.assertNotIn("project_id", NamingSqlSelectionRequest.model_fields)
         self.assertNotIn("source_key", NamingSqlSelectionRequest.model_fields)
+
+
+def _bo(name, description="", properties=()):
+    return BoRegistry(
+        resource_id=name.lower(), bo_name=name, bo_desc=description,
+        property_list=[PropertyTerm(field_name=field, description=desc, data_type=DataTypeEnum.basic, data_type_name="string") for field, desc in properties],
+    )
+
+
+def _profile(bo_name, search_text="", filter_fields=(), scope_tags=()):
+    return NamingSqlProfile(
+        site_id="s", bo_name=bo_name, naming_sql_id=f"{bo_name}-sql", sql_name="hidden command profile",
+        filter_fields=list(filter_fields), scope_tags=list(scope_tags), search_text=search_text,
+    )
+
+
+class BoResolverTests(unittest.TestCase):
+    def setUp(self):
+        self.registry = {
+            "BO_AR_TRANS": _bo("BO_AR_TRANS", "account transaction records", (("ACCOUNT_ID", "account identifier"),)),
+            "BO_FREE_RESOURCE": _bo("BO_FREE_RESOURCE", "free resource inventory", (("RESOURCE_ID", "resource identifier"),)),
+        }
+        self.profiles = {
+            "BO_AR_TRANS": [_profile("BO_AR_TRANS", "account transaction", ("ACCOUNT_ID",), ("account",))],
+            "BO_FREE_RESOURCE": [_profile("BO_FREE_RESOURCE", "free resource", ("RESOURCE_ID",), ("resource",))],
+        }
+
+    def test_explicit_valid_is_normalized_and_does_not_call_reviewer(self):
+        class Reviewer:
+            def review(self, **kwargs):
+                raise AssertionError("reviewer must not run")
+        result = BoResolver(Reviewer()).resolve(explicit_bo="  BO_AR_TRANS  ", spec=DataAccessSpec(), bo_registry=self.registry, profiles=self.profiles)
+        self.assertEqual(("BO_AR_TRANS", "not_required"), (result.bo_name, result.review_mode))
+
+    def test_invalid_explicit_and_empty_registry_raise_bo_not_loaded(self):
+        resolver = BoResolver()
+        with self.assertRaisesRegex(ValueError, "BO_NOT_LOADED"):
+            resolver.resolve(explicit_bo="BO_MISSING", spec=DataAccessSpec(), bo_registry=self.registry, profiles=self.profiles)
+        with self.assertRaisesRegex(ValueError, "BO_NOT_LOADED: no BO candidates"):
+            resolver.resolve(explicit_bo=None, spec=DataAccessSpec(), bo_registry={}, profiles={})
+
+    def test_hint_and_semantic_recall_prefers_account_transactions(self):
+        spec = DataAccessSpec(business_terms=["account records"], bo_hints=["BO_AR_TRANS"], filter_requirements=["account id"])
+        result = BoResolver().resolve(explicit_bo=None, spec=spec, bo_registry=self.registry, profiles=self.profiles)
+        self.assertEqual(("BO_AR_TRANS", "deterministic_fallback"), (result.bo_name, result.review_mode))
+        self.assertTrue(result.reasons)
+
+    def test_valid_reviewer_can_choose_supplied_lower_ranked_candidate(self):
+        class Reviewer:
+            def review(self, *, spec, candidates):
+                return candidates[-1].bo_name
+        result = BoResolver(Reviewer()).resolve(explicit_bo=None, spec=DataAccessSpec(business_terms=["account"]), bo_registry=self.registry, profiles=self.profiles)
+        self.assertEqual(("BO_FREE_RESOURCE", "llm"), (result.bo_name, result.review_mode))
+
+    def test_invalid_none_and_throwing_reviewers_fall_back_to_top_one(self):
+        class NoneReviewer:
+            def review(self, **kwargs):
+                return None
+        class InventingReviewer:
+            def review(self, **kwargs):
+                return "BO_INVENTED"
+        class Throwing:
+            def review(self, **kwargs):
+                raise RuntimeError("offline")
+        for reviewer in (NoneReviewer(), InventingReviewer(), Throwing()):
+            with self.subTest(reviewer=reviewer):
+                result = BoResolver(reviewer).resolve(explicit_bo=None, spec=DataAccessSpec(business_terms=["account"]), bo_registry=self.registry, profiles=self.profiles)
+                self.assertEqual(("BO_AR_TRANS", "deterministic_fallback"), (result.bo_name, result.review_mode))
+
+    def test_reviewer_receives_at_most_five_compact_candidates(self):
+        captured = []
+        class Reviewer:
+            def review(self, *, spec, candidates):
+                captured.extend(candidates)
+                return None
+        registry = {f"BO_{index}": _bo(f"BO_{index}", "common") for index in range(8)}
+        profiles = {name: [_profile(name, "common confidential_sql_text")] for name in registry}
+        BoResolver(Reviewer(), max_candidates=99).resolve(explicit_bo=None, spec=DataAccessSpec(business_terms=["common"]), bo_registry=registry, profiles=profiles)
+        self.assertLessEqual(len(captured), 5)
+        self.assertTrue(all(type(item) is BoCandidate for item in captured))
+        self.assertTrue(all("confidential_sql_text" not in repr(item) for item in captured))
+
+    def test_zero_scores_choose_alphabetically_and_unknown_hint_is_not_candidate(self):
+        registry = {"BO_Z": _bo("BO_Z"), "BO_A": _bo("BO_A")}
+        result = BoResolver().resolve(explicit_bo=None, spec=DataAccessSpec(bo_hints=["BO_MISSING"]), bo_registry=registry, profiles={})
+        self.assertEqual("BO_A", result.bo_name)
+
+    def test_cjk_semantic_overlap_selects_account_and_free_resource(self):
+        registry = {
+            "BO_ACCOUNT": _bo("BO_ACCOUNT", "账户交易明细"),
+            "BO_FREE": _bo("BO_FREE", "免费资源列表"),
+        }
+        for term, expected in (("查询账户明细", "BO_ACCOUNT"), ("查找免费资源", "BO_FREE")):
+            with self.subTest(term=term):
+                result = BoResolver().resolve(explicit_bo=None, spec=DataAccessSpec(business_terms=[term]), bo_registry=registry, profiles={})
+                self.assertEqual(expected, result.bo_name)
 
 
 if __name__ == "__main__":

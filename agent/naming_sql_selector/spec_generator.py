@@ -64,7 +64,7 @@ class DataAccessSpecGenerator:
     def __init__(self, retriever: DevelopmentKnowledgeRetriever | None = None):
         self._retriever = retriever or NoOpDevelopmentKnowledgeRetriever()
 
-    def generate(self, request: NamingSqlSelectionRequest) -> DataAccessSpec:
+    def generate(self, request: NamingSqlSelectionRequest, knowledge: list[DevelopmentKnowledge] | None = None) -> DataAccessSpec:
         structured = request.structured_spec
         node_text = _safe_text(request.node)
         parent_text = _safe_text(request.parent_node)
@@ -119,20 +119,23 @@ class DataAccessSpecGenerator:
                 semantic_tags=_bounded_unique(explicit_tags + _semantic_tokens(normalized_name, normalized_source_ref)),
             ))
 
-        try:
-            returned_knowledge = self._retriever.retrieve(request.site_id, combined, limit=5)
-        except Exception:
-            returned_knowledge = []
-        knowledge: list[DevelopmentKnowledge] = []
+        if knowledge is None:
+            try:
+                returned_knowledge = self._retriever.retrieve(request.site_id, combined, limit=5)
+            except Exception:
+                returned_knowledge = []
+        else:
+            returned_knowledge = knowledge
+        bounded_knowledge: list[DevelopmentKnowledge] = []
         for item in returned_knowledge if isinstance(returned_knowledge, list) else []:
             try:
                 entry = item if isinstance(item, DevelopmentKnowledge) else DevelopmentKnowledge.model_validate(item)
             except Exception:
                 continue
-            knowledge.append(entry)
-            if len(knowledge) == 5:
+            bounded_knowledge.append(entry)
+            if len(bounded_knowledge) == 5:
                 break
-        for entry in knowledge:
+        for entry in bounded_knowledge:
             bo_hints.extend(_strings(entry.bo_names))
             business_terms.extend(_strings(entry.semantic_tags))
 

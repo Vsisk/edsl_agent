@@ -66,3 +66,57 @@ class BoResolution(SelectorModel):
     bo_name: str
     review_mode: Literal["llm", "deterministic_fallback", "not_required"]
     reasons: list[str] = Field(default_factory=list)
+
+
+class SelectionOutputModel(SelectorModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+
+class ParamBinding(SelectionOutputModel):
+    param_name: str
+    source_ref: str
+    confidence: float
+    reason: str
+
+
+class ParamBindingPlan(SelectionOutputModel):
+    bindings: list[ParamBinding] = Field(default_factory=list)
+    unbound_params: list[str] = Field(default_factory=list)
+    ambiguous_params: list[str] = Field(default_factory=list)
+    is_complete: bool = False
+
+
+class SelectedNamingSql(SelectionOutputModel):
+    naming_sql_id: str
+    sql_name: str
+    score: float
+    binding_plan: ParamBindingPlan
+    reasons: list[str] = Field(default_factory=list)
+
+
+class RejectedNamingSql(SelectionOutputModel):
+    naming_sql_id: str
+    sql_name: str
+    reject_codes: list[str]
+
+
+class FallbackNamingSql(SelectionOutputModel):
+    naming_sql_id: str
+    sql_name: str
+    reason: str = "FULL_TABLE_FALLBACK_ONLY"
+
+
+class NamingSqlReviewCandidate(SelectionOutputModel):
+    naming_sql_id: str
+    sql_name: str
+    score: float
+    reasons: list[str] = Field(default_factory=list)
+
+
+class NamingSqlSelectionResult(SelectionOutputModel):
+    status: Literal["selected", "needs_review"]
+    selected_bo: BoResolution
+    selected: SelectedNamingSql | None = None
+    fallback_candidates: list[FallbackNamingSql] = Field(default_factory=list)
+    rejected_candidates: list[RejectedNamingSql] = Field(default_factory=list)
+    review_mode: Literal["llm", "deterministic_fallback", "not_required"]

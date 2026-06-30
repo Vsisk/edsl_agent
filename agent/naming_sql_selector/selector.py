@@ -1,13 +1,22 @@
 import re
-from typing import Protocol
+from typing import Any, Protocol
 
 from agent.resource_manager.models import BoRegistry
 
-from .models import BoCandidate, BoResolution, DataAccessSpec, NamingSqlProfile
+from .knowledge import DevelopmentKnowledge, DevelopmentKnowledgeRetriever, NoOpDevelopmentKnowledgeRetriever
+from .models import (BoCandidate, BoResolution, DataAccessSpec, FallbackNamingSql,
+    NamingSqlProfile, NamingSqlReviewCandidate, NamingSqlSelectionRequest,
+    NamingSqlSelectionResult, ParamBinding, ParamBindingPlan, RejectedNamingSql,
+    SelectedNamingSql)
+from .spec_generator import DataAccessSpecGenerator, MAX_TERM_CHARS
 
 
 class BoReviewer(Protocol):
     def review(self, *, spec: DataAccessSpec, candidates: list[BoCandidate]) -> str | None: ...
+
+
+class NamingSqlReviewer(Protocol):
+    def review(self, *, spec: DataAccessSpec, candidates: list[NamingSqlReviewCandidate]) -> str | None: ...
 
 
 _TOKEN_PATTERN = re.compile(r"[a-z0-9]+|[\u4e00-\u9fff]+")
@@ -81,3 +90,137 @@ class BoResolver:
         if isinstance(selected, str) and selected.strip() and selected in allowed_names:
             return BoResolution(bo_name=selected, review_mode="llm", reasons=["reviewer selected a supplied BO candidate"])
         return BoResolution(bo_name=candidates[0].bo_name, review_mode="deterministic_fallback", reasons=["deterministic top-1 candidate selected", *ranked[0][3][:3]])
+
+
+def _compact(value: Any) -> str:
+    return re.sub(r"\s+", " ", value).strip()[:MAX_TERM_CHARS] if isinstance(value, str) else ""
+
+
+def _key(value: Any) -> str:
+    return "".join(_TOKEN_PATTERN.findall(_compact(value).lower()))
+
+
+def _type_ok(param_type: str, value_type: str) -> bool:
+    left, right = _key(param_type), _key(value_type)
+    if not left or not right or left in {"unknown", "any"} or right in {"unknown", "any"}:
+        return True
+    numeric = {"int", "integer", "long", "short", "float", "double", "decimal", "number", "numeric"}
+    return left == right or left in numeric and right in numeric
+
+
+class NamingSqlSelector:
+    def __init__(self, knowledge_retriever: DevelopmentKnowledgeRetriever | None = None,
+                 spec_generator: DataAccessSpecGenerator | None = None,
+                 bo_resolver: BoResolver | None = None, reviewer: NamingSqlReviewer | None = None):
+        self._retriever = knowledge_retriever or getattr(spec_generator, "_retriever", None) or NoOpDevelopmentKnowledgeRetriever()
+        self._spec_generator = spec_generator
+        self._bo_resolver = bo_resolver or BoResolver()
+        self._reviewer = reviewer
+
+    def _knowledge(self, request: NamingSqlSelectionRequest) -> list[DevelopmentKnowledge]:
+        try:
+            raw = self._retriever.retrieve(request.site_id, request.query[:4000], limit=5)
+        except Exception:
+            raw = []
+        result: list[DevelopmentKnowledge] = []
+        for item in raw if isinstance(raw, list) else []:
+            try:
+                result.append(item if isinstance(item, DevelopmentKnowledge) else DevelopmentKnowledge.model_validate(item))
+            except Exception:
+                continue
+            if len(result) == 5: break
+        return result
+
+    def _bind(self, profile: NamingSqlProfile, spec: DataAccessSpec, knowledge: list[DevelopmentKnowledge]) -> ParamBindingPlan:
+        aliases: dict[str, set[str]] = {}
+        for entry in knowledge:
+            try:
+                items = entry.param_aliases.items()
+            except Exception:
+                continue
+            for name, values in items:
+                nk = _key(name)
+                if not nk or not isinstance(values, list): continue
+                aliases.setdefault(nk, set()).update(_key(x) for x in values[:50] if _key(x))
+        bindings, unbound, ambiguous = [], [], []
+        for param in profile.params:
+            pk = _key(param.name)
+            scored: list[tuple[float, Any, str]] = []
+            for value in spec.available_values:
+                if not _type_ok(param.data_type, value.data_type): continue
+                vk = _key(value.name)
+                if pk and pk == vk: scored.append((1.0, value, "exact normalized name")); continue
+                if vk and vk in aliases.get(pk, set()): scored.append((.95, value, "development alias")); continue
+                param_tags = _tokens(param.name)
+                value_tags = {_key(tag) for tag in value.semantic_tags if _key(tag)}
+                if {_key(tag) for tag in param_tags}.intersection(value_tags):
+                    scored.append((.85, value, "semantic tag and type"))
+            if not scored:
+                unbound.append(_compact(param.name)); continue
+            best = max(x[0] for x in scored); winners = [x for x in scored if x[0] == best]
+            if len(winners) != 1:
+                ambiguous.append(_compact(param.name)); continue
+            confidence, value, reason = winners[0]
+            bindings.append(ParamBinding(param_name=_compact(param.name), source_ref=_compact(value.source_ref), confidence=confidence, reason=reason))
+        return ParamBindingPlan(bindings=bindings, unbound_params=unbound, ambiguous_params=ambiguous,
+                                is_complete=not unbound and not ambiguous and len(bindings) == len(profile.params))
+
+    def select(self, request: NamingSqlSelectionRequest, loaded_resource: Any,
+               data_access_spec: DataAccessSpec | None = None) -> NamingSqlSelectionResult:
+        knowledge = self._knowledge(request)
+        if data_access_spec is None:
+            spec = (self._spec_generator or DataAccessSpecGenerator()).generate(request, knowledge=knowledge)
+        else:
+            spec = data_access_spec.model_copy(deep=True)
+        resolution = self._bo_resolver.resolve(explicit_bo=request.bo_name, spec=spec,
+            bo_registry=loaded_resource.bo_registry, profiles=loaded_resource.naming_sql_profiles)
+        profiles = []
+        for key, values in loaded_resource.naming_sql_profiles.items():
+            bo = loaded_resource.bo_registry.get(key)
+            if bo is None or bo.bo_name != resolution.bo_name: continue
+            profiles.extend(p for p in values if p.site_id == request.site_id and p.bo_name == resolution.bo_name)
+        rejected, fallbacks, survivors = [], [], []
+        recommended = {_key(x) for k in knowledge for x in k.naming_sql_names if _key(x)}
+        requirements = [_key(x) for x in spec.filter_requirements if _key(x)]
+        for profile in profiles:
+            plan = self._bind(profile, spec, knowledge)
+            codes = []
+            if plan.unbound_params: codes.append("PARAM_UNBOUND")
+            if plan.ambiguous_params: codes.append("PARAM_AMBIGUOUS")
+            searchable_filters = {_key(x) for x in (*profile.filter_fields, *(p.name for p in profile.params), *profile.scope_tags) if _key(x)}
+            def covered(req: str) -> bool:
+                return any(req == item or req in item or item in req for item in searchable_filters)
+            if not all(covered(req) for req in requirements): codes.append("FILTER_NOT_COVERED")
+            if profile.is_full_table:
+                binding_codes = [code for code in codes if code.startswith("PARAM_")]
+                if binding_codes: rejected.append(RejectedNamingSql(naming_sql_id=profile.naming_sql_id, sql_name=profile.sql_name, reject_codes=binding_codes))
+                else: fallbacks.append((profile, plan))
+                continue
+            text = " ".join((profile.sql_name, profile.label_name, profile.sql_description, profile.search_text, *profile.scope_tags))
+            explicit = _key(profile.sql_name) in _key(request.query) or _key(profile.sql_name) in recommended
+            coverage = 1.0 if not requirements else sum(any(r == x or r in x or x in r for x in searchable_filters) for r in requirements) / len(requirements)
+            avg = sum(x.confidence for x in plan.bindings) / len(plan.bindings) if plan.bindings else 0.0
+            business = _tokens(" ".join((*spec.business_terms, *spec.scope_terms)))
+            overlap = min(len(business.intersection(_tokens(text))) / max(len(business), 1), 1)
+            query_tokens = _tokens(request.query); text_overlap = min(len(query_tokens.intersection(_tokens(text))) / max(len(query_tokens), 1), 1)
+            score = min(100.0, (40 if explicit else 0) + 25*coverage + 20*avg + 10*overlap + 5*text_overlap)
+            if score <= 0: codes.append("LOW_RELEVANCE")
+            if codes: rejected.append(RejectedNamingSql(naming_sql_id=profile.naming_sql_id, sql_name=profile.sql_name, reject_codes=codes))
+            else: survivors.append(SelectedNamingSql(naming_sql_id=profile.naming_sql_id, sql_name=profile.sql_name, score=score, binding_plan=plan, reasons=["deterministic relevance score"]))
+        survivors.sort(key=lambda x: (-x.score, x.sql_name, x.naming_sql_id)); fallbacks.sort(key=lambda x: (x[0].sql_name, x[0].naming_sql_id)); rejected.sort(key=lambda x: (x.sql_name, x.naming_sql_id))
+        chosen, mode = None, "deterministic_fallback"
+        if survivors:
+            chosen, mode = survivors[0], "not_required"
+            if len(survivors) > 1:
+                mode = "deterministic_fallback"; top = survivors[:5]; allowed = {x.naming_sql_id: x for x in top} | {x.sql_name: x for x in top}
+                if self._reviewer:
+                    try:
+                        reply = self._reviewer.review(spec=spec.model_copy(deep=True), candidates=[NamingSqlReviewCandidate(naming_sql_id=x.naming_sql_id, sql_name=x.sql_name, score=x.score, reasons=list(x.reasons)) for x in top])
+                    except Exception: reply = None
+                    if isinstance(reply, str) and reply in allowed: chosen, mode = allowed[reply], "llm"
+        elif spec.allow_full_table and fallbacks:
+            profile, plan = fallbacks.pop(0); chosen = SelectedNamingSql(naming_sql_id=profile.naming_sql_id, sql_name=profile.sql_name, score=0.0, binding_plan=plan, reasons=["full table explicitly allowed"])
+        fallback_models = [FallbackNamingSql(naming_sql_id=p.naming_sql_id, sql_name=p.sql_name) for p, _ in fallbacks]
+        return NamingSqlSelectionResult(status="selected" if chosen else "needs_review", selected_bo=resolution,
+            selected=chosen.model_copy(deep=True) if chosen else None, fallback_candidates=fallback_models,
+            rejected_candidates=rejected, review_mode=mode)

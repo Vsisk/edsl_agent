@@ -12,7 +12,12 @@ from agent.naming_sql_selector import (
     NamingSqlSelectionRequest,
     StaticDevelopmentKnowledgeRetriever,
     NamingSqlProfile,
+    NamingSqlParamProfile,
+    NamingSqlSelector,
+    ParamBindingPlan,
 )
+from agent.resource_manager.loader.resource_loader import LoadedResource
+from agent.resource_manager.loader.registry_models import DomainRegistry
 from agent.resource_manager.models import BoRegistry, DataTypeEnum, PropertyTerm
 from agent.naming_sql_selector.spec_generator import (
     MAX_AVAILABLE_CONTEXT,
@@ -256,6 +261,69 @@ class NamingSqlSelectorModelTests(unittest.TestCase):
                     model(**payload)
         self.assertNotIn("project_id", NamingSqlSelectionRequest.model_fields)
         self.assertNotIn("source_key", NamingSqlSelectionRequest.model_fields)
+
+    def test_binding_plan_defaults_are_isolated(self):
+        first, second = ParamBindingPlan(), ParamBindingPlan()
+        first.unbound_params.append("x")
+        self.assertEqual([], second.unbound_params)
+
+
+def _loaded(profiles):
+    registry = {"BO": _bo("BO", "orders")}
+    return LoadedResource({}, registry, {}, {}, DomainRegistry(), {"BO": profiles})
+
+
+class NamingSqlSelectionTests(unittest.TestCase):
+    def test_exact_alias_semantic_tie_and_parameterless_binding(self):
+        profiles = [
+            NamingSqlProfile(site_id="s", bo_name="BO", naming_sql_id="exact", sql_name="exact", params=[NamingSqlParamProfile(name="account_id", data_type="integer")], is_full_table=False, search_text="orders account"),
+            NamingSqlProfile(site_id="s", bo_name="BO", naming_sql_id="none", sql_name="none", params=[], is_full_table=False, search_text="orders"),
+        ]
+        spec = DataAccessSpec(business_terms=["orders"], available_values=[AvailableValue(name="Account-ID", source_ref="ctx.id", data_type="int")])
+        result = NamingSqlSelector().select(NamingSqlSelectionRequest(site_id="s", query="orders", bo_name="BO"), _loaded(profiles), spec)
+        self.assertEqual("exact", result.selected.naming_sql_id)
+        self.assertEqual(1.0, result.selected.binding_plan.bindings[0].confidence)
+
+    def test_retrieved_alias_binds_and_equal_best_values_are_ambiguous(self):
+        profile = NamingSqlProfile(site_id="s", bo_name="BO", naming_sql_id="a", sql_name="a", params=[NamingSqlParamProfile(name="customer_id")], is_full_table=False, search_text="orders")
+        knowledge = StaticDevelopmentKnowledgeRetriever({"s": [DevelopmentKnowledge(text="orders", param_aliases={"customer_id": ["client"]})]})
+        one = DataAccessSpec(business_terms=["orders"], available_values=[AvailableValue(name="client", source_ref="ctx.client")])
+        selected = NamingSqlSelector(knowledge).select(NamingSqlSelectionRequest(site_id="s", query="orders", bo_name="BO"), _loaded([profile]), one)
+        self.assertEqual(.95, selected.selected.binding_plan.bindings[0].confidence)
+        tied = one.model_copy(update={"available_values": [AvailableValue(name="client", source_ref="a"), AvailableValue(name="client", source_ref="b")]})
+        rejected = NamingSqlSelector(knowledge).select(NamingSqlSelectionRequest(site_id="s", query="orders", bo_name="BO"), _loaded([profile]), tied)
+        self.assertEqual(["PARAM_AMBIGUOUS"], rejected.rejected_candidates[0].reject_codes)
+
+    def test_unbound_and_ambiguous_are_rejected_and_fulltable_is_fallback(self):
+        profiles = [
+            NamingSqlProfile(site_id="s", bo_name="BO", naming_sql_id="bad", sql_name="bad", params=[NamingSqlParamProfile(name="year", data_type="date")], is_full_table=False, search_text="orders"),
+            NamingSqlProfile(site_id="s", bo_name="BO", naming_sql_id="full", sql_name="full", is_full_table=True, search_text="orders"),
+        ]
+        spec = DataAccessSpec(business_terms=["orders"], available_values=[AvailableValue(name="year", source_ref="x", data_type="integer")])
+        result = NamingSqlSelector().select(NamingSqlSelectionRequest(site_id="s", query="orders", bo_name="BO"), _loaded(profiles), spec)
+        self.assertIsNone(result.selected)
+        self.assertEqual(["PARAM_UNBOUND"], result.rejected_candidates[0].reject_codes)
+        self.assertEqual(["full"], [x.naming_sql_id for x in result.fallback_candidates])
+
+    def test_filter_coverage_and_valid_reviewer_choice(self):
+        profiles = [NamingSqlProfile(site_id="s", bo_name="BO", naming_sql_id=x, sql_name=x, filter_fields=["year"], is_full_table=False, search_text="orders year") for x in ("a", "b")]
+        class Reviewer:
+            def review(self, *, spec, candidates): return "b"
+        spec = DataAccessSpec(business_terms=["orders"], filter_requirements=["year"])
+        result = NamingSqlSelector(reviewer=Reviewer()).select(NamingSqlSelectionRequest(site_id="s", query="orders", bo_name="BO"), _loaded(profiles), spec)
+        self.assertEqual(("b", "llm"), (result.selected.naming_sql_id, result.review_mode))
+
+    def test_filter_expression_matches_profile_field(self):
+        profile = NamingSqlProfile(site_id="s", bo_name="BO", naming_sql_id="a", sql_name="a", filter_fields=["year"], is_full_table=False, search_text="orders")
+        result = NamingSqlSelector().select(NamingSqlSelectionRequest(site_id="s", query="orders", bo_name="BO"), _loaded([profile]), DataAccessSpec(business_terms=["orders"], filter_requirements=["year = 2025"]))
+        self.assertEqual("a", result.selected.naming_sql_id)
+
+    def test_allow_fulltable_selects_only_bindable_and_no_profiles_needs_review(self):
+        profile = NamingSqlProfile(site_id="s", bo_name="BO", naming_sql_id="full", sql_name="full", params=[], is_full_table=True)
+        result = NamingSqlSelector().select(NamingSqlSelectionRequest(site_id="s", query="x", bo_name="BO"), _loaded([profile]), DataAccessSpec(allow_full_table=True))
+        self.assertEqual("full", result.selected.naming_sql_id)
+        empty = NamingSqlSelector().select(NamingSqlSelectionRequest(site_id="s", query="x", bo_name="BO"), _loaded([]), DataAccessSpec())
+        self.assertEqual(("needs_review", None, "deterministic_fallback"), (empty.status, empty.selected, empty.review_mode))
 
 
 def _bo(name, description="", properties=()):

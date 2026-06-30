@@ -77,6 +77,6 @@ class BoResolver:
                 selected = self._reviewer.review(spec=spec, candidates=reviewer_candidates)
             except Exception:
                 selected = None
-        if selected in allowed_names:
+        if isinstance(selected, str) and selected.strip() and selected in allowed_names:
             return BoResolution(bo_name=selected, review_mode="llm", reasons=["reviewer selected a supplied BO candidate"])
         return BoResolution(bo_name=candidates[0].bo_name, review_mode="deterministic_fallback", reasons=["deterministic top-1 candidate selected", *ranked[0][3][:3]])

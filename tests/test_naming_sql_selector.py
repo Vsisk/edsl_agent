@@ -325,6 +325,24 @@ class BoResolverTests(unittest.TestCase):
                 result = BoResolver(reviewer).resolve(explicit_bo=None, spec=DataAccessSpec(business_terms=["account"]), bo_registry=self.registry, profiles=self.profiles)
                 self.assertEqual(("BO_AR_TRANS", "deterministic_fallback"), (result.bo_name, result.review_mode))
 
+    def test_unhashable_reviewer_results_fall_back_to_top_one(self):
+        class MalformedReviewer:
+            def __init__(self, result):
+                self.result = result
+
+            def review(self, **kwargs):
+                return self.result
+
+        for malformed in ([], {}):
+            with self.subTest(malformed=malformed):
+                result = BoResolver(MalformedReviewer(malformed)).resolve(
+                    explicit_bo=None,
+                    spec=DataAccessSpec(business_terms=["account"]),
+                    bo_registry=self.registry,
+                    profiles=self.profiles,
+                )
+                self.assertEqual(("BO_AR_TRANS", "deterministic_fallback"), (result.bo_name, result.review_mode))
+
     def test_reviewer_receives_at_most_five_compact_candidates(self):
         captured = []
         class Reviewer:

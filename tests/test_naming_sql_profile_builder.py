@@ -58,6 +58,32 @@ class NamingSqlProfileBuilderTest(unittest.TestCase):
         self.assertEqual(profile.filter_fields, [])
         self.assertTrue(profile.is_full_table)
 
+    def test_malformed_predicate_rejects_logical_keyword_as_rhs(self):
+        profile = NamingSqlProfileBuilder().build("site-a", "BB_TRANS", definition("SELECT * FROM T WHERE ACCT_ID = AND"))
+        self.assertEqual(profile.filter_fields, [])
+        self.assertTrue(profile.is_full_table)
+
+    def test_malformed_predicate_rejects_empty_in_list(self):
+        profile = NamingSqlProfileBuilder().build("site-a", "BB_TRANS", definition("SELECT * FROM T WHERE ACCT_ID IN ()"))
+        self.assertEqual(profile.filter_fields, [])
+        self.assertTrue(profile.is_full_table)
+
+    def test_normalizes_lowercase_filter_field_to_uppercase(self):
+        profile = NamingSqlProfileBuilder().build("site-a", "BB_TRANS", definition("SELECT * FROM T WHERE acct_id = :x"))
+        self.assertEqual(profile.filter_fields, ["ACCT_ID"])
+        self.assertFalse(profile.is_full_table)
+
+    def test_preserves_supported_predicate_rhs_forms(self):
+        profile = NamingSqlProfileBuilder().build(
+            "site-a",
+            "BB_TRANS",
+            definition(
+                "SELECT * FROM T WHERE left_id = right_id AND name LIKE 'A%' "
+                "AND amount BETWEEN 1 AND 2 AND closed_at IS NULL AND kind IN (:kind)"
+            ),
+        )
+        self.assertEqual(profile.filter_fields, ["LEFT_ID", "NAME", "AMOUNT", "CLOSED_AT", "KIND"])
+
     def test_profile_forbids_unknown_fields(self):
         with self.assertRaises(ValidationError):
             NamingSqlProfile(

@@ -8,11 +8,19 @@ from .models import NamingSqlParamProfile, NamingSqlProfile
 
 _WHERE_PATTERN = re.compile(r"\bWHERE\b(?P<predicate>.*)", re.IGNORECASE | re.DOTALL)
 _IDENTIFIER = r"[A-Za-z_][\w$]*"
-_VALUE = rf"(?::(?:{_IDENTIFIER})|'(?:''|[^'])*'|\"(?:\"\"|[^\"])*\"|[-+]?\d+(?:\.\d+)?|{_IDENTIFIER}(?:\.{_IDENTIFIER})?)"
+_CLAUSE_KEYWORDS = (
+    r"AND|OR|WHERE|GROUP|ORDER|HAVING|JOIN|LEFT|RIGHT|INNER|OUTER|FULL|CROSS|ON|"
+    r"LIMIT|OFFSET|UNION|SELECT|FROM|NOT"
+)
+_VALUE = (
+    rf"(?::(?:{_IDENTIFIER})|'(?:''|[^'])*'|\"(?:\"\"|[^\"])*\"|[-+]?\d+(?:\.\d+)?|NULL\b|"
+    rf"(?!(?:{_CLAUSE_KEYWORDS})\b){_IDENTIFIER}(?:\.{_IDENTIFIER})?)"
+)
+_IN_OPERANDS = rf"{_VALUE}(?:\s*,\s*{_VALUE})*"
 _PREDICATE_PATTERN = re.compile(
     rf"(?<![\w])(?:{_IDENTIFIER}\.)?(?P<field>{_IDENTIFIER})\s*(?:"
     rf"(?:=|!=|<>|<=|>=|<|>|LIKE\b)\s*{_VALUE}"
-    rf"|IN\s*(?:\([^)]*\)|:{_IDENTIFIER})"
+    rf"|IN\s*(?:\(\s*{_IN_OPERANDS}\s*\)|:{_IDENTIFIER})"
     rf"|BETWEEN\s+{_VALUE}\s+AND\s+{_VALUE}"
     rf"|IS\s+(?:NOT\s+)?NULL\b)",
     re.IGNORECASE,
@@ -57,7 +65,7 @@ class NamingSqlProfileBuilder:
             return []
         fields: list[str] = []
         for match in _PREDICATE_PATTERN.finditer(where_match.group("predicate")):
-            field = match.group("field")
+            field = match.group("field").upper()
             if field not in fields:
                 fields.append(field)
         return fields

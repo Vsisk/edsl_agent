@@ -12,11 +12,20 @@ from agent.planner.models import (
     Plan,
 )
 
+MAX_PLAN_DEPTH = 100
+MAX_VISITED_NODES = 10_000
+
 
 def validate_naming_sql_plan(plan: Plan, result: NamingSqlSelectionResult) -> None:
     """Reject any planner mutation of an approved NamingSQL selection and bindings."""
     selected = result.selected
-    if result.status == "needs_review" or selected is None:
+    if (
+        result.status == "needs_review"
+        or selected is None
+        or not selected.binding_plan.is_complete
+        or bool(selected.binding_plan.unbound_params)
+        or bool(selected.binding_plan.ambiguous_params)
+    ):
         raise ValueError("NAMING_SQL_REVIEW_REQUIRED")
 
     expected = selected.binding_plan.bindings
@@ -41,13 +50,27 @@ def validate_naming_sql_plan(plan: Plan, result: NamingSqlSelectionResult) -> No
 
 
 def _walk(value: object) -> Iterator[BaseModel]:
-    if isinstance(value, BaseModel):
-        yield value
-        for field_name in type(value).model_fields:
-            yield from _walk(getattr(value, field_name))
-    elif isinstance(value, (list, tuple)):
-        for item in value:
-            yield from _walk(item)
+    stack: list[tuple[object, int, bool]] = [(value, 0, False)]
+    active: set[int] = set()
+    visited = 0
+    while stack:
+        current, depth, exiting = stack.pop()
+        if exiting:
+            active.remove(id(current))
+            continue
+        if not isinstance(current, (BaseModel, list, tuple)):
+            continue
+        visited += 1
+        if depth > MAX_PLAN_DEPTH or visited > MAX_VISITED_NODES or id(current) in active:
+            raise ValueError("NAMING_SQL_PLAN_TOO_COMPLEX")
+        active.add(id(current))
+        stack.append((current, depth, True))
+        if isinstance(current, BaseModel):
+            yield current
+            children = [getattr(current, name) for name in type(current).model_fields]
+        else:
+            children = list(current)
+        stack.extend((child, depth + 1, False) for child in reversed(children))
 
 
 def _bounded(value: str, limit: int = 80) -> str:

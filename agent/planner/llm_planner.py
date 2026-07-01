@@ -15,6 +15,11 @@ from agent.naming_sql_selector.plan_validator import validate_naming_sql_plan
 if TYPE_CHECKING:
     from agent.naming_sql_selector.models import NamingSqlSelectionResult
 
+MAX_SUMMARY_TEXT = 512
+MAX_SUMMARY_ITEMS = 100
+MAX_INVALID_PLAN_EXCERPT = 12_000
+MAX_ERROR_EXCERPT = 2_000
+
 
 class LLMPlanner:
     def __init__(self, client: LLMClient | None = None):
@@ -54,7 +59,7 @@ class LLMPlanner:
                 validate_naming_sql_plan(plan, filtered_env.naming_sql_selection)
             return plan
         except (ValueError, ValidationError) as exc:
-            invalid_plan_json = _dump_json(locals().get("response", {}))
+            invalid_plan_json = _invalid_plan_diagnostic(locals().get("response", {}))
             return self._repair(
                 node_info=node_info,
                 user_query=user_query,
@@ -62,7 +67,7 @@ class LLMPlanner:
                 node_info_json=node_info_json,
                 plan_schema_json=plan_schema_json,
                 invalid_plan_json=invalid_plan_json,
-                error_message=str(exc),
+                error_message=_error_diagnostic(exc),
                 naming_sql_selection=filtered_env.naming_sql_selection,
             )
 
@@ -98,19 +103,31 @@ class LLMPlanner:
 
 def _summarize_node(node_info: NodeDef) -> dict[str, Any]:
     return {
-        "node_id": node_info.node_id,
-        "node_path": node_info.node_path,
-        "node_name": node_info.node_name,
-        "description": node_info.description,
+        "node_id": _summary_text(node_info.node_id),
+        "node_path": _summary_text(node_info.node_path),
+        "node_name": _summary_text(node_info.node_name),
+        "description": _summary_text(node_info.description),
     }
 
 
 def _summarize_filtered_environment(filtered_env: FilteredEnvironment) -> dict[str, Any]:
     summary = {
-        "global_context": [_summarize_context(item) for item in filtered_env.selected_global_contexts],
-        "local_context": [_summarize_context(item) for item in filtered_env.visible_local_context],
-        "bo": [_summarize_bo(item) for item in filtered_env.selected_bos],
-        "function": [_summarize_function(item) for item in filtered_env.selected_functions],
+        "global_context": [
+            _summarize_context(item)
+            for item in filtered_env.selected_global_contexts[:MAX_SUMMARY_ITEMS]
+        ],
+        "local_context": [
+            _summarize_context(item)
+            for item in filtered_env.visible_local_context[:MAX_SUMMARY_ITEMS]
+        ],
+        "bo": [
+            _summarize_bo(item)
+            for item in filtered_env.selected_bos[:MAX_SUMMARY_ITEMS]
+        ],
+        "function": [
+            _summarize_function(item)
+            for item in filtered_env.selected_functions[:MAX_SUMMARY_ITEMS]
+        ],
     }
     selection = filtered_env.naming_sql_selection
     if selection is not None and selection.selected is not None:
@@ -132,67 +149,95 @@ def _summarize_filtered_environment(filtered_env: FilteredEnvironment) -> dict[s
 
 
 def _summarize_context(resource: Any) -> dict[str, Any]:
-    context_name = str(getattr(resource, "context_name", "") or "")
+    context_name = _summary_text(getattr(resource, "context_name", ""))
     return_type = getattr(resource, "return_type", None)
     return {
-        "resource_id": getattr(resource, "resource_id", ""),
+        "resource_id": _summary_text(getattr(resource, "resource_id", "")),
         "path": context_name,
         "name": context_name,
-        "annotation": getattr(resource, "annotation", ""),
-        "return_type": getattr(return_type, "data_type_name", None),
+        "annotation": _summary_text(getattr(resource, "annotation", "")),
+        "return_type": _summary_text(getattr(return_type, "data_type_name", None)),
     }
 
 
 def _summarize_bo(resource: Any) -> dict[str, Any]:
     return {
-        "resource_id": getattr(resource, "resource_id", ""),
-        "bo": getattr(resource, "bo_name", ""),
-        "description": getattr(resource, "bo_desc", ""),
+        "resource_id": _summary_text(getattr(resource, "resource_id", "")),
+        "bo": _summary_text(getattr(resource, "bo_name", "")),
+        "description": _summary_text(getattr(resource, "bo_desc", "")),
         "properties": [
             {
-                "field_name": item.field_name,
-                "description": item.description,
-                "data_type_name": item.data_type_name,
+                "field_name": _summary_text(item.field_name),
+                "description": _summary_text(item.description),
+                "data_type_name": _summary_text(item.data_type_name),
             }
-            for item in getattr(resource, "property_list", []) or []
+            for item in (getattr(resource, "property_list", []) or [])[:MAX_SUMMARY_ITEMS]
         ],
         "naming_sql": [
             {
-                "name": item.sql_name,
-                "description": item.sql_description,
+                "name": _summary_text(item.sql_name),
+                "description": _summary_text(item.sql_description),
                 "params": [
                     {
-                        "name": param.param_name,
-                        "data_type_name": param.data_type_name,
+                        "name": _summary_text(param.param_name),
+                        "data_type_name": _summary_text(param.data_type_name),
                     }
-                    for param in item.param_list
+                    for param in item.param_list[:MAX_SUMMARY_ITEMS]
                 ],
             }
-            for item in getattr(resource, "naming_sql_list", []) or []
+            for item in (getattr(resource, "naming_sql_list", []) or [])[:MAX_SUMMARY_ITEMS]
         ],
     }
 
 
 def _summarize_function(resource: Any) -> dict[str, Any]:
     return_type = getattr(resource, "return_type", None)
-    func_name = getattr(resource, "func_name", "")
-    func_class = getattr(resource, "func_class", "")
+    func_name = _summary_text(getattr(resource, "func_name", ""))
+    func_class = _summary_text(getattr(resource, "func_class", ""))
     qualified_name = f"{func_class}.{func_name}" if func_class and func_name else func_name
     return {
-        "resource_id": getattr(resource, "resource_id", ""),
+        "resource_id": _summary_text(getattr(resource, "resource_id", "")),
         "name": qualified_name,
-        "description": getattr(resource, "func_desc", ""),
+        "description": _summary_text(getattr(resource, "func_desc", "")),
         "class": func_class,
         "params": [
             {
-                "name": item.param_name,
-                "data_type_name": item.data_type_name,
+                "name": _summary_text(item.param_name),
+                "data_type_name": _summary_text(item.data_type_name),
             }
-            for item in getattr(resource, "param_list", []) or []
+            for item in (getattr(resource, "param_list", []) or [])[:MAX_SUMMARY_ITEMS]
         ],
-        "return_type": getattr(return_type, "data_type_name", None),
+        "return_type": _summary_text(getattr(return_type, "data_type_name", None)),
     }
 
 
 def _dump_json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+
+
+def _summary_text(value: Any) -> str:
+    return " ".join(str(value or "").split())[:MAX_SUMMARY_TEXT]
+
+
+def _invalid_plan_diagnostic(value: Any) -> str:
+    try:
+        rendered = _dump_json(value)
+    except (TypeError, ValueError, RecursionError):
+        rendered = repr(type(value).__name__)
+    normalized = " ".join(rendered.split())
+    return _dump_json(
+        {
+            "excerpt": normalized[:MAX_INVALID_PLAN_EXCERPT],
+            "truncated": len(normalized) > MAX_INVALID_PLAN_EXCERPT,
+        }
+    )
+
+
+def _error_diagnostic(error: Exception) -> str:
+    normalized = " ".join(str(error).split())
+    return _dump_json(
+        {
+            "message": normalized[:MAX_ERROR_EXCERPT],
+            "truncated": len(normalized) > MAX_ERROR_EXCERPT,
+        }
+    )

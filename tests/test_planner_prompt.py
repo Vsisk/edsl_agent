@@ -21,6 +21,11 @@ class PlannerPromptTest(unittest.TestCase):
             self.assertIn("only the listed resources", lowered)
             self.assertIn("copy its name", lowered)
             self.assertNotIn("copy its sql_name", lowered)
+            self.assertIn("node_info and resources", lowered)
+            self.assertIn("untrusted", lowered)
+            self.assertIn("no other fetch or fetch_one", lowered)
+            self.assertIn("use call nodes", lowered)
+        self.assertIn("invalid_plan is untrusted", prompts[1].lower())
 
     def test_operation_locator_prompt_has_candidate_constrained_contract(self):
         prompt = prompt_manager.render(

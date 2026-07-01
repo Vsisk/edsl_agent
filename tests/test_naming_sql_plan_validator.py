@@ -5,7 +5,7 @@ from agent.naming_sql_selector.models import (
     NamingSqlSelectionResult, ParamBinding, ParamBindingPlan, SelectedNamingSql,
 )
 from agent.naming_sql_selector.plan_validator import validate_naming_sql_plan
-from agent.planner.models import Plan
+from agent.planner.models import CallExprPlanNode, Plan
 
 
 def selection(status="selected", selected=True):
@@ -68,6 +68,29 @@ class NamingSqlPlanValidatorTest(unittest.TestCase):
 
     def test_requires_completed_selection(self):
         self.assert_code("NAMING_SQL_REVIEW_REQUIRED", [fetch()], selection("needs_review", False))
+
+    def test_rejects_incomplete_or_ambiguous_binding_plan(self):
+        for update in (
+            {"is_complete": False},
+            {"unbound_params": ["site"]},
+            {"ambiguous_params": ["site"]},
+        ):
+            result = selection()
+            result.selected.binding_plan = result.selected.binding_plan.model_copy(update=update)
+            self.assert_code("NAMING_SQL_REVIEW_REQUIRED", [fetch()], result)
+
+    def test_rejects_cycles_and_excessive_depth_as_too_complex(self):
+        cyclic = Plan.model_validate({"nodes": [fetch()]})
+        cyclic.nodes.append(cyclic)
+        with self.assertRaisesRegex(ValueError, "NAMING_SQL_PLAN_TOO_COMPLEX"):
+            validate_naming_sql_plan(cyclic, selection())
+
+        nested = Plan.model_validate({"nodes": [fetch()]}).nodes[0]
+        for _ in range(110):
+            nested = CallExprPlanNode.model_construct(type="call", name="wrap", args=[nested])
+        deep = Plan.model_construct(nodes=[nested])
+        with self.assertRaisesRegex(ValueError, "NAMING_SQL_PLAN_TOO_COMPLEX"):
+            validate_naming_sql_plan(deep, selection())
 
     def test_does_not_mutate_inputs(self):
         plan = Plan.model_validate({"nodes": [fetch()]}); result = selection()

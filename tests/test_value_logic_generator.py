@@ -275,12 +275,10 @@ class ValueLogicGeneratorTest(unittest.TestCase):
         mismatch.selected.sql_name = "wrong"
         with self.assertRaisesRegex(ValueError, "NAMING_SQL_DEFINITION_NOT_LOADED"):
             generator._narrow_naming_sql_environment(env, loaded, "$.x", mismatch)
-        legacy = naming_sql_selection().model_copy(deep=True)
-        legacy.selected.naming_sql_id = ""
-        duplicate_name = definition.model_copy(update={"naming_sql_id": "other-id"})
-        loaded.bo_registry["BB_BAK_TRANS"] = bo.model_copy(update={"naming_sql_list": [definition, duplicate_name]})
-        with self.assertRaisesRegex(ValueError, "NAMING_SQL_DEFINITION_AMBIGUOUS"):
-            generator._narrow_naming_sql_environment(env, loaded, "$.x", legacy)
+        empty_id = naming_sql_selection().model_copy(deep=True)
+        empty_id.selected.naming_sql_id = ""
+        with self.assertRaisesRegex(ValueError, "NAMING_SQL_DEFINITION_NOT_LOADED"):
+            generator._narrow_naming_sql_environment(env, loaded, "$.x", empty_id)
 
     def test_default_path_uses_expression_spec_nl_and_does_not_call_legacy_filtering(self):
         planner = FakePlanner()

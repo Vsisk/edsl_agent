@@ -293,16 +293,13 @@ class ValueLogicGenerator:
         bo = next((item for item in loaded.bo_registry.values() if item.bo_name == selection.selected_bo), None)
         if bo is None or selected is None:
             raise ValueError("NAMING_SQL_REVIEW_REQUIRED")
-        if selected.naming_sql_id:
-            matches = [item for item in bo.naming_sql_list if item.naming_sql_id == selected.naming_sql_id]
-            if len(matches) > 1:
-                raise ValueError(f"NAMING_SQL_DEFINITION_AMBIGUOUS id={str(selected.naming_sql_id)[:80]}")
-            definition = matches[0] if len(matches) == 1 and matches[0].sql_name == selected.sql_name else None
-        else:
-            matches = [item for item in bo.naming_sql_list if item.sql_name == selected.sql_name]
-            if len(matches) > 1:
-                raise ValueError(f"NAMING_SQL_DEFINITION_AMBIGUOUS name={str(selected.sql_name)[:80]}")
-            definition = matches[0] if len(matches) == 1 else None
+        matches = (
+            [item for item in bo.naming_sql_list if item.naming_sql_id == selected.naming_sql_id]
+            if selected.naming_sql_id else []
+        )
+        if len(matches) > 1:
+            raise ValueError(f"NAMING_SQL_DEFINITION_AMBIGUOUS id={str(selected.naming_sql_id)[:80]}")
+        definition = matches[0] if len(matches) == 1 and matches[0].sql_name == selected.sql_name else None
         if definition is None:
             raise ValueError(
                 f"NAMING_SQL_DEFINITION_NOT_LOADED id={str(selected.naming_sql_id)[:80]} name={str(selected.sql_name)[:80]}"

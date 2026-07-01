@@ -337,6 +337,18 @@ class NamingSqlSelectionTests(unittest.TestCase):
         result = NamingSqlSelector().select(NamingSqlSelectionRequest(site_id="s", query="use sql_99 now", bo_name="BO"), _loaded(profiles), DataAccessSpec(business_terms=["common"]))
         self.assertEqual("sql_99", result.selected.sql_name)
 
+    def test_explicit_query_id_beyond_recall_window_wins_final_ranking(self):
+        profiles = [NamingSqlProfile(site_id="s", bo_name="BO", naming_sql_id=f"id_{i}", sql_name=f"common_{i:03d}", is_full_table=False, search_text="common") for i in range(100)]
+        result = NamingSqlSelector().select(NamingSqlSelectionRequest(site_id="s", query="use id_99 now", bo_name="BO"), _loaded(profiles), DataAccessSpec(business_terms=["common"]))
+        self.assertEqual("id_99", result.selected.naming_sql_id)
+        self.assertNotEqual("id_9", result.selected.naming_sql_id)
+
+    def test_loaded_knowledge_id_gets_dominant_final_score(self):
+        profiles = [NamingSqlProfile(site_id="s", bo_name="BO", naming_sql_id=f"id_{i}", sql_name=f"common_{i:03d}", is_full_table=False, search_text="common") for i in range(100)]
+        retriever = StaticDevelopmentKnowledgeRetriever({"s": [DevelopmentKnowledge(text="common", naming_sql_names=["id_99"])]})
+        result = NamingSqlSelector(retriever).select(NamingSqlSelectionRequest(site_id="s", query="common", bo_name="BO"), _loaded(profiles), DataAccessSpec(business_terms=["common"]))
+        self.assertEqual("id_99", result.selected.naming_sql_id)
+
     def test_type_suffix_collisions_do_not_bind_as_int_or_date(self):
         request = NamingSqlSelectionRequest(site_id="s", query="orders", bo_name="BO")
         for bad_type, param_type in (("point", "int"), ("constraint", "integer"), ("update", "date")):

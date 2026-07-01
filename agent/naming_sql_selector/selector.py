@@ -272,7 +272,12 @@ class NamingSqlSelector:
                 else: fallbacks.append((profile, plan))
                 continue
             text = " ".join((profile.sql_name, profile.label_name, profile.sql_description, profile.search_text, *profile.scope_tags))
-            explicit = _contains_normalized_name(request.query, profile.sql_name) or _key(profile.sql_name) in recommended
+            explicit = (
+                _contains_normalized_name(request.query, profile.sql_name)
+                or _contains_normalized_name(request.query, profile.naming_sql_id)
+                or _key(profile.sql_name) in recommended
+                or _key(profile.naming_sql_id) in recommended
+            )
             coverage = 1.0 if not requirements else sum(covered(r) for r in requirements) / len(requirements)
             avg = sum(x.confidence for x in plan.bindings) / len(plan.bindings) if plan.bindings else 0.0
             business = _tokens(" ".join((*spec.business_terms, *spec.scope_terms)))

@@ -19,6 +19,11 @@ MAX_SUMMARY_TEXT = 512
 MAX_SUMMARY_ITEMS = 100
 MAX_INVALID_PLAN_EXCERPT = 12_000
 MAX_ERROR_EXCERPT = 2_000
+MAX_RESOURCES_JSON_CHARS = 60_000
+MAX_SELECTION_BO_NAME = 512
+MAX_SELECTION_SQL_NAME = 512
+MAX_SELECTION_PARAM_NAME = 256
+MAX_SELECTION_SOURCE_REF = 1_024
 
 
 class LLMPlanner:
@@ -39,7 +44,7 @@ class LLMPlanner:
         if not self.is_usable:
             raise RuntimeError("LLM planner is not usable")
 
-        resources_json = _dump_json(_summarize_filtered_environment(filtered_env))
+        resources_json = _summarize_filtered_environment_json(filtered_env)
         node_info_json = _dump_json(_summarize_node(node_info))
         plan_schema_json = _dump_json(PLAN_SCHEMA)
 
@@ -111,26 +116,15 @@ def _summarize_node(node_info: NodeDef) -> dict[str, Any]:
 
 
 def _summarize_filtered_environment(filtered_env: FilteredEnvironment) -> dict[str, Any]:
-    summary = {
-        "global_context": [
-            _summarize_context(item)
-            for item in filtered_env.selected_global_contexts[:MAX_SUMMARY_ITEMS]
-        ],
-        "local_context": [
-            _summarize_context(item)
-            for item in filtered_env.visible_local_context[:MAX_SUMMARY_ITEMS]
-        ],
-        "bo": [
-            _summarize_bo(item)
-            for item in filtered_env.selected_bos[:MAX_SUMMARY_ITEMS]
-        ],
-        "function": [
-            _summarize_function(item)
-            for item in filtered_env.selected_functions[:MAX_SUMMARY_ITEMS]
-        ],
+    summary: dict[str, Any] = {
+        "global_context": [],
+        "local_context": [],
+        "bo": [],
+        "function": [],
     }
     selection = filtered_env.naming_sql_selection
     if selection is not None and selection.selected is not None:
+        _validate_selection_summary(selection)
         chosen = selection.selected
         summary["naming_sql_selection"] = {
             "bo": selection.selected_bo,
@@ -143,9 +137,55 @@ def _summarize_filtered_environment(filtered_env: FilteredEnvironment) -> dict[s
                 for item in chosen.binding_plan.bindings
             ],
         }
-        for bo in summary["bo"]:
-            bo.pop("naming_sql", None)
+        if len(_dump_json(summary)) > MAX_RESOURCES_JSON_CHARS:
+            raise ValueError("NAMING_SQL_SELECTION_TOO_LARGE")
+
+    groups = (
+        ("global_context", filtered_env.selected_global_contexts, _summarize_context),
+        ("local_context", filtered_env.visible_local_context, _summarize_context),
+        ("bo", filtered_env.selected_bos, _summarize_bo),
+        ("function", filtered_env.selected_functions, _summarize_function),
+    )
+    for group_name, resources, summarize in groups:
+        for resource in resources[:MAX_SUMMARY_ITEMS]:
+            item = summarize(resource)
+            if selection is not None and selection.selected is not None and group_name == "bo":
+                item.pop("naming_sql", None)
+            summary[group_name].append(item)
+            if len(_dump_json(summary)) > MAX_RESOURCES_JSON_CHARS:
+                summary[group_name].pop()
     return summary
+
+
+def _summarize_filtered_environment_json(filtered_env: FilteredEnvironment) -> str:
+    return _dump_json(_summarize_filtered_environment(filtered_env))
+
+
+def _validate_selection_summary(selection: NamingSqlSelectionResult) -> None:
+    chosen = selection.selected
+    if chosen is None:
+        return
+    bindings = chosen.binding_plan.bindings
+    values_and_limits = [
+        (selection.selected_bo, MAX_SELECTION_BO_NAME),
+        (chosen.sql_name, MAX_SELECTION_SQL_NAME),
+    ]
+    for binding in bindings:
+        values_and_limits.extend(
+            (
+                (binding.param_name, MAX_SELECTION_PARAM_NAME),
+                (binding.source_ref, MAX_SELECTION_SOURCE_REF),
+            )
+        )
+    if len(bindings) > MAX_SUMMARY_ITEMS or any(
+        len(value) > limit or _has_control(value)
+        for value, limit in values_and_limits
+    ):
+        raise ValueError("NAMING_SQL_SELECTION_TOO_LARGE")
+
+
+def _has_control(value: str) -> bool:
+    return any(ord(char) < 32 or ord(char) == 127 for char in value)
 
 
 def _summarize_context(resource: Any) -> dict[str, Any]:

@@ -6,7 +6,11 @@ from pydantic import ValidationError
 from agent.environment.environment import FilteredEnvironment
 from agent.llm.prompt_manager import prompt_manager
 from agent.models import NodeDef
-from agent.planner.llm_planner import LLMPlanner
+from agent.planner.llm_planner import (
+    MAX_RESOURCES_JSON_CHARS,
+    LLMPlanner,
+    _summarize_filtered_environment_json,
+)
 from agent.planner.models import Plan, ReturnExprPlanNode
 from agent.naming_sql_selector.models import NamingSqlSelectionResult, ParamBinding, ParamBindingPlan, SelectedNamingSql
 
@@ -124,6 +128,40 @@ class LLMPlannerTest(unittest.TestCase):
         LLMPlanner(client=client).plan(node_info=_node_info(), user_query="x", filtered_env=FilteredEnvironment())
         self.assertNotIn("naming_sql_selection", client.calls[0]["prompt"])
 
+    def test_oversized_authoritative_selection_fails_before_llm(self):
+        cases = []
+        huge_sql = _selection()
+        huge_sql.selected.sql_name = "S" * (2 * 1024 * 1024)
+        cases.append(huge_sql)
+        huge_source = _selection()
+        huge_source.selected.binding_plan.bindings[0].source_ref = "R" * (2 * 1024 * 1024)
+        cases.append(huge_source)
+        too_many = _selection()
+        too_many.selected.binding_plan.bindings = [
+            ParamBinding(param_name=f"p{i}", source_ref=f"$ctx$.p{i}", confidence=.9, reason="x")
+            for i in range(101)
+        ]
+        cases.append(too_many)
+        for result in cases:
+            with self.subTest(sql_length=len(result.selected.sql_name), bindings=len(result.selected.binding_plan.bindings)):
+                client = FakeClient(['{"nodes":[{"type":"return","value":{"type":"literal","value":null}}]}'])
+                with self.assertRaisesRegex(ValueError, "NAMING_SQL_SELECTION_TOO_LARGE"):
+                    LLMPlanner(client=client).plan(node_info=_node_info(), user_query="x", filtered_env=FilteredEnvironment(naming_sql_selection=result))
+                self.assertEqual(client.calls, [])
+
+    def test_resources_json_budget_is_valid_deterministic_and_preserves_selection(self):
+        param = Resource(param_name="p", data_type_name="String")
+        naming_sql = Resource(sql_name="Query", sql_description="D" * 512, param_list=[param] * 100)
+        prop = Resource(field_name="field", description="D" * 512, data_type_name="String")
+        bos = [Resource(resource_id=f"bo.{i}", bo_name=f"BO{i}", bo_desc="D" * 512, property_list=[prop] * 100, naming_sql_list=[naming_sql] * 100) for i in range(100)]
+        env = FilteredEnvironment(selected_bos=bos, naming_sql_selection=_selection())
+        first = _summarize_filtered_environment_json(env)
+        second = _summarize_filtered_environment_json(env)
+        decoded = json.loads(first)
+        self.assertEqual(first, second)
+        self.assertLessEqual(len(first), MAX_RESOURCES_JSON_CHARS)
+        self.assertEqual(decoded["naming_sql_selection"], {"bo":"Customer","name":"FindCustomer","bindings":[{"name":"id","source_ref":"$ctx$.id"}]})
+
     def test_plan_repairs_once_when_initial_output_fails_pydantic_validation(self):
         client = FakeClient(
             [
@@ -163,7 +201,8 @@ class LLMPlannerTest(unittest.TestCase):
         prompt = client.calls[0]["prompt"]
         resources = json.loads(prompt.split(" RESOURCES:", 1)[1].split(" SCHEMA:", 1)[0])
         node_summary = json.loads(prompt.split("planner bounded ", 1)[1].split(" RESOURCES:", 1)[0])
-        self.assertEqual(len(resources["global_context"]), 100)
+        self.assertGreater(len(resources["global_context"]), 0)
+        self.assertLessEqual(len(resources["global_context"]), 100)
         self.assertLessEqual(len(resources["global_context"][0]["annotation"]), 512)
         self.assertNotIn("\n", resources["global_context"][0]["annotation"])
         self.assertLessEqual(len(node_summary["description"]), 512)

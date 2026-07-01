@@ -1,6 +1,11 @@
+from __future__ import annotations
+
 from dataclasses import dataclass, field
 from difflib import SequenceMatcher
-from typing import Any, List
+from typing import TYPE_CHECKING, Any, List
+
+if TYPE_CHECKING:
+    from agent.naming_sql_selector.models import NamingSqlSelectionResult
 
 from agent.environment.resource_filter import BOFilter, ContextFilter, FunctionFilter, LLMResourceFilter, NamingSQLFilter
 from agent.environment.resource_search_tool import ResourceKeywordSearchTool
@@ -28,6 +33,7 @@ class FilteredEnvironment:
     selected_bos: List[BoRegistry] = field(default_factory=list)
     selected_functions: List[FunctionRegistry] = field(default_factory=list)
     selection_trace: list[dict[str, Any]] = field(default_factory=list)
+    naming_sql_selection: NamingSqlSelectionResult | None = None
 
 
 @dataclass(frozen=True, slots=True)

@@ -1,4 +1,5 @@
 import unittest
+import json
 
 from pydantic import ValidationError
 
@@ -7,6 +8,7 @@ from agent.llm.prompt_manager import prompt_manager
 from agent.models import NodeDef
 from agent.planner.llm_planner import LLMPlanner
 from agent.planner.models import Plan, ReturnExprPlanNode
+from agent.naming_sql_selector.models import NamingSqlSelectionResult, ParamBinding, ParamBindingPlan, SelectedNamingSql
 
 
 class FakeSettings:
@@ -38,8 +40,8 @@ class LLMPlannerTest(unittest.TestCase):
         prompt_manager._prompts = {
             "planner": {
                 "zh": (
-                    "planner {{user_requirement}} {{node_info_json}} "
-                    "{{resources_json}} {{plan_schema_json}}"
+                    "planner {{user_requirement}} {{node_info_json}} RESOURCES:"
+                    "{{resources_json}} SCHEMA:{{plan_schema_json}}"
                 )
             },
             "planner_repair": {
@@ -107,6 +109,19 @@ class LLMPlannerTest(unittest.TestCase):
         self.assertIn('"name":"DacsDataTrans.CustCallMask"', client.calls[0]["prompt"])
         self.assertIn('"class":"DacsDataTrans"', client.calls[0]["prompt"])
 
+    def test_plan_exposes_only_authoritative_naming_sql_selection(self):
+        client = FakeClient(['{"nodes":[{"type":"fetch","name":"FindCustomer","params":[{"name":"id","value":{"type":"context_path","path":"$ctx$.id"}}]}]}'])
+        env = FilteredEnvironment(selected_bos=[Resource(resource_id="bo.1", bo_name="Customer", bo_desc="", property_list=[], naming_sql_list=[Resource(sql_name="FindCustomer", sql_description="secret query", param_list=[]), Resource(sql_name="SiblingSql", sql_description="", param_list=[])])], naming_sql_selection=_selection())
+        LLMPlanner(client=client).plan(node_info=_node_info(), user_query="find", filtered_env=env)
+        resources = json.loads(client.calls[0]["prompt"].split(" RESOURCES:", 1)[1].split(" SCHEMA:", 1)[0])
+        self.assertEqual(resources["naming_sql_selection"], {"selected_bo":"Customer","naming_sql_id":"ns.1","sql_name":"FindCustomer","bindings":[{"name":"id","source_ref":"$ctx$.id","confidence":.9,"reason":"exact"}]})
+        self.assertNotIn("naming_sql", resources["bo"][0]); self.assertNotIn("SiblingSql", client.calls[0]["prompt"]); self.assertNotIn("secret query", client.calls[0]["prompt"])
+
+    def test_plan_without_selection_omits_selection_summary(self):
+        client = FakeClient(['{"nodes":[{"type":"return","value":{"type":"literal","value":null}}]}'])
+        LLMPlanner(client=client).plan(node_info=_node_info(), user_query="x", filtered_env=FilteredEnvironment())
+        self.assertNotIn("naming_sql_selection", client.calls[0]["prompt"])
+
     def test_plan_repairs_once_when_initial_output_fails_pydantic_validation(self):
         client = FakeClient(
             [
@@ -154,6 +169,9 @@ def _node_info() -> NodeDef:
         node_name="Node",
         description="Node description",
     )
+
+def _selection():
+    return NamingSqlSelectionResult(status="selected", selected_bo="Customer", review_mode="not_required", selected=SelectedNamingSql(naming_sql_id="ns.1", sql_name="FindCustomer", score=1.0, binding_plan=ParamBindingPlan(bindings=[ParamBinding(param_name="id", source_ref="$ctx$.id", confidence=.9, reason="exact")], is_complete=True)))
 
 
 if __name__ == "__main__":

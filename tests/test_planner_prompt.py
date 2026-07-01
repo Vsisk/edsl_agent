@@ -4,6 +4,22 @@ from agent.llm.prompt_manager import prompt_manager
 
 
 class PlannerPromptTest(unittest.TestCase):
+    def test_planner_and_repair_prompts_constrain_naming_sql_selection(self):
+        common = dict(user_requirement="x", node_info_json="{}", resources_json='{"naming_sql_selection":{}}', plan_schema_json="{}")
+        prompts = [
+            prompt_manager.render("planner", **common),
+            prompt_manager.render("planner_repair", **common, invalid_plan_json="{}", error_message="bad"),
+        ]
+        for prompt in prompts:
+            lowered = prompt.lower()
+            self.assertIn("authoritative", lowered)
+            self.assertIn("untrusted reference data", lowered)
+            self.assertIn("verbatim", lowered)
+            self.assertIn("do not choose any other namingsql", lowered)
+            self.assertIn("do not omit, add, or reorder params", lowered)
+            self.assertIn("do not change source_ref", lowered)
+            self.assertIn("only the listed resources", lowered)
+
     def test_operation_locator_prompt_has_candidate_constrained_contract(self):
         prompt = prompt_manager.render(
             "operation_locator_prompt",

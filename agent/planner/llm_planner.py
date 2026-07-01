@@ -1,5 +1,7 @@
+from __future__ import annotations
+
 import json
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from pydantic import ValidationError
 
@@ -8,6 +10,10 @@ from agent.llm.generate_by_llm import generate_by_llm
 from agent.llm.llm_client import LLMClient
 from agent.models import NodeDef
 from agent.planner.models import PLAN_SCHEMA, Plan
+from agent.naming_sql_selector.plan_validator import validate_naming_sql_plan
+
+if TYPE_CHECKING:
+    from agent.naming_sql_selector.models import NamingSqlSelectionResult
 
 
 class LLMPlanner:
@@ -43,7 +49,10 @@ class LLMPlanner:
                 resources_json=resources_json,
                 plan_schema_json=plan_schema_json,
             )
-            return Plan.model_validate(response)
+            plan = Plan.model_validate(response)
+            if filtered_env.naming_sql_selection is not None:
+                validate_naming_sql_plan(plan, filtered_env.naming_sql_selection)
+            return plan
         except (ValueError, ValidationError) as exc:
             invalid_plan_json = _dump_json(locals().get("response", {}))
             return self._repair(
@@ -54,6 +63,7 @@ class LLMPlanner:
                 plan_schema_json=plan_schema_json,
                 invalid_plan_json=invalid_plan_json,
                 error_message=str(exc),
+                naming_sql_selection=filtered_env.naming_sql_selection,
             )
 
     def _repair(
@@ -66,6 +76,7 @@ class LLMPlanner:
         plan_schema_json: str,
         invalid_plan_json: str,
         error_message: str,
+        naming_sql_selection: NamingSqlSelectionResult | None,
     ) -> Plan:
         response = generate_by_llm(
             prompt_template="planner_repair",
@@ -79,7 +90,10 @@ class LLMPlanner:
             invalid_plan_json=invalid_plan_json,
             error_message=error_message,
         )
-        return Plan.model_validate(response)
+        plan = Plan.model_validate(response)
+        if naming_sql_selection is not None:
+            validate_naming_sql_plan(plan, naming_sql_selection)
+        return plan
 
 
 def _summarize_node(node_info: NodeDef) -> dict[str, Any]:
@@ -92,12 +106,32 @@ def _summarize_node(node_info: NodeDef) -> dict[str, Any]:
 
 
 def _summarize_filtered_environment(filtered_env: FilteredEnvironment) -> dict[str, Any]:
-    return {
+    summary = {
         "global_context": [_summarize_context(item) for item in filtered_env.selected_global_contexts],
         "local_context": [_summarize_context(item) for item in filtered_env.visible_local_context],
         "bo": [_summarize_bo(item) for item in filtered_env.selected_bos],
         "function": [_summarize_function(item) for item in filtered_env.selected_functions],
     }
+    selection = filtered_env.naming_sql_selection
+    if selection is not None and selection.selected is not None:
+        chosen = selection.selected
+        summary["naming_sql_selection"] = {
+            "selected_bo": selection.selected_bo,
+            "naming_sql_id": chosen.naming_sql_id,
+            "sql_name": chosen.sql_name,
+            "bindings": [
+                {
+                    "name": item.param_name,
+                    "source_ref": item.source_ref,
+                    "confidence": item.confidence,
+                    "reason": item.reason,
+                }
+                for item in chosen.binding_plan.bindings
+            ],
+        }
+        for bo in summary["bo"]:
+            bo.pop("naming_sql", None)
+    return summary
 
 
 def _summarize_context(resource: Any) -> dict[str, Any]:

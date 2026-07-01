@@ -19,6 +19,7 @@ from .selector import (BoResolver, BoReviewer, LocalNamingSqlCandidateRetriever,
     NamingSqlCandidateRetriever, NamingSqlReviewer, NamingSqlSelector)
 from .profile_builder import NamingSqlProfileBuilder
 from .spec_generator import DataAccessSpecGenerator
+from .plan_validator import validate_naming_sql_plan
 
 __all__ = [
     "AvailableValue",
@@ -40,4 +41,5 @@ __all__ = [
     "NamingSqlReviewer", "NamingSqlSelector", "ParamBinding", "ParamBindingPlan",
     "NamingSqlCandidateRetriever", "LocalNamingSqlCandidateRetriever",
     "RejectedNamingSql", "SelectedNamingSql",
+    "validate_naming_sql_plan",
 ]

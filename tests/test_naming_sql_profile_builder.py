@@ -112,6 +112,60 @@ class NamingSqlProfileBuilderTest(unittest.TestCase):
         self.assertEqual(profile.filter_fields, [])
         self.assertTrue(profile.is_full_table)
 
+    def test_extracts_join_on_identifier_comparison(self):
+        profile = NamingSqlProfileBuilder().build(
+            "site-a", "BB_TRANS", definition("SELECT * FROM A JOIN B ON A.acct_id = B.acct_id")
+        )
+        self.assertEqual(profile.filter_fields, ["ACCT_ID"])
+        self.assertFalse(profile.is_full_table)
+
+    def test_join_remains_effective_with_tautological_where(self):
+        profile = NamingSqlProfileBuilder().build(
+            "site-a", "BB_TRANS", definition("SELECT * FROM A JOIN B ON A.acct_id = B.acct_id WHERE 1=1")
+        )
+        self.assertEqual(profile.filter_fields, ["ACCT_ID"])
+
+    def test_combines_clause_fields_in_sql_occurrence_order(self):
+        profile = NamingSqlProfileBuilder().build(
+            "site-a",
+            "BB_TRANS",
+            definition(
+                "SELECT * FROM A JOIN B ON A.acct_id = B.acct_id "
+                "WHERE status = :status GROUP BY A.acct_id HAVING COUNT(*) > 1"
+            ),
+        )
+        self.assertEqual(profile.filter_fields, ["ACCT_ID", "STATUS", "COUNT"])
+
+    def test_extracts_standalone_having_field_predicate(self):
+        profile = NamingSqlProfileBuilder().build(
+            "site-a", "BB_TRANS", definition("SELECT ACCT_ID FROM T GROUP BY ACCT_ID HAVING acct_id > 10")
+        )
+        self.assertEqual(profile.filter_fields, ["ACCT_ID"])
+        self.assertFalse(profile.is_full_table)
+
+    def test_having_aggregate_marks_profile_effectively_filtered(self):
+        profile = NamingSqlProfileBuilder().build(
+            "site-a", "BB_TRANS", definition("SELECT ACCT_ID FROM T WHERE 1=1 GROUP BY ACCT_ID HAVING COUNT(*) > 1")
+        )
+        self.assertEqual(profile.filter_fields, ["COUNT"])
+        self.assertFalse(profile.is_full_table)
+
+    def test_ignores_fake_join_and_having_inside_comments_and_strings(self):
+        profile = NamingSqlProfileBuilder().build(
+            "site-a",
+            "BB_TRANS",
+            definition("SELECT * FROM T /* JOIN X ON FAKE_ID = :x */ WHERE 1=1 AND 'HAVING COUNT(*) > 1' = 'text'"),
+        )
+        self.assertEqual(profile.filter_fields, [])
+        self.assertTrue(profile.is_full_table)
+
+    def test_malformed_join_and_having_are_conservatively_ignored(self):
+        profile = NamingSqlProfileBuilder().build(
+            "site-a", "BB_TRANS", definition("SELECT * FROM A JOIN B ON ACCT_ID = WHERE 1=1 HAVING COUNT(*) >")
+        )
+        self.assertEqual(profile.filter_fields, [])
+        self.assertTrue(profile.is_full_table)
+
     def test_profile_forbids_unknown_fields(self):
         with self.assertRaises(ValidationError):
             NamingSqlProfile(

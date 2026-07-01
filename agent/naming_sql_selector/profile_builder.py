@@ -6,7 +6,6 @@ from agent.resource_manager.loader.tag_utils import tokenize_text
 from .models import NamingSqlParamProfile, NamingSqlProfile
 
 
-_WHERE_PATTERN = re.compile(r"\bWHERE\b(?P<predicate>.*)", re.IGNORECASE | re.DOTALL)
 _IDENTIFIER = r"[A-Za-z_][\w$]*"
 _CLAUSE_KEYWORDS = (
     r"AND|OR|WHERE|GROUP|ORDER|HAVING|JOIN|LEFT|RIGHT|INNER|OUTER|FULL|CROSS|ON|"
@@ -23,6 +22,14 @@ _PREDICATE_PATTERN = re.compile(
     rf"|IN\s*(?:\(\s*{_IN_OPERANDS}\s*\)|:{_IDENTIFIER})"
     rf"|BETWEEN\s+{_VALUE}\s+AND\s+{_VALUE}"
     rf"|IS\s+(?:NOT\s+)?NULL\b)",
+    re.IGNORECASE,
+)
+_CLAUSE_PATTERN = re.compile(
+    r"\b(?P<kind>JOIN|ON|WHERE|GROUP(?:\s+BY)?|HAVING|ORDER(?:\s+BY)?|LIMIT)\b",
+    re.IGNORECASE,
+)
+_AGGREGATE_PATTERN = re.compile(
+    rf"\b(?P<aggregate>COUNT|SUM|AVG|MIN|MAX)\s*\([^)]*\)\s*(?:=|!=|<>|<=|>=|<|>)\s*{_VALUE}",
     re.IGNORECASE,
 )
 
@@ -60,15 +67,62 @@ class NamingSqlProfileBuilder:
     def _extract_filter_fields(sql_command: str | None) -> list[str]:
         if not sql_command:
             return []
-        where_match = _WHERE_PATTERN.search(_sanitize_sql(sql_command))
-        if not where_match:
-            return []
+        sanitized_sql = _sanitize_sql(sql_command)
         fields: list[str] = []
-        for match in _PREDICATE_PATTERN.finditer(where_match.group("predicate")):
-            field = match.group("field").upper()
-            if field not in fields:
-                fields.append(field)
+        for clause_kind, region in _predicate_regions(sanitized_sql):
+            matches = [(match.start(), match.group("field").upper()) for match in _PREDICATE_PATTERN.finditer(region)]
+            if clause_kind == "HAVING":
+                matches.extend(
+                    (match.start(), match.group("aggregate").upper())
+                    for match in _AGGREGATE_PATTERN.finditer(region)
+                )
+            for _, field in sorted(matches):
+                if field not in fields:
+                    fields.append(field)
         return fields
+
+
+def _predicate_regions(sql: str) -> list[tuple[str, str]]:
+    clauses = [
+        (match, re.sub(r"\s+", " ", match.group("kind").upper()))
+        for match in _CLAUSE_PATTERN.finditer(sql)
+    ]
+    regions: list[tuple[int, str, str]] = []
+    pending_join = False
+    for index, (clause, kind) in enumerate(clauses):
+        if kind == "JOIN":
+            pending_join = True
+            continue
+        if kind == "ON" and pending_join:
+            pending_join = False
+            end = _next_clause_start(
+                clauses,
+                index,
+                {"JOIN", "WHERE", "GROUP", "GROUP BY", "HAVING", "ORDER", "ORDER BY", "LIMIT"},
+                len(sql),
+            )
+            regions.append((clause.start(), "ON", sql[clause.end():end]))
+            continue
+        if kind in {"WHERE", "HAVING"}:
+            pending_join = False
+            stop_kinds = {"GROUP", "GROUP BY", "HAVING", "ORDER", "ORDER BY", "LIMIT"}
+            if kind == "HAVING":
+                stop_kinds = {"ORDER", "ORDER BY", "LIMIT"}
+            end = _next_clause_start(clauses, index, stop_kinds, len(sql))
+            regions.append((clause.start(), kind, sql[clause.end():end]))
+            continue
+        if kind not in {"ON"}:
+            pending_join = False
+    return [(kind, region) for _, kind, region in sorted(regions)]
+
+
+def _next_clause_start(
+    clauses: list[tuple[re.Match[str], str]], index: int, stop_kinds: set[str], default: int
+) -> int:
+    for clause, kind in clauses[index + 1:]:
+        if kind in stop_kinds:
+            return clause.start()
+    return default
 
 
 def _sanitize_sql(sql: str) -> str:

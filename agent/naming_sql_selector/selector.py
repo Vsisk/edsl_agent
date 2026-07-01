@@ -172,24 +172,10 @@ class NamingSqlSelector:
                  bo_resolver: BoResolver | None = None, reviewer: NamingSqlReviewer | None = None,
                  candidate_retriever: NamingSqlCandidateRetriever | None = None):
         self._retriever = knowledge_retriever or getattr(spec_generator, "_retriever", None) or NoOpDevelopmentKnowledgeRetriever()
-        self._spec_generator = spec_generator
+        self._spec_generator = spec_generator or DataAccessSpecGenerator(self._retriever)
         self._bo_resolver = bo_resolver or BoResolver()
         self._reviewer = reviewer
         self._candidate_retriever = candidate_retriever or LocalNamingSqlCandidateRetriever()
-
-    def _knowledge(self, request: NamingSqlSelectionRequest) -> list[DevelopmentKnowledge]:
-        try:
-            raw = self._retriever.retrieve(request.site_id, request.query[:4000], limit=5)
-        except Exception:
-            raw = []
-        result: list[DevelopmentKnowledge] = []
-        for item in raw if isinstance(raw, list) else []:
-            try:
-                result.append(item if isinstance(item, DevelopmentKnowledge) else DevelopmentKnowledge.model_validate(item))
-            except Exception:
-                continue
-            if len(result) == 5: break
-        return result
 
     def _bind(self, profile: NamingSqlProfile, spec: DataAccessSpec, knowledge: list[DevelopmentKnowledge]) -> ParamBindingPlan:
         aliases: dict[str, set[str]] = {}
@@ -227,10 +213,12 @@ class NamingSqlSelector:
                                 is_complete=not unbound and not ambiguous and len(bindings) == len(profile.params))
 
     def select(self, request: NamingSqlSelectionRequest, loaded_resource: Any,
-               data_access_spec: DataAccessSpec | None = None) -> NamingSqlSelectionResult:
-        knowledge = self._knowledge(request)
+               data_access_spec: DataAccessSpec | None = None,
+               knowledge: list[DevelopmentKnowledge] | None = None) -> NamingSqlSelectionResult:
+        knowledge = (self._spec_generator.retrieve_knowledge(request) if knowledge is None
+                     else self._spec_generator.validate_knowledge(knowledge))
         if data_access_spec is None:
-            spec = (self._spec_generator or DataAccessSpecGenerator()).generate(request, knowledge=knowledge)
+            spec = self._spec_generator.generate(request, knowledge=knowledge)
         else:
             spec = data_access_spec.model_copy(deep=True)
         resolution = self._bo_resolver.resolve(explicit_bo=request.bo_name, spec=spec,

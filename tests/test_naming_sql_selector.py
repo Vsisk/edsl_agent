@@ -280,6 +280,37 @@ def _loaded(profiles):
 
 
 class NamingSqlSelectionTests(unittest.TestCase):
+    def test_selector_retrieves_rich_context_once_and_reuses_alias_knowledge(self):
+        class CapturingRetriever:
+            calls = 0
+            captured = ""
+            def retrieve(self, site_id, query, limit=5):
+                self.calls += 1; self.captured = query
+                return [DevelopmentKnowledge(text="special node parent fee", bo_names=["BO"], naming_sql_names=["alias_sql"], param_aliases={"customer_id": ["client"]})]
+        retriever = CapturingRetriever()
+        profile = NamingSqlProfile(site_id="s", bo_name="BO", naming_sql_id="alias-id", sql_name="alias_sql", params=[NamingSqlParamProfile(name="customer_id")], is_full_table=False, search_text="special fee")
+        request = NamingSqlSelectionRequest(site_id="s", query="ordinary", node={"annotation": "special node"}, parent_node={"annotation": "parent marker"}, structured_spec={"business_terms": ["fee"], "domain_annotation": "nonstandard marker"})
+        spec = DataAccessSpec(business_terms=["special"], available_values=[AvailableValue(name="client", source_ref="ctx.client")])
+        result = NamingSqlSelector(retriever).select(request, _loaded([profile]), spec)
+        self.assertEqual(1, retriever.calls)
+        for expected in ("special node", "parent marker", "fee", "nonstandard marker"):
+            self.assertIn(expected, retriever.captured)
+        self.assertLessEqual(len(retriever.captured), 4000)
+        self.assertEqual(("alias-id", .95), (result.selected.naming_sql_id, result.selected.binding_plan.bindings[0].confidence))
+
+    def test_rich_context_knowledge_changes_bo_and_sql_choice_with_one_call(self):
+        class Retriever:
+            calls = 0
+            def retrieve(self, site_id, query, limit=5):
+                self.calls += 1
+                return [DevelopmentKnowledge(text="node-only", bo_names=["BO_B"], naming_sql_names=["target-b"])] if "node-only" in query else []
+        retriever = Retriever()
+        loaded = _loaded([])
+        loaded.bo_registry["BO_B"] = _bo("BO_B", "target")
+        loaded.naming_sql_profiles["BO_B"] = [NamingSqlProfile(site_id="s", bo_name="BO_B", naming_sql_id="target-b", sql_name="b", is_full_table=False, search_text="target")]
+        request = NamingSqlSelectionRequest(site_id="s", query="ordinary", node={"annotation": "node-only"})
+        result = NamingSqlSelector(retriever).select(request, loaded)
+        self.assertEqual((1, "BO_B", "target-b"), (retriever.calls, result.selected_bo, result.selected.naming_sql_id))
     def test_binding_requires_matching_list_shape(self):
         def run(param_list, value_list):
             profile = NamingSqlProfile(site_id="s", bo_name="BO", naming_sql_id="a", sql_name="a", params=[NamingSqlParamProfile(name="ids", data_type="integer", is_list=param_list)], is_full_table=False, search_text="orders")

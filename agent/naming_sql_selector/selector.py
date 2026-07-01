@@ -279,7 +279,12 @@ class NamingSqlSelector:
         chosen, mode = None, "deterministic_fallback"
         if survivors:
             chosen, mode = survivors[0], "not_required"
-            if len(survivors) > 1:
+            semantic_binding = any(
+                binding.confidence == .85 or binding.reason == "semantic tag and type"
+                for binding in chosen.binding_plan.bindings
+            )
+            needs_review = len(survivors) > 1 or semantic_binding
+            if needs_review:
                 mode = "deterministic_fallback"; top = survivors[:5]; allowed = {x.naming_sql_id: x for x in top}
                 if self._reviewer:
                     try:

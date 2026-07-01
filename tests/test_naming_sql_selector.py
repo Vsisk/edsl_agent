@@ -280,6 +280,37 @@ def _loaded(profiles):
 
 
 class NamingSqlSelectionTests(unittest.TestCase):
+    def _single_binding_selection(self, reviewer, *, semantic):
+        profile = NamingSqlProfile(site_id="s", bo_name="BO", naming_sql_id="only", sql_name="only", params=[NamingSqlParamProfile(name="customer_id", data_type="integer")], is_full_table=False, search_text="orders")
+        value = (AvailableValue(name="customer identifier", source_ref="ctx.customer", data_type="long", semantic_tags=["customer"])
+                 if semantic else AvailableValue(name="customer-id", source_ref="ctx.customer", data_type="integer"))
+        return NamingSqlSelector(reviewer=reviewer).select(NamingSqlSelectionRequest(site_id="s", query="orders", bo_name="BO"), _loaded([profile]), DataAccessSpec(business_terms=["orders"], available_values=[value]))
+
+    def test_single_semantic_binding_calls_valid_reviewer(self):
+        class Reviewer:
+            calls = 0
+            def review(self, *, spec, candidates):
+                self.calls += 1
+                self.assert_candidate = candidates[0]
+                return "only"
+        reviewer = Reviewer()
+        result = self._single_binding_selection(reviewer, semantic=True)
+        self.assertEqual((1, "llm", "only", .85), (reviewer.calls, result.review_mode, result.selected.naming_sql_id, result.selected.binding_plan.bindings[0].confidence))
+
+    def test_single_semantic_binding_without_or_with_invalid_reviewer_falls_back(self):
+        class Invalid:
+            calls = 0
+            def review(self, **kwargs): self.calls += 1; return "invented"
+        for reviewer in (None, Invalid()):
+            with self.subTest(reviewer=reviewer):
+                result = self._single_binding_selection(reviewer, semantic=True)
+                self.assertEqual(("deterministic_fallback", "only", .85), (result.review_mode, result.selected.naming_sql_id, result.selected.binding_plan.bindings[0].confidence))
+
+    def test_single_exact_binding_does_not_call_reviewer(self):
+        class Reviewer:
+            def review(self, **kwargs): raise AssertionError("exact single candidate needs no review")
+        result = self._single_binding_selection(Reviewer(), semantic=False)
+        self.assertEqual(("not_required", 1.0), (result.review_mode, result.selected.binding_plan.bindings[0].confidence))
     def test_selector_retrieves_rich_context_once_and_reuses_alias_knowledge(self):
         class CapturingRetriever:
             calls = 0

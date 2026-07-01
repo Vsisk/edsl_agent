@@ -1,6 +1,7 @@
 import unittest
 
 from agent.models import ValueLogicRequest
+from agent.naming_sql_selector import NamingSqlSelectionResult
 from agent.planner.models import Plan
 from agent.resource_manager.loader.registry_models import FilterTarget, SourceType
 from agent.resource_manager.loader.resource_loader import ResourceLoader
@@ -108,7 +109,109 @@ class FakeDifficultyRouter:
         return self.route
 
 
+def naming_sql_selection(*, source_ref="$ctx$.billStatement.CUST_ID", status="selected"):
+    return NamingSqlSelectionResult.model_validate({
+        "status": status, "selected_bo": "BB_BAK_TRANS",
+        "selected": None if status == "needs_review" else {"naming_sql_id": "2025112610460822566018",
+            "sql_name": "BB_BAK_TRANS_queryDataLoadData", "score": 1.0,
+            "binding_plan": {"bindings": [{"param_name": "CUST_ID", "source_ref": source_ref,
+                "confidence": 1.0, "reason": "exact"}], "unbound_params": [], "ambiguous_params": [], "is_complete": True}, "reasons": []},
+        "fallback_candidates": [], "rejected_candidates": [], "review_mode": "not_required"})
+
+
+class CapturingSelector:
+    def __init__(self, result): self.result, self.calls = result, []
+    def select(self, request, loaded_resource): self.calls.append((request, loaded_resource)); return self.result
+
+
+class FetchPlanner:
+    def __init__(self, *, source_ref="$ctx$.billStatement.CUST_ID", sql_name="BB_BAK_TRANS_queryDataLoadData"):
+        self.calls, self.source_ref, self.sql_name = [], source_ref, sql_name
+    def plan(self, *, node_info, user_query, filtered_env):
+        self.calls.append({"filtered_env": filtered_env})
+        return Plan.model_validate({"nodes": [{"type": "return", "value": {"type": "fetch_one",
+            "name": self.sql_name, "params": [{"name": "CUST_ID", "value": {"type": "context_path", "path": self.source_ref}}]}}]})
+
+
 class ValueLogicGeneratorTest(unittest.TestCase):
+    def test_structured_false_skips_naming_sql_selector(self):
+        class FailingSelector:
+            def select(self, request, loaded_resource):
+                raise AssertionError("selector must not be called")
+
+        planner = FakePlanner()
+        generator = ValueLogicGenerator(
+            resource_loader=ResourceLoader(), llm_planner=planner,
+            naming_sql_selector=FailingSelector(),
+            expression_spec_generator=FakeExpressionSpecGenerator("please query datasource"),
+            resource_filter_target_generator=FakeTargetGenerator([]),
+        )
+
+        generator.generate(ValueLogicRequest(
+            site_id="site1", project_id="project1", node_path="$.x",
+            node={"node_id": "x", "name": "x"}, query="please query datasource",
+            structured_spec={"requires_naming_sql": False}, edsl_tree={},
+        ))
+
+        self.assertEqual(len(planner.calls), 1)
+
+    def test_structured_true_selects_narrows_and_renders_fetch_one(self):
+        selector, planner = CapturingSelector(naming_sql_selection()), FetchPlanner()
+        generator = ValueLogicGenerator(resource_loader=ResourceLoader(), llm_planner=planner,
+            naming_sql_selector=selector, resource_filter_target_generator=FakeTargetGenerator([]))
+        result = generator.generate(ValueLogicRequest(site_id="site1", project_id="project1", node_path="$.x",
+            node={"node_id": "x", "name": "x"}, query="use explicit SQL",
+            structured_spec={"requires_naming_sql": True, "bo_name": "BB_BAK_TRANS"}, edsl_tree=sample_edsl_tree_payload()))
+        env = planner.calls[0]["filtered_env"]
+        self.assertEqual(len(selector.calls), 1)
+        self.assertEqual(selector.calls[0][0].bo_name, "BB_BAK_TRANS")
+        self.assertEqual((len(env.selected_bos), len(env.selected_bos[0].naming_sql_list)), (1, 1))
+        self.assertIs(env.naming_sql_selection, selector.result)
+        self.assertIn("$ctx$.billStatement.CUST_ID", [x.context_name for x in env.selected_global_contexts])
+        self.assertEqual(result.expression, "fetch_one(BB_BAK_TRANS_queryDataLoadData, pair(it.CUST_ID, $ctx$.billStatement.CUST_ID))")
+
+    def test_missing_binding_source_stops_before_planner(self):
+        selector = CapturingSelector(naming_sql_selection(source_ref="$ctx$.missing.value")); planner = FetchPlanner()
+        generator = ValueLogicGenerator(resource_loader=ResourceLoader(), llm_planner=planner,
+            naming_sql_selector=selector, resource_filter_target_generator=FakeTargetGenerator([]))
+        with self.assertRaisesRegex(ValueError, "NAMING_SQL_BINDING_SOURCE_NOT_LOADED"):
+            generator.generate(ValueLogicRequest(site_id="site1", project_id="project1", node_path="$.x",
+                node={"node_id": "x"}, query="查表", edsl_tree={}))
+        self.assertEqual(planner.calls, [])
+
+    def test_needs_review_stops_before_planner(self):
+        selector = CapturingSelector(naming_sql_selection(status="needs_review")); planner = FetchPlanner()
+        generator = ValueLogicGenerator(resource_loader=ResourceLoader(), llm_planner=planner,
+            naming_sql_selector=selector, resource_filter_target_generator=FakeTargetGenerator([]))
+        with self.assertRaisesRegex(ValueError, "NAMING_SQL_REVIEW_REQUIRED"):
+            generator.generate(ValueLogicRequest(site_id="site1", project_id="project1", node_path="$.x",
+                node={"node_id": "x"}, query="查表", edsl_tree={}))
+        self.assertEqual(planner.calls, [])
+
+    def test_local_validator_rejects_fake_planner_reselection(self):
+        selector = CapturingSelector(naming_sql_selection()); planner = FetchPlanner(sql_name="wrong_sql")
+        generator = ValueLogicGenerator(resource_loader=ResourceLoader(), llm_planner=planner,
+            naming_sql_selector=selector, resource_filter_target_generator=FakeTargetGenerator([]))
+        with self.assertRaisesRegex(ValueError, "NAMING_SQL_RESELECTED"):
+            generator.generate(ValueLogicRequest(site_id="site1", project_id="project1", node_path="$.x",
+                node={"node_id": "x"}, query="查表", edsl_tree=sample_edsl_tree_payload()))
+
+    def test_selector_request_context_metadata_and_bo_precedence(self):
+        selector, planner = CapturingSelector(naming_sql_selection()), FetchPlanner()
+        target = FilterTarget(SourceType.CONTEXT, "billStatement", "CUST_ID")
+        generator = ValueLogicGenerator(resource_loader=ResourceLoader(), llm_planner=planner,
+            naming_sql_selector=selector, resource_filter_target_generator=FakeTargetGenerator([target]))
+        generator.generate(ValueLogicRequest(site_id="site1", project_id="project1", node_path="$.x",
+            node={"node_id": "x"}, parent_node={"ab_content": {"data_source": {"data_source_type": "sql",
+                "sql_query": {"bo_name": "PARENT_BO"}}}}, query="NamingSQL",
+            structured_spec={"bo_name": "BB_BAK_TRANS"}, edsl_tree=sample_edsl_tree_payload()))
+        sent = selector.calls[0][0]
+        self.assertEqual(sent.bo_name, "BB_BAK_TRANS")
+        self.assertEqual(sent.available_context[0]["source_ref"], "$ctx$.billStatement.CUST_ID")
+        self.assertEqual(sent.available_context[0]["data_type"], "INT64")
+        self.assertFalse(sent.available_context[0]["is_list"])
+        self.assertEqual(len({item["source_ref"] for item in sent.available_context}), len(sent.available_context))
+
     def test_default_path_uses_expression_spec_nl_and_does_not_call_legacy_filtering(self):
         planner = FakePlanner()
         expression_spec_generator = FakeExpressionSpecGenerator("上下文 billStatement 的 CUST_ID")

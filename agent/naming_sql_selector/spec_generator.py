@@ -53,6 +53,41 @@ def _bounded_combined_text(parts: tuple[str, ...]) -> str:
     return " ".join(part[:per_part] for part in present)[:MAX_COMBINED_QUERY_CHARS]
 
 
+def requires_naming_sql(structured_spec: dict[str, Any], *text_values: Any) -> bool:
+    """Apply the shared, deliberately narrow expression/data-access route rule."""
+    explicit = structured_spec.get("requires_naming_sql")
+    if isinstance(explicit, bool):
+        return explicit
+    inference_text = " ".join(_inference_values(value) for value in text_values)
+    return any(
+        re.search(pattern, inference_text, flags=re.IGNORECASE)
+        for pattern in (
+            r"(?<![a-z0-9])查表(?![a-z0-9])",
+            r"(?<![a-z0-9])查询表(?![a-z0-9])",
+            r"(?<![a-z0-9])data[\s_-]*source(?![a-z0-9])",
+            r"(?<![a-z0-9])naming[\s_-]*sql(?![a-z0-9])",
+        )
+    )
+
+
+def _inference_values(value: Any, *, _depth: int = 0, _seen: set[int] | None = None) -> str:
+    """Bounded visible values only; schema keys such as data_source are not user intent."""
+    if isinstance(value, str):
+        return value[:MAX_COMBINED_QUERY_CHARS]
+    if value is None or _depth >= 8:
+        return ""
+    seen = _seen if _seen is not None else set()
+    if isinstance(value, (dict, list, tuple)):
+        if id(value) in seen:
+            return ""
+        seen.add(id(value))
+        items = value.values() if isinstance(value, dict) else value
+        result = " ".join(_inference_values(item, _depth=_depth + 1, _seen=seen) for item in items)
+        seen.remove(id(value))
+        return result[:MAX_COMBINED_QUERY_CHARS]
+    return str(value)[:MAX_TERM_CHARS]
+
+
 def _semantic_tokens(*values: str) -> list[str]:
     tokens: list[str] = []
     for value in values:
@@ -68,13 +103,6 @@ class DataAccessSpecGenerator:
         structured = request.structured_spec
         node_text = _safe_text(request.node)
         parent_text = _safe_text(request.parent_node)
-        inference_text = " ".join(
-            part for part in (
-                request.query,
-                node_text,
-                parent_text,
-            ) if part
-        )
         business_terms = _strings(structured.get("business_terms", []))
         scope_terms = _strings(structured.get("scope_terms", []))
         bo_hints = _strings(structured.get("bo_hints", []))
@@ -86,18 +114,7 @@ class DataAccessSpecGenerator:
             _safe_text(structured),
             " ".join(business_terms + scope_terms + bo_hints + filter_requirements),
         ))
-        if isinstance(structured.get("requires_naming_sql"), bool):
-            requires_naming_sql = structured["requires_naming_sql"]
-        else:
-            requires_naming_sql = any(
-                re.search(pattern, inference_text, flags=re.IGNORECASE)
-                for pattern in (
-                    r"(?<![a-z0-9])查表(?![a-z0-9])",
-                    r"(?<![a-z0-9])查询表(?![a-z0-9])",
-                    r"(?<![a-z0-9])data[\s_-]*source(?![a-z0-9])",
-                    r"(?<![a-z0-9])naming[\s_-]*sql(?![a-z0-9])",
-                )
-            )
+        requires_naming_sql_value = requires_naming_sql(structured, request.query, request.node, request.parent_node)
 
         available_values: list[AvailableValue] = []
         for item in request.available_context[:MAX_AVAILABLE_CONTEXT]:
@@ -141,7 +158,7 @@ class DataAccessSpecGenerator:
             business_terms.extend(_strings(entry.semantic_tags))
 
         return DataAccessSpec(
-            requires_naming_sql=requires_naming_sql,
+            requires_naming_sql=requires_naming_sql_value,
             business_terms=_bounded_unique(business_terms),
             scope_terms=_bounded_unique(scope_terms),
             bo_hints=_bounded_unique(bo_hints),

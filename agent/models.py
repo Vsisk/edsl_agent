@@ -21,6 +21,7 @@ class ValueLogicRequest(BaseModel):
     query: str
     is_ab: bool = False
     edsl_tree: dict[str, Any] | None = None
+    structured_spec: dict[str, Any] = Field(default_factory=dict)
 
 
 class ValueLogicSource(BaseModel):

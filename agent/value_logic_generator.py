@@ -10,6 +10,8 @@ from agent.expression_generation.ast.builder import build_ast
 from agent.expression_generation.ast.generator import generate_expression
 from agent.expression_generation.ast.validator import validate_ast
 from agent.models import NodeDef, ValueLogicRequest, ValueLogicResult, ValueLogicSource
+from agent.naming_sql_selector import NamingSqlSelectionRequest, NamingSqlSelector, validate_naming_sql_plan
+from agent.naming_sql_selector.spec_generator import MAX_AVAILABLE_CONTEXT, requires_naming_sql
 from agent.planner.difficulty_router import LLMDifficultyRouter, ResourceRoute
 from agent.planner.llm_planner import LLMPlanner
 from agent.resource_manager.loader.resource_loader import LoadedResource, ResourceLoader, resource_loader as default_resource_loader
@@ -55,6 +57,7 @@ class ValueLogicGenerator:
         expression_spec_generator: Any | None = None,
         resource_filter_target_generator: Any | None = None,
         enable_legacy_filter_fallback: bool = False,
+        naming_sql_selector: NamingSqlSelector | None = None,
     ):
         self.resource_loader = resource_loader or default_resource_loader
         self.llm_resource_filter = llm_resource_filter or LLMResourceFilter()
@@ -63,6 +66,7 @@ class ValueLogicGenerator:
         self.expression_spec_generator = expression_spec_generator or ExpressionSpecGenerator()
         self.resource_filter_target_generator = resource_filter_target_generator or ResourceFilterTargetGenerator()
         self.enable_legacy_filter_fallback = enable_legacy_filter_fallback
+        self.naming_sql_selector = naming_sql_selector or NamingSqlSelector()
 
     def generate(self, request: ValueLogicRequest) -> ValueLogicResult:
         resources = ResourceContext(
@@ -206,11 +210,33 @@ class ValueLogicGenerator:
                 llm_resource_filter=self.llm_resource_filter,
                 **legacy_limits,
             )
+        naming_sql_selection = None
+        if requires_naming_sql(request.structured_spec, expression_spec.nl, request.node, request.parent_node):
+            selection_request = NamingSqlSelectionRequest(
+                site_id=request.site_id,
+                query=request.query or expression_spec.nl,
+                node=request.node,
+                parent_node=request.parent_node,
+                structured_spec=request.structured_spec,
+                bo_name=self._requested_bo_name(request),
+                available_context=self._available_context(filtered_env, ctx.resources.loaded, request.node_path),
+            )
+            naming_sql_selection = self.naming_sql_selector.select(
+                selection_request,
+                loaded_resource=ctx.resources.loaded,
+            )
+            if naming_sql_selection is None or naming_sql_selection.status == "needs_review" or naming_sql_selection.selected is None:
+                raise ValueError("NAMING_SQL_REVIEW_REQUIRED")
+            filtered_env = self._narrow_naming_sql_environment(
+                filtered_env, ctx.resources.loaded, request.node_path, naming_sql_selection
+            )
         plan = self.llm_planner.plan(
             node_info=node_info,
             user_query=request.query,
             filtered_env=filtered_env,
         )
+        if naming_sql_selection is not None:
+            validate_naming_sql_plan(plan, naming_sql_selection)
         ast = build_ast(plan)
         validate_ast(ast)
         expression = generate_expression(ast)
@@ -221,6 +247,82 @@ class ValueLogicGenerator:
             expression=expression,
             source=ValueLogicSource(source_type="plan")
         )
+
+    def _requested_bo_name(self, request: ValueLogicRequest) -> str | None:
+        value = request.structured_spec.get("bo_name")
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+        return self._extract_parent_sql_bo_name(request.parent_node)
+
+    def _available_context(self, env, loaded: LoadedResource, node_path: str) -> list[dict[str, Any]]:
+        visible_local = list(loaded.get_visible_local_context_registry(node_path).values())
+        ordered = [
+            *env.selected_global_contexts,
+            *env.visible_local_context,
+            *loaded.context_registry.values(),
+            *visible_local,
+        ]
+        result: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for context in ordered:
+            source_ref = str(getattr(context, "context_name", "") or "")
+            if not source_ref or source_ref in seen:
+                continue
+            seen.add(source_ref)
+            return_type = getattr(context, "return_type", None)
+            concrete_type = str(
+                getattr(return_type, "data_type_name", None)
+                or getattr(return_type, "data_type", "")
+                or ""
+            )
+            result.append({
+                "name": source_ref.rsplit(".", 1)[-1],
+                "source_ref": source_ref,
+                "data_type": concrete_type,
+                "is_list": bool(getattr(return_type, "is_list", False)),
+                "semantic_tags": list(getattr(context, "tag", []) or []),
+            })
+            if len(result) >= MAX_AVAILABLE_CONTEXT:
+                break
+        return result
+
+    def _narrow_naming_sql_environment(self, env, loaded: LoadedResource, node_path: str, selection):
+        selected = selection.selected
+        bo = next((item for item in loaded.bo_registry.values() if item.bo_name == selection.selected_bo), None)
+        if bo is None or selected is None:
+            raise ValueError("NAMING_SQL_REVIEW_REQUIRED")
+        definition = next((item for item in bo.naming_sql_list if item.naming_sql_id == selected.naming_sql_id), None)
+        if definition is None and not selected.naming_sql_id:
+            matches = [item for item in bo.naming_sql_list if item.sql_name == selected.sql_name]
+            definition = matches[0] if len(matches) == 1 else None
+        if definition is None:
+            raise ValueError("NAMING_SQL_REVIEW_REQUIRED")
+
+        global_by_ref = {item.context_name: item for item in loaded.context_registry.values()}
+        local_by_ref = {item.context_name: item for item in loaded.get_visible_local_context_registry(node_path).values()}
+        globals_out = list(env.selected_global_contexts)
+        locals_out = list(env.visible_local_context)
+        global_seen = {item.context_name for item in globals_out}
+        local_seen = {item.context_name for item in locals_out}
+        for binding in selected.binding_plan.bindings:
+            source_ref = binding.source_ref
+            if source_ref in global_by_ref:
+                if source_ref not in global_seen:
+                    globals_out.append(global_by_ref[source_ref]); global_seen.add(source_ref)
+            elif source_ref in local_by_ref:
+                if source_ref not in local_seen:
+                    locals_out.append(local_by_ref[source_ref]); local_seen.add(source_ref)
+            else:
+                raise ValueError(f"NAMING_SQL_BINDING_SOURCE_NOT_LOADED source_ref={source_ref}")
+        narrowed_bo = bo.model_copy(update={"naming_sql_list": [definition]}, deep=True)
+        env.selected_bos = [narrowed_bo]
+        env.selected_bo_ids = [narrowed_bo.resource_id]
+        env.selected_global_contexts = globals_out
+        env.selected_global_context_ids = [item.resource_id for item in globals_out]
+        env.visible_local_context = locals_out
+        env.selected_local_context_ids = [item.resource_id for item in locals_out]
+        env.naming_sql_selection = selection
+        return env
 
     def _route_resources(self, node_info: NodeDef, user_query: str) -> ResourceRoute:
         try:

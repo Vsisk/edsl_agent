@@ -33,7 +33,6 @@ def validate_naming_sql_selection_ready(result: NamingSqlSelectionResult | None)
         or any(not value for value in param_names)
         or any(not value for value in source_refs)
         or len(param_names) != len(set(param_names))
-        or len(source_refs) != len(set(source_refs))
     ):
         raise ValueError("NAMING_SQL_REVIEW_REQUIRED")
 

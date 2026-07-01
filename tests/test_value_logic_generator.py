@@ -323,6 +323,28 @@ class ValueLogicGeneratorTest(unittest.TestCase):
                         node={"node_id": "x"}, query="查表", edsl_tree=sample_edsl_tree_payload()))
                 self.assertEqual(planner.calls, [])
 
+    def test_distinct_params_may_share_one_binding_source(self):
+        result = naming_sql_selection().model_copy(deep=True)
+        second = result.selected.binding_plan.bindings[0].model_copy(update={"param_name": "ACCOUNT_ID"})
+        result.selected.binding_plan.bindings.append(second)
+
+        class SharedSourcePlanner:
+            def __init__(self): self.calls = []
+            def plan(self, *, node_info, user_query, filtered_env):
+                self.calls.append(filtered_env)
+                params = [{"name": name, "value": {"type": "context_path", "path": "$ctx$.billStatement.CUST_ID"}}
+                    for name in ("CUST_ID", "ACCOUNT_ID")]
+                return Plan.model_validate({"nodes": [{"type": "return", "value": {"type": "fetch_one",
+                    "name": "BB_BAK_TRANS_queryDataLoadData", "params": params}}]})
+
+        planner = SharedSourcePlanner()
+        generator = ValueLogicGenerator(resource_loader=ResourceLoader(), llm_planner=planner,
+            naming_sql_selector=CapturingSelector(result), resource_filter_target_generator=FakeTargetGenerator([]))
+        generated = generator.generate(ValueLogicRequest(site_id="site1", project_id="project1", node_path="$.x",
+            node={"node_id": "x"}, query="查表", edsl_tree=sample_edsl_tree_payload()))
+        self.assertEqual(len(planner.calls), 1)
+        self.assertIn("pair(it.ACCOUNT_ID, $ctx$.billStatement.CUST_ID)", generated.expression)
+
     def test_default_path_uses_expression_spec_nl_and_does_not_call_legacy_filtering(self):
         planner = FakePlanner()
         expression_spec_generator = FakeExpressionSpecGenerator("上下文 billStatement 的 CUST_ID")

@@ -116,15 +116,12 @@ def _summarize_filtered_environment(filtered_env: FilteredEnvironment) -> dict[s
     if selection is not None and selection.selected is not None:
         chosen = selection.selected
         summary["naming_sql_selection"] = {
-            "selected_bo": selection.selected_bo,
-            "naming_sql_id": chosen.naming_sql_id,
-            "sql_name": chosen.sql_name,
+            "bo": selection.selected_bo,
+            "name": chosen.sql_name,
             "bindings": [
                 {
                     "name": item.param_name,
                     "source_ref": item.source_ref,
-                    "confidence": item.confidence,
-                    "reason": item.reason,
                 }
                 for item in chosen.binding_plan.bindings
             ],

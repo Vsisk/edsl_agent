@@ -114,8 +114,10 @@ class LLMPlannerTest(unittest.TestCase):
         env = FilteredEnvironment(selected_bos=[Resource(resource_id="bo.1", bo_name="Customer", bo_desc="", property_list=[], naming_sql_list=[Resource(sql_name="FindCustomer", sql_description="secret query", param_list=[]), Resource(sql_name="SiblingSql", sql_description="", param_list=[])])], naming_sql_selection=_selection())
         LLMPlanner(client=client).plan(node_info=_node_info(), user_query="find", filtered_env=env)
         resources = json.loads(client.calls[0]["prompt"].split(" RESOURCES:", 1)[1].split(" SCHEMA:", 1)[0])
-        self.assertEqual(resources["naming_sql_selection"], {"selected_bo":"Customer","naming_sql_id":"ns.1","sql_name":"FindCustomer","bindings":[{"name":"id","source_ref":"$ctx$.id","confidence":.9,"reason":"exact"}]})
+        self.assertEqual(resources["naming_sql_selection"], {"bo":"Customer","name":"FindCustomer","bindings":[{"name":"id","source_ref":"$ctx$.id"}]})
         self.assertNotIn("naming_sql", resources["bo"][0]); self.assertNotIn("SiblingSql", client.calls[0]["prompt"]); self.assertNotIn("secret query", client.calls[0]["prompt"])
+        for forbidden in ("ns.1", "exact", "confidence", "reason", "fallback_candidates", "rejected_candidates", "sql_command"):
+            self.assertNotIn(forbidden, client.calls[0]["prompt"])
 
     def test_plan_without_selection_omits_selection_summary(self):
         client = FakeClient(['{"nodes":[{"type":"return","value":{"type":"literal","value":null}}]}'])

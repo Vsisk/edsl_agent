@@ -19,6 +19,8 @@ class PlannerPromptTest(unittest.TestCase):
             self.assertIn("do not omit, add, or reorder params", lowered)
             self.assertIn("do not change source_ref", lowered)
             self.assertIn("only the listed resources", lowered)
+            self.assertIn("copy its name", lowered)
+            self.assertNotIn("copy its sql_name", lowered)
 
     def test_operation_locator_prompt_has_candidate_constrained_contract(self):
         prompt = prompt_manager.render(

@@ -211,7 +211,9 @@ class ValueLogicGenerator:
                 **legacy_limits,
             )
         naming_sql_selection = None
-        if requires_naming_sql(request.structured_spec, expression_spec.nl, request.node, request.parent_node):
+        if requires_naming_sql(
+            request.structured_spec, request.query, expression_spec.nl, request.node, request.parent_node
+        ):
             selection_request = NamingSqlSelectionRequest(
                 site_id=request.site_id,
                 query=request.query or expression_spec.nl,
@@ -259,8 +261,8 @@ class ValueLogicGenerator:
         ordered = [
             *env.selected_global_contexts,
             *env.visible_local_context,
-            *loaded.context_registry.values(),
             *visible_local,
+            *loaded.context_registry.values(),
         ]
         result: list[dict[str, Any]] = []
         seen: set[str] = set()
@@ -291,12 +293,20 @@ class ValueLogicGenerator:
         bo = next((item for item in loaded.bo_registry.values() if item.bo_name == selection.selected_bo), None)
         if bo is None or selected is None:
             raise ValueError("NAMING_SQL_REVIEW_REQUIRED")
-        definition = next((item for item in bo.naming_sql_list if item.naming_sql_id == selected.naming_sql_id), None)
-        if definition is None and not selected.naming_sql_id:
+        if selected.naming_sql_id:
+            matches = [item for item in bo.naming_sql_list if item.naming_sql_id == selected.naming_sql_id]
+            if len(matches) > 1:
+                raise ValueError(f"NAMING_SQL_DEFINITION_AMBIGUOUS id={str(selected.naming_sql_id)[:80]}")
+            definition = matches[0] if len(matches) == 1 and matches[0].sql_name == selected.sql_name else None
+        else:
             matches = [item for item in bo.naming_sql_list if item.sql_name == selected.sql_name]
+            if len(matches) > 1:
+                raise ValueError(f"NAMING_SQL_DEFINITION_AMBIGUOUS name={str(selected.sql_name)[:80]}")
             definition = matches[0] if len(matches) == 1 else None
         if definition is None:
-            raise ValueError("NAMING_SQL_REVIEW_REQUIRED")
+            raise ValueError(
+                f"NAMING_SQL_DEFINITION_NOT_LOADED id={str(selected.naming_sql_id)[:80]} name={str(selected.sql_name)[:80]}"
+            )
 
         global_by_ref = {item.context_name: item for item in loaded.context_registry.values()}
         local_by_ref = {item.context_name: item for item in loaded.get_visible_local_context_registry(node_path).values()}
@@ -383,22 +393,26 @@ class ValueLogicGenerator:
     def _extract_parent_sql_bo_name(self, parent_node: dict[str, Any] | None) -> str | None:
         if not parent_node or not self._is_sql_source(parent_node):
             return None
-
+        containers: list[dict[str, Any]] = [parent_node]
+        for key in ("data_source", "ab_data_source"):
+            value = parent_node.get(key)
+            if isinstance(value, dict):
+                containers.append(value)
         ab_content = parent_node.get("ab_content")
-        if not isinstance(ab_content, dict):
-            return None
-        data_source = ab_content.get("data_source")
-        if not isinstance(data_source, dict):
-            return None
-        if self._normalize_text(data_source.get("data_source_type")) != "sql":
-            return None
-        sql_query = data_source.get("sql_query")
-        if not isinstance(sql_query, dict):
-            return None
-        bo_name = sql_query.get("bo_name")
-        if bo_name is None or not str(bo_name).strip():
-            return None
-        return str(bo_name).strip()
+        if isinstance(ab_content, dict) and isinstance(ab_content.get("data_source"), dict):
+            containers.append(ab_content["data_source"])
+        for container in containers:
+            source_type = self._normalize_text(container.get("source_type") or container.get("data_source_type"))
+            if source_type != "sql":
+                continue
+            sql_query = container.get("sql_query")
+            candidates = [container.get("bo_name")]
+            if isinstance(sql_query, dict):
+                candidates.insert(0, sql_query.get("bo_name"))
+            for bo_name in candidates:
+                if isinstance(bo_name, str) and bo_name.strip():
+                    return bo_name.strip()
+        return None
 
     def _extract_summary_type(self, node: dict[str, Any]) -> str | None:
         summary = node.get("summary") or node.get("summary_config")

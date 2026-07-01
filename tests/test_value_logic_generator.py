@@ -1,9 +1,10 @@
 import unittest
+from types import SimpleNamespace
 
 from agent.models import ValueLogicRequest
 from agent.naming_sql_selector import NamingSqlSelectionResult
 from agent.planner.models import Plan
-from agent.resource_manager.loader.registry_models import FilterTarget, SourceType
+from agent.resource_manager.loader.registry_models import ContextRegistry, FilterTarget, LocalContextRegistry, PropertyTypeEnum, ReturnType, SourceType
 from agent.resource_manager.loader.resource_loader import ResourceLoader
 from agent.value_logic_generator import ValueLogicGenerator
 from tests.test_environment import FakeResourceFilter, sample_edsl_tree_payload
@@ -211,6 +212,75 @@ class ValueLogicGeneratorTest(unittest.TestCase):
         self.assertEqual(sent.available_context[0]["data_type"], "INT64")
         self.assertFalse(sent.available_context[0]["is_list"])
         self.assertEqual(len({item["source_ref"] for item in sent.available_context}), len(sent.available_context))
+
+    def test_raw_query_lookup_routes_when_expression_spec_is_ordinary(self):
+        selector, planner = CapturingSelector(naming_sql_selection()), FetchPlanner()
+        generator = ValueLogicGenerator(resource_loader=ResourceLoader(), llm_planner=planner,
+            naming_sql_selector=selector, expression_spec_generator=FakeExpressionSpecGenerator("ordinary wording"),
+            resource_filter_target_generator=FakeTargetGenerator([]))
+        generator.generate(ValueLogicRequest(site_id="site1", project_id="project1", node_path="$.x",
+            node={"node_id": "x"}, query="please use datasource", edsl_tree=sample_edsl_tree_payload()))
+        self.assertEqual(len(selector.calls), 1)
+
+    def test_expression_spec_lookup_routes_when_raw_query_is_ordinary(self):
+        selector, planner = CapturingSelector(naming_sql_selection()), FetchPlanner()
+        generator = ValueLogicGenerator(resource_loader=ResourceLoader(), llm_planner=planner,
+            naming_sql_selector=selector, expression_spec_generator=FakeExpressionSpecGenerator("use naming sql"),
+            resource_filter_target_generator=FakeTargetGenerator([]))
+        generator.generate(ValueLogicRequest(site_id="site1", project_id="project1", node_path="$.x",
+            node={"node_id": "x"}, query="ordinary wording", edsl_tree=sample_edsl_tree_payload()))
+        self.assertEqual(len(selector.calls), 1)
+
+    def test_available_context_keeps_visible_local_ahead_of_remaining_globals_at_cap(self):
+        generator = ValueLogicGenerator()
+        globals_ = {}
+        for index in range(100):
+            item = ContextRegistry(resource_id=f"g{index}", context_name=f"$ctx$.bulk.g{index}",
+                return_type=ReturnType(data_type="basic", data_type_name="STRING", is_list=False),
+                property_type=PropertyTypeEnum.system, annotation="", tag=[])
+            globals_[item.context_name] = item
+        local = LocalContextRegistry(resource_id="local", context_name="$local$.must_keep",
+            return_type=ReturnType(data_type="basic", data_type_name="INT", is_list=False))
+        loaded = SimpleNamespace(context_registry=globals_, get_visible_local_context_registry=lambda path: {local.context_name: local})
+        env = SimpleNamespace(selected_global_contexts=[globals_["$ctx$.bulk.g0"]], visible_local_context=[])
+        result = generator._available_context(env, loaded, "$.x")
+        self.assertEqual(len(result), 100)
+        self.assertEqual([item["source_ref"] for item in result[:2]], ["$ctx$.bulk.g0", "$local$.must_keep"])
+        self.assertNotIn("$ctx$.bulk.g99", [item["source_ref"] for item in result])
+
+    def test_parent_sql_bo_extraction_accepts_all_supported_shapes(self):
+        generator = ValueLogicGenerator()
+        shapes = [
+            {"source_type": "sql", "sql_query": {"bo_name": "TOP"}},
+            {"data_source_type": "sql", "bo_name": "DIRECT"},
+            {"data_source": {"data_source_type": "sql", "sql_query": {"bo_name": "DATA"}}},
+            {"ab_data_source": {"source_type": "sql", "sql_query": {"bo_name": "AB"}}},
+            {"ab_content": {"data_source": {"data_source_type": "sql", "sql_query": {"bo_name": "CONTENT"}}}},
+        ]
+        self.assertEqual([generator._extract_parent_sql_bo_name(item) for item in shapes],
+            ["TOP", "DIRECT", "DATA", "AB", "CONTENT"])
+
+    def test_definition_identity_rejects_duplicate_id_and_name_mismatch(self):
+        generator = ValueLogicGenerator()
+        loaded = ResourceLoader().load_resource("site1", "project1", {})
+        bo = loaded.bo_registry["BB_BAK_TRANS"]
+        definition = bo.naming_sql_list[0]
+        env = SimpleNamespace(selected_global_contexts=[], visible_local_context=[], selected_bos=[], selected_bo_ids=[],
+            selected_global_context_ids=[], selected_local_context_ids=[], naming_sql_selection=None)
+        loaded.bo_registry["BB_BAK_TRANS"] = bo.model_copy(update={"naming_sql_list": [definition, definition.model_copy()]})
+        with self.assertRaisesRegex(ValueError, "NAMING_SQL_DEFINITION_AMBIGUOUS"):
+            generator._narrow_naming_sql_environment(env, loaded, "$.x", naming_sql_selection())
+        loaded.bo_registry["BB_BAK_TRANS"] = bo
+        mismatch = naming_sql_selection().model_copy(deep=True)
+        mismatch.selected.sql_name = "wrong"
+        with self.assertRaisesRegex(ValueError, "NAMING_SQL_DEFINITION_NOT_LOADED"):
+            generator._narrow_naming_sql_environment(env, loaded, "$.x", mismatch)
+        legacy = naming_sql_selection().model_copy(deep=True)
+        legacy.selected.naming_sql_id = ""
+        duplicate_name = definition.model_copy(update={"naming_sql_id": "other-id"})
+        loaded.bo_registry["BB_BAK_TRANS"] = bo.model_copy(update={"naming_sql_list": [definition, duplicate_name]})
+        with self.assertRaisesRegex(ValueError, "NAMING_SQL_DEFINITION_AMBIGUOUS"):
+            generator._narrow_naming_sql_environment(env, loaded, "$.x", legacy)
 
     def test_default_path_uses_expression_spec_nl_and_does_not_call_legacy_filtering(self):
         planner = FakePlanner()

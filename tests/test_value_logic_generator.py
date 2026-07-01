@@ -134,6 +134,17 @@ class FetchPlanner:
             "name": self.sql_name, "params": [{"name": "CUST_ID", "value": {"type": "context_path", "path": self.source_ref}}]}}]})
 
 
+class MutatingPlanner:
+    def __init__(self): self.calls = []
+    def plan(self, *, node_info, user_query, filtered_env):
+        self.calls.append(filtered_env)
+        filtered_env.naming_sql_selection.selected.sql_name = "attacker_sql"
+        filtered_env.naming_sql_selection.selected.binding_plan.bindings[0].source_ref = "$ctx$.billStatement.BE_ID"
+        return Plan.model_validate({"nodes": [{"type": "return", "value": {"type": "fetch_one",
+            "name": "attacker_sql", "params": [{"name": "CUST_ID", "value": {"type": "context_path",
+                "path": "$ctx$.billStatement.BE_ID"}}]}}]})
+
+
 class ValueLogicGeneratorTest(unittest.TestCase):
     def test_structured_false_skips_naming_sql_selector(self):
         class FailingSelector:
@@ -167,7 +178,8 @@ class ValueLogicGeneratorTest(unittest.TestCase):
         self.assertEqual(len(selector.calls), 1)
         self.assertEqual(selector.calls[0][0].bo_name, "BB_BAK_TRANS")
         self.assertEqual((len(env.selected_bos), len(env.selected_bos[0].naming_sql_list)), (1, 1))
-        self.assertIs(env.naming_sql_selection, selector.result)
+        self.assertEqual(env.naming_sql_selection, selector.result)
+        self.assertIsNot(env.naming_sql_selection, selector.result)
         self.assertIn("$ctx$.billStatement.CUST_ID", [x.context_name for x in env.selected_global_contexts])
         self.assertEqual(result.expression, "fetch_one(BB_BAK_TRANS_queryDataLoadData, pair(it.CUST_ID, $ctx$.billStatement.CUST_ID))")
 
@@ -279,6 +291,37 @@ class ValueLogicGeneratorTest(unittest.TestCase):
         empty_id.selected.naming_sql_id = ""
         with self.assertRaisesRegex(ValueError, "NAMING_SQL_DEFINITION_NOT_LOADED"):
             generator._narrow_naming_sql_environment(env, loaded, "$.x", empty_id)
+
+    def test_planner_cannot_mutate_approved_selection_snapshot(self):
+        approved = naming_sql_selection()
+        selector, planner = CapturingSelector(approved), MutatingPlanner()
+        generator = ValueLogicGenerator(resource_loader=ResourceLoader(), llm_planner=planner,
+            naming_sql_selector=selector, resource_filter_target_generator=FakeTargetGenerator([]))
+        with self.assertRaisesRegex(ValueError, "NAMING_SQL_RESELECTED"):
+            generator.generate(ValueLogicRequest(site_id="site1", project_id="project1", node_path="$.x",
+                node={"node_id": "x"}, query="查表", edsl_tree=sample_edsl_tree_payload()))
+        self.assertEqual(approved.selected.sql_name, "BB_BAK_TRANS_queryDataLoadData")
+        self.assertEqual(approved.selected.binding_plan.bindings[0].source_ref, "$ctx$.billStatement.CUST_ID")
+
+    def test_invalid_selector_bindings_stop_before_planner(self):
+        invalid_results = []
+        for mutation in ("incomplete", "unbound", "ambiguous", "duplicate"):
+            result = naming_sql_selection().model_copy(deep=True)
+            plan = result.selected.binding_plan
+            if mutation == "incomplete": plan.is_complete = False
+            if mutation == "unbound": plan.unbound_params = ["MISSING"]
+            if mutation == "ambiguous": plan.ambiguous_params = ["CUST_ID"]
+            if mutation == "duplicate": plan.bindings.append(plan.bindings[0].model_copy())
+            invalid_results.append(result)
+        for result in invalid_results:
+            with self.subTest(result=result):
+                planner = FetchPlanner()
+                generator = ValueLogicGenerator(resource_loader=ResourceLoader(), llm_planner=planner,
+                    naming_sql_selector=CapturingSelector(result), resource_filter_target_generator=FakeTargetGenerator([]))
+                with self.assertRaisesRegex(ValueError, "NAMING_SQL_REVIEW_REQUIRED"):
+                    generator.generate(ValueLogicRequest(site_id="site1", project_id="project1", node_path="$.x",
+                        node={"node_id": "x"}, query="查表", edsl_tree=sample_edsl_tree_payload()))
+                self.assertEqual(planner.calls, [])
 
     def test_default_path_uses_expression_spec_nl_and_does_not_call_legacy_filtering(self):
         planner = FakePlanner()

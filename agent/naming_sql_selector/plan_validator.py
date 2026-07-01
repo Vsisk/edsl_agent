@@ -16,17 +16,33 @@ MAX_PLAN_DEPTH = 100
 MAX_VISITED_NODES = 10_000
 
 
-def validate_naming_sql_plan(plan: Plan, result: NamingSqlSelectionResult) -> None:
-    """Reject any planner mutation of an approved NamingSQL selection and bindings."""
-    selected = result.selected
+def validate_naming_sql_selection_ready(result: NamingSqlSelectionResult | None) -> None:
+    selected = getattr(result, "selected", None)
+    if getattr(result, "status", None) != "selected" or selected is None:
+        raise ValueError("NAMING_SQL_REVIEW_REQUIRED")
+    binding_plan = selected.binding_plan
+    bindings = binding_plan.bindings
+    param_names = [binding.param_name.strip() for binding in bindings]
+    source_refs = [binding.source_ref.strip() for binding in bindings]
     if (
-        result.status == "needs_review"
-        or selected is None
-        or not selected.binding_plan.is_complete
-        or bool(selected.binding_plan.unbound_params)
-        or bool(selected.binding_plan.ambiguous_params)
+        not binding_plan.is_complete
+        or binding_plan.unbound_params
+        or binding_plan.ambiguous_params
+        or not selected.naming_sql_id.strip()
+        or not selected.sql_name.strip()
+        or any(not value for value in param_names)
+        or any(not value for value in source_refs)
+        or len(param_names) != len(set(param_names))
+        or len(source_refs) != len(set(source_refs))
     ):
         raise ValueError("NAMING_SQL_REVIEW_REQUIRED")
+
+
+def validate_naming_sql_plan(plan: Plan, result: NamingSqlSelectionResult) -> None:
+    """Reject any planner mutation of an approved NamingSQL selection and bindings."""
+    validate_naming_sql_selection_ready(result)
+    selected = result.selected
+    assert selected is not None
 
     expected = selected.binding_plan.bindings
     fetches = [

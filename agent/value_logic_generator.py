@@ -10,7 +10,12 @@ from agent.expression_generation.ast.builder import build_ast
 from agent.expression_generation.ast.generator import generate_expression
 from agent.expression_generation.ast.validator import validate_ast
 from agent.models import NodeDef, ValueLogicRequest, ValueLogicResult, ValueLogicSource
-from agent.naming_sql_selector import NamingSqlSelectionRequest, NamingSqlSelector, validate_naming_sql_plan
+from agent.naming_sql_selector import (
+    NamingSqlSelectionRequest,
+    NamingSqlSelector,
+    validate_naming_sql_plan,
+    validate_naming_sql_selection_ready,
+)
 from agent.naming_sql_selector.spec_generator import MAX_AVAILABLE_CONTEXT, requires_naming_sql
 from agent.planner.difficulty_router import LLMDifficultyRouter, ResourceRoute
 from agent.planner.llm_planner import LLMPlanner
@@ -223,14 +228,15 @@ class ValueLogicGenerator:
                 bo_name=self._requested_bo_name(request),
                 available_context=self._available_context(filtered_env, ctx.resources.loaded, request.node_path),
             )
-            naming_sql_selection = self.naming_sql_selector.select(
+            selector_result = self.naming_sql_selector.select(
                 selection_request,
                 loaded_resource=ctx.resources.loaded,
             )
-            if naming_sql_selection is None or naming_sql_selection.status == "needs_review" or naming_sql_selection.selected is None:
-                raise ValueError("NAMING_SQL_REVIEW_REQUIRED")
+            validate_naming_sql_selection_ready(selector_result)
+            naming_sql_selection = selector_result.model_copy(deep=True)
+            planner_selection = naming_sql_selection.model_copy(deep=True)
             filtered_env = self._narrow_naming_sql_environment(
-                filtered_env, ctx.resources.loaded, request.node_path, naming_sql_selection
+                filtered_env, ctx.resources.loaded, request.node_path, planner_selection
             )
         plan = self.llm_planner.plan(
             node_info=node_info,

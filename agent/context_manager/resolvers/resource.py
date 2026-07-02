@@ -63,7 +63,7 @@ class ResourceAssetBuilder(_ResourceAssetBase):
             selected = self._canonical(getattr(result, "selected_assets", None), recalled, "reranker")
             extra_evidence = list(getattr(result, "evidence_trace", []) or [])
         sql_assets = [asset for asset in selected if asset.asset_type == "naming_sql"]
-        candidates = [self._candidate(asset, rank) for rank, asset in enumerate(sql_assets, 1)]
+        candidates = [self._candidate(asset) for asset in sql_assets]
         evidence = [ContextEvidenceItem(source="resource_registry", action="candidate_recalled",
             asset_id=asset.asset_id, evidence="Recalled canonical NamingSQL candidate") for asset in sql_assets]
         return NamingSqlResourceCandidates(candidates=candidates, evidence=evidence + extra_evidence)
@@ -73,7 +73,7 @@ class ResourceAssetBuilder(_ResourceAssetBase):
         for bo in getattr(loaded, "bo_registry", {}).values():
             result.append(self.asset_builder.bo(bo))
             result.extend(self.asset_builder.bo_field(bo.bo_name, field) for field in bo.property_list)
-            result.extend(self.asset_builder.naming_sql(bo.bo_name, sql) for sql in bo.naming_sql_list)
+            result.extend(self.asset_builder.naming_sql(bo.bo_name, sql, bo) for sql in bo.naming_sql_list)
         result.extend(self.asset_builder.context(item) for item in getattr(loaded, "context_registry", {}).values())
         result.extend(self.asset_builder.function(item) for item in getattr(loaded, "function_registry", {}).values())
         return result
@@ -91,14 +91,14 @@ class ResourceAssetBuilder(_ResourceAssetBase):
         return result
 
     @staticmethod
-    def _candidate(asset: ContextAsset, rank: int) -> NamingSqlCandidate:
+    def _candidate(asset: ContextAsset) -> NamingSqlCandidate:
         content = asset.content
         sql_id = str(content.get("naming_sql_id") or content.get("resource_id") or asset.asset_id.split(":")[-1])
         return NamingSqlCandidate(candidate_id=asset.asset_id, bo_name=str(content.get("bo_name") or ""),
             naming_sql_id=sql_id, naming_sql_name=content.get("sql_name") or content.get("naming_sql_name"),
             annotation=str(content.get("sql_description") or content.get("annotation") or ""),
             param_list=list(content.get("param_list") or []), return_type=content.get("return_type"),
-            source="resource_registry", rank=rank, evidence=[asset.index_text],
+            source="resource_registry", rank=0, evidence=[asset.index_text],
             retrieval_metadata=dict(asset.metadata))
 
     def bo_field(self, bo_name: str, field: PropertyTerm) -> ContextAsset:
@@ -109,15 +109,35 @@ class ResourceAssetBuilder(_ResourceAssetBase):
             source=self.source,
         )
 
-    def naming_sql(self, bo_name: str, definition: NamingSqlDefTerm) -> ContextAsset:
+    def naming_sql(self, bo_name: str, definition: NamingSqlDefTerm,
+                   bo_registry: BoRegistry | None = None) -> ContextAsset:
         params = ", ".join(
             _labeled(name=item.param_name, type=item.data_type_name, data_category=item.data_type, list=item.is_list)
             for item in definition.param_list
         )
+        bo_description = bo_registry.bo_desc if bo_registry is not None else None
+        bo_tags = list(bo_registry.tag) if bo_registry is not None else []
+        field_facts = [
+            {"field_name": field.field_name, "description": field.description,
+             "data_type": _value(field.data_type), "data_type_name": field.data_type_name,
+             "is_list": field.is_list}
+            for field in (bo_registry.property_list if bo_registry is not None else [])
+        ]
+        content = {"bo_name": bo_name, **definition.model_dump(mode="json")}
+        if bo_registry is not None:
+            content.update({"bo_description": bo_description, "bo_tags": bo_tags,
+                            "bo_field_facts": field_facts, "return_information": field_facts})
         return ContextAsset(
             asset_id=f"naming_sql:{bo_name}:{definition.naming_sql_id}", asset_type="naming_sql", scope="global",
-            content={"bo_name": bo_name, **definition.model_dump(mode="json")},
-            index_text=_labeled(resource="NamingSQL", bo=bo_name, id=definition.naming_sql_id, name=definition.sql_name, purpose=definition.sql_description, label=definition.label_name, parameters=params),
+            content=content,
+            index_text=_labeled(resource="NamingSQL", bo=bo_name,
+                bo_description=bo_description, suitable_scenarios=definition.sql_description,
+                tags=", ".join(bo_tags), id=definition.naming_sql_id,
+                name=definition.sql_name, purpose=definition.sql_description,
+                label=definition.label_name, parameters=params,
+                return_information=", ".join(_labeled(name=f["field_name"],
+                    description=f["description"], type=f["data_type_name"], list=f["is_list"])
+                    for f in field_facts)),
             source=self.source,
         )
 

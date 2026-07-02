@@ -39,8 +39,7 @@ class ContextManager:
         node_block = self.edsl_resolver.resolve(request, self.loaded_resource)
         logic_block = self.logic_resolver.resolve(request, self.loaded_resource, node_block)
         resource_block = self.resource_resolver.resolve(request, self.loaded_resource, node_block, logic_block)
-        resolver_context = {"global_context": global_block, "node_context": node_block,
-                            "logic_area_context": logic_block, "resource_candidates": resource_block}
+        resolver_context = {"node": node_block, "logic": logic_block}
         ootb_block = self.ootb_resolver.resolve(request, resolver_context)
         site_block = self.site_resolver.resolve(request, resolver_context)
         return self.assembler.assemble(request, global_block, node_block, logic_block,

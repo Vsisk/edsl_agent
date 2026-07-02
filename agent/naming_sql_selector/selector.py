@@ -36,8 +36,8 @@ class NamingSqlSelector:
         return NamingSqlSelectResponse(
             success=True,
             candidates=deepcopy(context.resource_candidates.candidates),
-            hints=deepcopy(context.requirement_hints),
-            constraints=deepcopy(context.constraints),
+            context_requirements_hint=deepcopy(context.context_requirements_hint),
+            selection_constraints=deepcopy(context.selection_constraints),
             evidence_trace=deepcopy(context.evidence_trace),
             prompt_view=deepcopy(context.prompt_view) if request.debug else None,
         )

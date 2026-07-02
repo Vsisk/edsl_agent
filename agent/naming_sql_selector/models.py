@@ -13,7 +13,7 @@ from agent.context_manager.models import (
 
 
 class NamingSqlSelectRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", strict=True)
 
     site_id: str
     project_id: str
@@ -28,12 +28,12 @@ class NamingSqlSelectRequest(BaseModel):
 
 
 class NamingSqlSelectResponse(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", strict=True)
 
     success: bool
     candidates: list[NamingSqlCandidate] = Field(default_factory=list)
-    hints: list[ContextRequirementHint] = Field(default_factory=list)
-    constraints: NamingSqlSelectionConstraints | None = None
+    context_requirements_hint: list[ContextRequirementHint] = Field(default_factory=list)
+    selection_constraints: NamingSqlSelectionConstraints | None = None
     evidence_trace: list[ContextEvidenceItem] = Field(default_factory=list)
     prompt_view: dict[str, Any] | None = None
     failure_reason: str | None = None

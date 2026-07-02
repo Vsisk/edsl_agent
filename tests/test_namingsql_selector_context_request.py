@@ -1,17 +1,15 @@
 from copy import deepcopy
+from types import SimpleNamespace
 
 import pytest
 from pydantic import ValidationError
 
 from agent.context_manager.errors import ContextBuildError
 from agent.context_manager.models import (
-    GlobalContextBlock,
+    ContextRequirementHint,
     NamingSqlCandidate,
-    NamingSqlContextRequestSummary,
     NamingSqlResourceCandidates,
     NamingSqlSelectionConstraints,
-    NamingSqlSelectionContext,
-    NodeContextBlock,
 )
 from agent.naming_sql_selector import (
     NamingSqlSelectRequest,
@@ -45,15 +43,11 @@ def _request(**updates):
 def _context(prompt_view=None):
     candidate = NamingSqlCandidate(candidate_id="c1", bo_name="Fee", naming_sql_id="sql1",
                                    source="resource_registry", rank=1)
-    summary = NamingSqlContextRequestSummary(
-        site_id="site", project_id="project", query="find fees", json_path="$.nodes[0]",
-        target_bo_name="Fee", parent_bo_hint="Account",
-        target_logic_area_id_list=["la-1"], top_k=7)
-    return NamingSqlSelectionContext(
-        request=summary, global_context=GlobalContextBlock(),
-        node_context=NodeContextBlock(json_path="$.nodes[0]", node={"id": "n"}),
+    hint = ContextRequirementHint(semantic_name="account_id")
+    return SimpleNamespace(
         resource_candidates=NamingSqlResourceCandidates(candidates=[candidate]),
-        constraints=NamingSqlSelectionConstraints(allowed_bo_names=["Fee"]),
+        context_requirements_hint=[hint],
+        selection_constraints=NamingSqlSelectionConstraints(allowed_bo_names=["Fee"]),
         evidence_trace=[], prompt_view=prompt_view)
 
 
@@ -80,10 +74,13 @@ def test_success_maps_final_context_and_deep_copies_it():
     response = NamingSqlSelector(CapturingManager(context)).select(_request(debug=True))
     snapshot = deepcopy(response.model_dump())
     context.resource_candidates.candidates[0].bo_name = "mutated"
-    context.constraints.allowed_bo_names.append("mutated")
+    context.context_requirements_hint[0].semantic_name = "mutated"
+    context.selection_constraints.allowed_bo_names.append("mutated")
     context.prompt_view["internal"].append("mutated")
     assert response.model_dump() == snapshot
     assert response.prompt_view == {"internal": ["secret"]}
+    assert response.context_requirements_hint[0].semantic_name == "account_id"
+    assert response.selection_constraints.allowed_bo_names == ["Fee"]
 
 
 def test_prompt_view_is_debug_gated():
@@ -124,3 +121,17 @@ def test_request_is_strict_and_top_k_is_bounded():
         _request(extra_field=True)
     with pytest.raises(ValidationError):
         _request(top_k=21)
+
+
+@pytest.mark.parametrize("updates", [
+    {"debug": 1},
+    {"top_k": "7"},
+])
+def test_request_rejects_coercion(updates):
+    with pytest.raises(ValidationError):
+        _request(**updates)
+
+
+def test_response_rejects_coercion():
+    with pytest.raises(ValidationError):
+        NamingSqlSelectResponse(success=1, candidates=_context().resource_candidates.candidates)

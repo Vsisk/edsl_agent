@@ -4,6 +4,8 @@ from enum import Enum
 from typing import Any
 
 from agent.context_manager.models import ContextAsset
+from agent.context_manager.errors import ContextBuildError, INVALID_LLM_OUTPUT
+from agent.context_manager.models import ContextEvidenceItem, NamingSqlCandidate, NamingSqlResourceCandidates
 from agent.resource_manager.models import (
     BoRegistry,
     ContextRegistry,
@@ -24,7 +26,7 @@ def _labeled(**parts: Any) -> str:
     return "; ".join(f"{label}: {_value(value)}" for label, value in parts.items() if value not in (None, "", []))
 
 
-class ResourceAssetBuilder:
+class _ResourceAssetBase:
     """Pure conversion from authoritative resource registries to semantic assets."""
 
     source = "resource_registry"
@@ -40,6 +42,64 @@ class ResourceAssetBuilder:
             index_text=_labeled(resource="business object", name=registry.bo_name, description=registry.bo_desc, fields=fields),
             source=self.source,
         )
+
+
+class ResourceAssetBuilder(_ResourceAssetBase):
+    """Recall and rerank NamingSQL plus supporting resource assets."""
+
+    def __init__(self, retriever: Any = None, reranker: Any = None,
+                 asset_builder: ResourceAssetBuilder | None = None) -> None:
+        self.retriever, self.reranker = retriever, reranker
+        self.asset_builder = asset_builder or self
+
+    def resolve(self, request: Any, loaded_resource: Any, node_block: Any,
+                logic_block: Any = None) -> NamingSqlResourceCandidates:
+        assets = self._assets(loaded_resource)
+        recalled = self.retriever.retrieve(request.query, assets, semantic_limit=max(request.top_k, 10)) if self.retriever else assets
+        recalled = self._canonical(recalled, assets, "retriever")
+        selected, extra_evidence = recalled, []
+        if self.reranker:
+            result = self.reranker.rerank(request.query, recalled, {"node": node_block, "logic": logic_block})
+            selected = self._canonical(getattr(result, "selected_assets", None), recalled, "reranker")
+            extra_evidence = list(getattr(result, "evidence_trace", []) or [])
+        sql_assets = [asset for asset in selected if asset.asset_type == "naming_sql"]
+        candidates = [self._candidate(asset, rank) for rank, asset in enumerate(sql_assets, 1)]
+        evidence = [ContextEvidenceItem(source="resource_registry", action="candidate_recalled",
+            asset_id=asset.asset_id, evidence="Recalled canonical NamingSQL candidate") for asset in sql_assets]
+        return NamingSqlResourceCandidates(candidates=candidates, evidence=evidence + extra_evidence)
+
+    def _assets(self, loaded: Any) -> list[ContextAsset]:
+        result: list[ContextAsset] = []
+        for bo in getattr(loaded, "bo_registry", {}).values():
+            result.append(self.asset_builder.bo(bo))
+            result.extend(self.asset_builder.bo_field(bo.bo_name, field) for field in bo.property_list)
+            result.extend(self.asset_builder.naming_sql(bo.bo_name, sql) for sql in bo.naming_sql_list)
+        result.extend(self.asset_builder.context(item) for item in getattr(loaded, "context_registry", {}).values())
+        result.extend(self.asset_builder.function(item) for item in getattr(loaded, "function_registry", {}).values())
+        return result
+
+    @staticmethod
+    def _canonical(returned: Any, originals: list[ContextAsset], source: str) -> list[ContextAsset]:
+        if not isinstance(returned, (list, tuple)):
+            raise ContextBuildError(INVALID_LLM_OUTPUT, f"{source} returned malformed assets")
+        by_id = {item.asset_id: item for item in originals}
+        result, seen = [], set()
+        for item in returned:
+            if not isinstance(item, ContextAsset) or item.asset_id not in by_id or item.asset_id in seen:
+                raise ContextBuildError(INVALID_LLM_OUTPUT, f"{source} returned noncanonical assets")
+            seen.add(item.asset_id); result.append(by_id[item.asset_id])
+        return result
+
+    @staticmethod
+    def _candidate(asset: ContextAsset, rank: int) -> NamingSqlCandidate:
+        content = asset.content
+        sql_id = str(content.get("naming_sql_id") or content.get("resource_id") or asset.asset_id.split(":")[-1])
+        return NamingSqlCandidate(candidate_id=asset.asset_id, bo_name=str(content.get("bo_name") or ""),
+            naming_sql_id=sql_id, naming_sql_name=content.get("sql_name") or content.get("naming_sql_name"),
+            annotation=str(content.get("sql_description") or content.get("annotation") or ""),
+            param_list=list(content.get("param_list") or []), return_type=content.get("return_type"),
+            source="resource_registry", rank=rank, evidence=[asset.index_text],
+            retrieval_metadata=dict(asset.metadata))
 
     def bo_field(self, bo_name: str, field: PropertyTerm) -> ContextAsset:
         return ContextAsset(
@@ -91,3 +151,17 @@ class ResourceAssetBuilder:
             index_text=_labeled(resource="function", class_name=registry.func_class, name=registry.func_name, description=registry.func_desc, parameters=params, return_type=registry.return_type.data_type_name, return_category=registry.return_type.data_type, return_list=registry.return_type.is_list),
             source=self.source,
         )
+
+
+class ResourceContextResolver(ResourceAssetBuilder):
+    """Public resolver with the standard hybrid-recall and LLM-rerank pipeline."""
+
+    def __init__(self, retriever: Any = None, reranker: Any = None,
+                 asset_builder: ResourceAssetBuilder | None = None) -> None:
+        if retriever is None:
+            from agent.context_manager.retrieval import EmbeddingClient, HybridRetriever
+            retriever = HybridRetriever(EmbeddingClient())
+        if reranker is None:
+            from agent.context_manager.retrieval import LLMReranker
+            reranker = LLMReranker()
+        super().__init__(retriever, reranker, asset_builder or ResourceAssetBuilder())

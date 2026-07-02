@@ -65,7 +65,7 @@ class ContextPackAssembler:
     def assemble(self, request: BuildContextRequest, global_context: Any, node_context: Any,
                  logic_area_context: Any, resource_candidates: NamingSqlResourceCandidates,
                  ootb_reference_cases: ReferenceCaseBlock, site_knowledge_cases: ReferenceCaseBlock) -> NamingSqlSelectionContext:
-        item_budget = max(0, request.max_context_items)
+        item_budget = min(max(0, request.max_context_items), self.renderer.max_items)
         visible_candidates = list(resource_candidates.candidates[:item_budget])
         if not visible_candidates:
             raise ContextBuildError(NO_NAMING_SQL_CANDIDATES, "No NamingSQL candidates")
@@ -103,11 +103,12 @@ class ContextPackAssembler:
                 raise ValueError("unknown reference alias")
             self._unique(output.constraints.allowed_bo_names)
             self._unique(output.constraints.allowed_naming_sql_aliases)
-            visible_bo_names = {item.bo_name for item in candidates.values()}
-            if any(name not in visible_bo_names for name in output.constraints.allowed_bo_names):
+            selected_alias_set = set(output.selected_candidate_aliases)
+            selected_bo_names = {candidates[alias].bo_name for alias in selected_alias_set}
+            if any(name not in selected_bo_names for name in output.constraints.allowed_bo_names):
                 raise ValueError("unknown BO constraint")
-            if any(alias not in candidates for alias in output.constraints.allowed_naming_sql_aliases):
-                raise ValueError("unknown NamingSQL constraint alias")
+            if any(alias not in selected_alias_set for alias in output.constraints.allowed_naming_sql_aliases):
+                raise ValueError("unselected NamingSQL constraint alias")
             if output.constraints.max_candidates is not None and (
                 output.constraints.max_candidates <= 0 or
                 output.constraints.max_candidates > request.top_k or

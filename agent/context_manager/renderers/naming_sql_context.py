@@ -10,7 +10,9 @@ class NamingSqlContextRenderer:
     """Render a deterministic, bounded and non-executable organizer view."""
 
     max_text_chars = 1_000
-    max_items = 40
+    # The assembler applies this cap before assigning aliases. Every alias it
+    # passes here is therefore rendered; there is no second, hidden truncation.
+    max_items = 200
     max_total_chars = 24_000
     _body_keys = {"sql", "sql_body", "sql_command", "sql_text", "query_sql", "statement"}
 
@@ -19,13 +21,13 @@ class NamingSqlContextRenderer:
                ootb_reference_cases: Any, site_knowledge_cases: Any,
                candidate_aliases: dict[str, Any], reference_aliases: dict[str, Any]) -> str:
         candidate_rows = []
-        for alias, item in list(candidate_aliases.items())[:self.max_items]:
+        for alias, item in candidate_aliases.items():
             candidate_rows.append({"alias": alias, "bo_name": item.bo_name,
                 "naming_sql_name": item.naming_sql_name, "annotation": item.annotation,
                 "param_list": item.param_list, "return_type": item.return_type,
                 "evidence": item.evidence, "matched_terms": item.matched_terms})
         reference_rows = []
-        for alias, item in list(reference_aliases.items())[:self.max_items]:
+        for alias, item in reference_aliases.items():
             reference_rows.append({"alias": alias, "asset_type": item.asset.asset_type,
                 "summary": item.asset.index_text, "evidence": item.evidence})
         payload = {
@@ -45,8 +47,8 @@ class NamingSqlContextRenderer:
                 "bounded": True,
                 "request": {"query": str(getattr(request, "query", ""))[:self.max_text_chars],
                             "top_k": getattr(request, "top_k", 5)},
-                "resource": [{"alias": alias} for alias in list(candidate_aliases)[:self.max_items]],
-                "references": [{"alias": alias} for alias in list(reference_aliases)[:self.max_items]],
+                "resource": [{"alias": alias} for alias in candidate_aliases],
+                "references": [{"alias": alias} for alias in reference_aliases],
             }
             text = json.dumps(fallback, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         return text

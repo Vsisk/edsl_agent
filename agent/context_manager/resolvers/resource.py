@@ -97,7 +97,10 @@ class ResourceAssetBuilder(_ResourceAssetBase):
         return NamingSqlCandidate(candidate_id=asset.asset_id, bo_name=str(content.get("bo_name") or ""),
             naming_sql_id=sql_id, naming_sql_name=content.get("sql_name") or content.get("naming_sql_name"),
             annotation=str(content.get("sql_description") or content.get("annotation") or ""),
-            param_list=list(content.get("param_list") or []), return_type=content.get("return_type"),
+            param_list=list(content.get("param_list") or []),
+            return_type=content.get("return_type") or (
+                {"fields": content.get("return_information")} if content.get("return_information") else None
+            ),
             source="resource_registry", rank=0, evidence=[asset.index_text],
             retrieval_metadata=dict(asset.metadata))
 

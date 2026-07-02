@@ -2,12 +2,15 @@ from types import SimpleNamespace
 
 import pytest
 
-from agent.context_manager.errors import ContextBuildError, UNSUPPORTED_CONTEXT_CHAIN
+from agent.context_manager.errors import ContextBuildError, NO_NAMING_SQL_CANDIDATES, UNSUPPORTED_CONTEXT_CHAIN
+from agent.context_manager.renderers import NamingSqlContextRenderer
+from agent.context_manager.resolvers import ResourceContextResolver
 from agent.context_manager.manager.assembler import ContextPackAssembler
 from agent.context_manager.manager.context_manager import ContextManager
 from agent.context_manager.models import (
-    BuildContextRequest, GlobalContextBlock, NamingSqlCandidate,
+    BuildContextRequest, ContextAsset, GlobalContextBlock, NamingSqlCandidate,
     NamingSqlResourceCandidates, NodeContextBlock, ReferenceCaseBlock,
+    ReferenceCaseCandidate,
 )
 
 
@@ -126,3 +129,91 @@ def test_manager_calls_resolvers_in_fixed_order_with_prescribed_arguments():
     assert calls[3][1] == (req, loaded, node_block, logic_block)
     assert calls[4][1] == (req, {"node": node_block, "logic": logic_block})
     assert calls[5][1] == calls[4][1]
+
+
+def test_zero_candidates_fails_before_organizer_call():
+    client = SimpleNamespace(complete_json=lambda prompt: pytest.fail("must not call organizer"))
+    with pytest.raises(ContextBuildError) as error:
+        ContextPackAssembler(client, PM()).assemble(request(), GlobalContextBlock(),
+            NodeContextBlock(json_path="$.x", node={}), None, NamingSqlResourceCandidates(),
+            ReferenceCaseBlock(), ReferenceCaseBlock())
+    assert error.value.code == NO_NAMING_SQL_CANDIDATES
+
+
+@pytest.mark.parametrize("aliases", [["c0000", "c0000"], ["c0000", "c9999"]])
+def test_duplicate_and_invented_selected_aliases_are_invalid(aliases):
+    client = SimpleNamespace(complete_json=lambda prompt: {
+        "selected_candidate_aliases": aliases, "constraints": {"max_candidates": 2}})
+    with pytest.raises(ContextBuildError) as error:
+        ContextPackAssembler(client, PM()).assemble(request(), GlobalContextBlock(),
+            NodeContextBlock(json_path="$.x", node={}), None,
+            NamingSqlResourceCandidates(candidates=[candidate("a"), candidate("b")]),
+            ReferenceCaseBlock(), ReferenceCaseBlock())
+    assert error.value.code == "INVALID_LLM_OUTPUT"
+
+
+def test_more_than_forty_budgeted_candidates_have_no_hidden_aliases():
+    many = [candidate(f"id-{index}") for index in range(45)]
+    class LastClient:
+        def complete_json(self, prompt):
+            return {"selected_candidate_aliases": ["c0044"], "constraints": {"max_candidates": 1}}
+    pm = PM()
+    result = ContextPackAssembler(LastClient(), pm).assemble(
+        request(top_k=1, max_context_items=45), GlobalContextBlock(),
+        NodeContextBlock(json_path="$.x", node={}), None,
+        NamingSqlResourceCandidates(candidates=many), ReferenceCaseBlock(), ReferenceCaseBlock())
+    assert result.resource_candidates.candidates[0].candidate_id == "id-44"
+    assert all(f'"alias":"c{index:04d}"' in pm.values["context_json"] for index in range(45))
+
+
+def test_renderer_is_deterministic_bounded_and_strips_sql_bodies():
+    renderer = NamingSqlContextRenderer()
+    req = request(node={"sql_command": "SECRET", "text": "汉" * 50000})
+    kwargs = dict(request=req, global_context=GlobalContextBlock(),
+        node_context=NodeContextBlock(json_path="$.x", node=req.node), logic_area_context=None,
+        resource_candidates=NamingSqlResourceCandidates(), ootb_reference_cases=ReferenceCaseBlock(),
+        site_knowledge_cases=ReferenceCaseBlock(), candidate_aliases={}, reference_aliases={})
+    first = renderer.render(**kwargs)
+    assert first == renderer.render(**kwargs)
+    assert len(first) <= renderer.max_total_chars and "SECRET" not in first
+
+
+def test_constraints_cannot_reference_visible_but_unselected_candidate():
+    client = SimpleNamespace(complete_json=lambda prompt: {
+        "selected_candidate_aliases": ["c0000", "c0001"],
+        "constraints": {"allowed_naming_sql_aliases": ["c0002"], "max_candidates": 2}})
+    with pytest.raises(ContextBuildError) as error:
+        ContextPackAssembler(client, PM()).assemble(request(), GlobalContextBlock(),
+            NodeContextBlock(json_path="$.x", node={}), None,
+            NamingSqlResourceCandidates(candidates=[candidate("a"), candidate("b"), candidate("c")]),
+            ReferenceCaseBlock(), ReferenceCaseBlock())
+    assert error.value.code == "INVALID_LLM_OUTPUT"
+
+
+def test_reference_hint_evidence_are_canonicalized_and_debug_is_opt_in():
+    ref = ReferenceCaseCandidate(asset=ContextAsset(asset_id="ootb_case:one",
+        asset_type="ootb_case", scope="global", content={}, index_text="one"))
+    raw = {"selected_candidate_aliases": ["c0000"],
+        "retained_reference_aliases": ["r0000"],
+        "requirement_hints": [{"semantic_name": "id", "bind_to_candidates": ["c0000", "r0000"]}],
+        "evidence_trace": [{"source": "organizer", "action": "selected", "asset_id": "r0000", "evidence": "match"}],
+        "constraints": {"allowed_naming_sql_aliases": ["c0000"], "max_candidates": 1}}
+    client = SimpleNamespace(complete_json=lambda prompt: raw)
+    args = (GlobalContextBlock(), NodeContextBlock(json_path="$.x", node={}), None,
+        NamingSqlResourceCandidates(candidates=[candidate("a")]),
+        ReferenceCaseBlock(candidates=[ref]), ReferenceCaseBlock())
+    normal = ContextPackAssembler(client, PM()).assemble(request(top_k=1), *args)
+    debug = ContextPackAssembler(client, PM()).assemble(request(top_k=1, debug=True), *args)
+    assert normal.prompt_view is None and debug.prompt_view is not None
+    assert normal.requirement_hints[0].bind_to_candidates == ["a", "ootb_case:one"]
+    assert normal.ootb_reference_cases.candidates[0].asset.asset_id == "ootb_case:one"
+    assert normal.evidence_trace[-1].asset_id == "ootb_case:one"
+
+
+def test_resource_candidate_retains_enriched_structured_return_information_without_rank():
+    asset = ContextAsset(asset_id="naming_sql:BO:sql.one", asset_type="naming_sql",
+        scope="global", index_text="candidate", content={"bo_name": "BO",
+        "naming_sql_id": "sql.one", "return_information": [{"field_name": "amount", "data_type_name": "decimal"}]})
+    result = ResourceContextResolver._candidate(asset)
+    assert result.return_type == {"fields": [{"field_name": "amount", "data_type_name": "decimal"}]}
+    assert result.rank == 0

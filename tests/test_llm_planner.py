@@ -12,7 +12,7 @@ from agent.planner.llm_planner import (
     _summarize_filtered_environment_json,
 )
 from agent.planner.models import Plan, ReturnExprPlanNode
-from agent.context_manager.models import NamingSqlCandidate
+from agent.context_manager.models import ContextEvidenceItem, NamingSqlCandidate
 from agent.naming_sql_selector import NamingSqlSelectResponse
 
 
@@ -128,6 +128,20 @@ class LLMPlannerTest(unittest.TestCase):
         client = FakeClient(['{"nodes":[{"type":"return","value":{"type":"literal","value":null}}]}'])
         LLMPlanner(client=client).plan(node_info=_node_info(), user_query="x", filtered_env=FilteredEnvironment())
         self.assertNotIn("naming_sql_selection", client.calls[0]["prompt"])
+
+    def test_selection_summary_includes_safe_bounded_decision_evidence_only(self):
+        selection = _selection()
+        selection.evidence_trace = [ContextEvidenceItem(source="resolver\nsource", action="rerank",
+            asset_id="SECRET-INTERNAL-ASSET-ID", evidence="chosen because semantic match " + "x" * 1000,
+            payload={"private": "SECRET-PAYLOAD"})]
+        rendered = _summarize_filtered_environment_json(FilteredEnvironment(naming_sql_selection=selection))
+        decoded = json.loads(rendered)["naming_sql_selection"]["evidence_trace"][0]
+        self.assertEqual(set(decoded), {"source", "action", "evidence"})
+        self.assertEqual(decoded["source"], "resolver source")
+        self.assertEqual(decoded["action"], "rerank")
+        self.assertLessEqual(len(decoded["evidence"]), 512)
+        self.assertNotIn("SECRET-INTERNAL-ASSET-ID", rendered)
+        self.assertNotIn("SECRET-PAYLOAD", rendered)
 
     def test_oversized_authoritative_selection_fails_before_llm(self):
         cases = []

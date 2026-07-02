@@ -24,6 +24,10 @@ MAX_SELECTION_BO_NAME = 512
 MAX_SELECTION_SQL_NAME = 512
 MAX_SELECTION_PARAM_NAME = 256
 MAX_SELECTION_SOURCE_REF = 1_024
+MAX_SELECTION_EVIDENCE_ITEMS = 20
+MAX_SELECTION_EVIDENCE_SOURCE = 128
+MAX_SELECTION_EVIDENCE_ACTION = 128
+MAX_SELECTION_EVIDENCE_TEXT = 512
 
 
 class LLMPlanner:
@@ -185,7 +189,17 @@ def _summarize_naming_sql_selection(selection: Any) -> dict[str, Any]:
             "allowed_naming_sql_ids": [_selection_text(value, MAX_SELECTION_SQL_NAME) for value in constraints.allowed_naming_sql_ids[:20]],
             "max_candidates": constraints.max_candidates,
         },
+        "evidence_trace": [{
+            "source": _safe_evidence_text(item.source, MAX_SELECTION_EVIDENCE_SOURCE),
+            "action": _safe_evidence_text(item.action, MAX_SELECTION_EVIDENCE_ACTION),
+            "evidence": _safe_evidence_text(item.evidence, MAX_SELECTION_EVIDENCE_TEXT),
+        } for item in selection.evidence_trace[:MAX_SELECTION_EVIDENCE_ITEMS]],
     }
+
+
+def _safe_evidence_text(value: Any, limit: int) -> str:
+    """Normalize control characters and truncate untrusted decision evidence."""
+    return " ".join(str(value or "").split())[:limit]
 
 
 def _selection_text(value: Any, limit: int) -> str:

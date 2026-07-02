@@ -1,6 +1,7 @@
 import pytest
 
 from agent.context_manager.models import NamingSqlCandidate
+from agent.context_manager.errors import NO_NAMING_SQL_CANDIDATES
 from agent.models import ValueLogicRequest
 from agent.naming_sql_selector import NamingSqlSelectResponse
 from agent.planner.models import Plan
@@ -95,11 +96,22 @@ def test_route_factory_receives_current_loaded_resource_and_request_fields():
     assert call.target_logic_area_id_list == ["area.1"] and call.top_k == 5
 
 
-def test_selector_failure_is_stable_and_stops_planner():
+def test_known_selector_failure_raises_exact_documented_code_and_stops_planner():
     planner = Planner()
-    selector = Selector(NamingSqlSelectResponse(success=False, failure_reason="NO_CANDIDATES\nprivate"))
-    with pytest.raises(ValueError, match=r"NAMING_SQL_SELECTION_FAILED reason=NO_CANDIDATES\?private"):
+    selector = Selector(NamingSqlSelectResponse(success=False, failure_reason=NO_NAMING_SQL_CANDIDATES))
+    with pytest.raises(ValueError) as raised:
         generator(lambda loaded: selector, planner).generate(request())
+    assert str(raised.value) == NO_NAMING_SQL_CANDIDATES
+    assert not planner.calls
+
+
+def test_unknown_selector_failure_is_generic_and_does_not_leak_private_detail():
+    planner = Planner()
+    selector = Selector(NamingSqlSelectResponse(success=False, failure_reason="PRIVATE backend detail\nsecret"))
+    with pytest.raises(ValueError) as raised:
+        generator(lambda loaded: selector, planner).generate(request())
+    assert str(raised.value) == "NAMING_SQL_SELECTION_FAILED"
+    assert "PRIVATE" not in str(raised.value) and "secret" not in str(raised.value)
     assert not planner.calls
 
 

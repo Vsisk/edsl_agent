@@ -17,6 +17,7 @@ from agent.naming_sql_selector import (
     NamingSqlSelector,
     validate_naming_sql_plan,
 )
+from agent.naming_sql_selector.selector import KNOWN_CONTEXT_ERROR_CODES
 from agent.context_manager import ContextManager
 from agent.planner.difficulty_router import LLMDifficultyRouter, ResourceRoute
 from agent.planner.llm_planner import LLMPlanner
@@ -233,7 +234,10 @@ class ValueLogicGenerator:
             )
             selector_result = self.naming_sql_selector_factory(ctx.resources.loaded).select(selection_request)
             if not selector_result.success:
-                raise ValueError(f"NAMING_SQL_SELECTION_FAILED reason={_bounded_reason(selector_result.failure_reason)}")
+                failure_reason = selector_result.failure_reason
+                if failure_reason in KNOWN_CONTEXT_ERROR_CODES:
+                    raise ValueError(failure_reason)
+                raise ValueError("NAMING_SQL_SELECTION_FAILED")
             naming_sql_selection = selector_result.model_copy(deep=True)
             filtered_env.naming_sql_selection = naming_sql_selection.model_copy(deep=True)
         plan = self.llm_planner.plan(
@@ -499,10 +503,6 @@ def _default_naming_sql_selector_factory(loaded_resource: LoadedResource) -> Nam
 
 def _string_list(value: Any) -> list[str]:
     return [str(item) for item in value] if isinstance(value, list) else []
-
-
-def _bounded_reason(value: Any, limit: int = 80) -> str:
-    return "".join(ch if ch.isprintable() and ch not in "\r\n" else "?" for ch in str(value or "UNKNOWN"))[:limit]
 
 
 def requires_naming_sql(structured_spec: dict[str, Any], *text_values: Any) -> bool:

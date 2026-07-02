@@ -6,7 +6,7 @@ from agent.naming_sql_selector import NamingSqlSelectResponse
 from agent.planner.models import Plan
 from agent.resource_manager.loader.resource_loader import ResourceLoader
 from agent.value_logic_generator import ExpressionSpec, ValueLogicGenerator, requires_naming_sql
-from tests.test_environment import sample_edsl_tree_payload
+from tests.test_environment import FakeResourceFilter, sample_edsl_tree_payload
 
 
 class Targets:
@@ -30,6 +30,27 @@ class Planner:
 class Selector:
     def __init__(self, result): self.result, self.calls = result, []
     def select(self, request): self.calls.append(request); return self.result
+
+
+class Route:
+    def __init__(self, use_bo, use_function, resource_count_hint=5):
+        self.use_bo, self.use_function = use_bo, use_function
+        self.resource_count_hint = resource_count_hint
+
+
+class Router:
+    def __init__(self, route): self.route, self.calls = route, []
+    def route_resources(self, **kwargs): self.calls.append(kwargs); return self.route
+
+
+class SelectPlanner(Planner):
+    def __init__(self): super().__init__(fetch=False)
+    def plan(self, **kwargs):
+        self.calls.append(kwargs)
+        return Plan.model_validate({"nodes": [{"type": "return", "value": {"type": "select_one",
+            "bo": "BB_PREP_SUB", "filter": {"type": "compare", "op": "==",
+                "left": {"type": "context_path", "path": "it.ID"},
+                "right": {"type": "context_path", "path": "$ctx$.id"}}}}]})
 
 
 def candidate(cid, name, rank):
@@ -152,3 +173,96 @@ def test_parent_sql_direct_field_mapping_still_bypasses_planner():
     result = generator(lambda loaded: (_ for _ in ()).throw(AssertionError()), planner).generate(req)
     assert result.logic_type == "bo_field_mapping" and result.expression == "LOG_ID"
     assert not planner.calls
+
+
+def test_empty_targets_keep_empty_environment_and_trace():
+    planner = Planner(fetch=False)
+    generator(lambda loaded: (_ for _ in ()).throw(AssertionError()), planner).generate(request(False))
+    env = planner.calls[0]["filtered_env"]
+    assert env.selected_global_context_ids == []
+    assert env.selection_trace[-1]["reason"] == "FILTER_TARGET_EMPTY"
+
+
+def test_simple_leaf_renders_existing_select_plan():
+    planner = SelectPlanner()
+    result = generator(lambda loaded: (_ for _ in ()).throw(AssertionError()), planner).generate(request(False))
+    assert result.expression == "select_one(BB_PREP_SUB, it.ID == $ctx$.id)"
+    assert result.source.source_type == "plan"
+
+
+def _legacy_generator(route, result, planner=None):
+    resource_filter = FakeResourceFilter(result)
+    planner = planner or Planner(fetch=False)
+    gen = ValueLogicGenerator(resource_loader=ResourceLoader(), llm_resource_filter=resource_filter,
+        llm_difficulty_router=Router(route), llm_planner=planner,
+        naming_sql_selector_factory=lambda loaded: (_ for _ in ()).throw(AssertionError()),
+        expression_spec_generator=Specs(), resource_filter_target_generator=Targets(),
+        enable_legacy_filter_fallback=True)
+    return gen, resource_filter, planner
+
+
+@pytest.mark.parametrize(("route", "expected_bo", "expected_function"), [
+    (Route(False, False), [], []),
+    (Route(True, False), ["bo.0000"], []),
+    (Route(False, True), [], ["func.0001"]),
+])
+def test_legacy_fallback_gates_context_bo_and_function_groups(route, expected_bo, expected_function):
+    result = {"bo": [{"resource_id": "bo.0000"}], "function": [{"resource_id": "func.0001"}],
+        "local_context": [{"resource_id": "local.0002"}], "global_context": [{"resource_id": "ctx.0001"}]}
+    gen, resource_filter, planner = _legacy_generator(route, result)
+    query = "lookup BO by CUST_ID" if route.use_bo else "mask CUST_ID with function" if route.use_function else "assign CUST_ID from subId context directly"
+    gen.generate(request(False).model_copy(update={"node_path": "$.mapping_content.children[1]", "query": query}))
+    env, call = planner.calls[0]["filtered_env"], resource_filter.calls[0]
+    assert env.selected_bo_ids == expected_bo
+    assert env.selected_function_ids[:len(expected_function)] == expected_function
+    if not route.use_function:
+        assert env.selected_function_ids == []
+    assert env.selected_local_context_ids[0] == "local.0002" and env.selected_global_context_ids[0] == "ctx.0001"
+    assert call["limits"]["bo"] == (5 if route.use_bo else 0)
+    assert call["limits"]["function"] == (5 if route.use_function else 0)
+
+
+@pytest.mark.parametrize(("route", "expected"), [
+    (Route(True, True, 9), {"global_context": 9, "local_context": 9, "bo": 9, "function": 9}),
+    (Route(False, False, 12), {"global_context": 12, "local_context": 12, "bo": 0, "function": 0}),
+])
+def test_legacy_fallback_dynamic_limits_and_disabled_groups(route, expected):
+    gen, resource_filter, _ = _legacy_generator(route, {})
+    gen.generate(request(False).model_copy(update={"query": "use CUST_ID LOG_ID and mask resources"}))
+    assert resource_filter.calls[0]["limits"] == expected
+
+
+def _ab_request(*, source_type="sql", field="LOG_ID", query="directly map LOG_ID from table field"):
+    return request(False).model_copy(update={"is_ab": True, "node": {
+        "node_id": "normal-field", "tree_node_type": "field", "xml_name_property": {"xml_name": field}},
+        "parent_node": {"node_id": "ab-parent", "is_ab": True, "ab_content": {"data_source": {
+            "data_source_type": source_type, "sql_query": {"bo_name": "BB_BAK_TRANS"}}}}, "query": query})
+
+
+def test_complex_ab_sql_parent_path_maps_loaded_bo_field():
+    planner = SelectPlanner()
+    result = generator(lambda loaded: (_ for _ in ()).throw(AssertionError()), planner).generate(_ab_request())
+    assert result.logic_type == "bo_field_mapping" and result.expression == "LOG_ID"
+    assert result.source.bo_name == "BB_BAK_TRANS" and not planner.calls
+
+
+def test_ab_sql_missing_bo_field_falls_back_to_plan():
+    planner = SelectPlanner()
+    result = generator(lambda loaded: (_ for _ in ()).throw(AssertionError()), planner).generate(
+        _ab_request(field="MISSING_FIELD", query="map or derive missing field"))
+    assert result.logic_type == "expression" and len(planner.calls) == 1
+
+
+def test_ab_sql_existing_field_uses_plan_for_complex_expression_intent():
+    planner = SelectPlanner()
+    result = generator(lambda loaded: (_ for _ in ()).throw(AssertionError()), planner).generate(
+        _ab_request(query="derive a formatted LOG_ID with fallback when missing"))
+    assert result.logic_type == "expression" and result.source.source_type == "plan"
+    assert len(planner.calls) == 1
+
+
+def test_ab_non_sql_parent_does_not_use_nested_bo_name():
+    planner = SelectPlanner()
+    result = generator(lambda loaded: (_ for _ in ()).throw(AssertionError()), planner).generate(
+        _ab_request(source_type="expression", query="derive log id"))
+    assert result.logic_type == "expression" and len(planner.calls) == 1

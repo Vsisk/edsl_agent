@@ -4,7 +4,7 @@ import json
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from agent.context_manager.errors import INVALID_LLM_OUTPUT, LLM_RERANK_FAILED, ContextBuildError
 from agent.context_manager.models import ContextAsset, ContextEvidenceItem, ContextRequirementHint
@@ -24,12 +24,12 @@ class JsonClient(Protocol):
 
 
 class LLMRerankOutput(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", strict=True)
 
     selected_asset_ids: list[str]
-    rejected_assets: list[dict[str, Any]]
-    context_requirement_hints: list[ContextRequirementHint]
-    evidence_trace: list[ContextEvidenceItem]
+    rejected_assets: list[dict[str, Any]] = Field(default_factory=list)
+    context_requirement_hints: list[ContextRequirementHint] = Field(default_factory=list)
+    evidence_trace: list[ContextEvidenceItem] = Field(default_factory=list)
 
 
 @dataclass(frozen=True)

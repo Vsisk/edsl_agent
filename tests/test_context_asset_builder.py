@@ -22,6 +22,7 @@ def test_resource_builder_creates_semantic_stable_assets_without_mutation():
 
     assert [a.asset_id for a in assets] == ["bo:Customer", "bo_field:Customer:CUST_ID", "naming_sql:Customer:n1", "context:ctx.1", "context:local.1", "context:iter.1", "function:Text:mask"]
     assert [a.asset_type for a in assets] == ["bo", "bo_field", "naming_sql", "global_context", "local_context", "iter_context", "function"]
+    assert [a.scope for a in assets] == ["global", "global", "global", "global", "node", "node", "global"]
     assert all(a.source == "resource_registry" for a in assets)
     assert "customer records" in assets[0].index_text and "CUST_ID" in assets[0].index_text
     assert all(not a.index_text.lstrip().startswith("{") for a in assets)
@@ -29,5 +30,9 @@ def test_resource_builder_creates_semantic_stable_assets_without_mutation():
     assert "SELECT secret" not in assets[2].index_text
     assert "current customer" in assets[3].index_text and "string" in assets[3].index_text
     assert "Text" in assets[6].index_text and "mask text" in assets[6].index_text
+    assert assets[0].content == bo.model_dump(mode="json")
+    assert assets[2].content == {"bo_name": "Customer", **sql.model_dump(mode="json")}
+    assert assets[3].content == global_ctx.model_dump(mode="json")
+    assert assets[6].content == func.model_dump(mode="json")
+    assert assets[2].content["sql_command"] == "SELECT secret"
     assert [item.model_dump() for item in (bo, global_ctx, local_ctx, iter_ctx, func)] == originals
-

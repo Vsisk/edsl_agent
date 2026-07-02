@@ -38,14 +38,37 @@ def test_constraints_limit_fetch_to_permitted_top_k_candidate():
         validate_naming_sql_plan(plan("FindByEmail", "email"), selection)
 
 
-def test_constraints_reject_wrong_bo_and_invalid_ids_or_max_before_plan_walk():
+def test_constraints_reject_wrong_bo_and_invalid_ids_before_plan_walk():
     a = candidate("a", "FindCustomer")
-    invalid = [constraints(["missing"]), constraints(["a"], bos=("Other",)), constraints(["a"], max_candidates=2)]
+    invalid = [constraints(["missing"]), constraints(["a"], bos=("Other",))]
     cyclic = Plan.model_construct(nodes=[])
     cyclic.nodes.append(cyclic)
     for item in invalid:
         with pytest.raises(ValueError, match="NAMING_SQL_INVALID_CONSTRAINTS"):
             validate_naming_sql_plan(cyclic, response(a, constraints=item))
+
+
+def test_max_candidates_may_cover_top_k_while_allowed_ids_are_narrower():
+    candidates = [candidate(chr(97 + index), f"Find{index}", rank=index + 1) for index in range(5)]
+    selection = response(*candidates, constraints=constraints(["a"], max_candidates=5))
+
+    validate_naming_sql_plan(plan("Find0"), selection)
+    with pytest.raises(ValueError, match="NAMING_SQL_OUTSIDE_CONSTRAINTS"):
+        validate_naming_sql_plan(plan("Find1"), selection)
+
+
+def test_invalid_max_and_allowed_id_count_are_rejected_before_plan_walk():
+    candidates = [candidate("a", "Find0"), candidate("b", "Find1", rank=2)]
+    invalid = [constraints(["a"], max_candidates=3), constraints(["a", "b"], max_candidates=1)]
+    cyclic = Plan.model_construct(nodes=[])
+    cyclic.nodes.append(cyclic)
+    for item in invalid:
+        with pytest.raises(ValueError, match="NAMING_SQL_INVALID_CONSTRAINTS"):
+            validate_naming_sql_plan(cyclic, response(*candidates, constraints=item))
+    nonpositive = response(*candidates, constraints=constraints(["a"], max_candidates=1))
+    nonpositive.selection_constraints.max_candidates = 0
+    with pytest.raises(ValueError, match="NAMING_SQL_INVALID_CONSTRAINTS"):
+        validate_naming_sql_plan(cyclic, nonpositive)
 
 
 def test_rejects_fetch_name_outside_top_k():

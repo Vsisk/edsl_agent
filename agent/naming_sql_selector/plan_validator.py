@@ -57,8 +57,9 @@ def _permitted_candidates(result: NamingSqlSelectResponse) -> list:
             or len(allowed_bos) != len(constraints.allowed_bo_names)
             or not allowed_ids.issubset(top_ids)
             or not allowed_bos.issubset(top_bos)
+            or constraints.max_candidates < 1
             or constraints.max_candidates > len(result.candidates)
-            or (allowed_ids and constraints.max_candidates != len(allowed_ids))):
+            or len(allowed_ids) > constraints.max_candidates):
         raise ValueError("NAMING_SQL_INVALID_CONSTRAINTS")
 
     permitted = [candidate for candidate in result.candidates

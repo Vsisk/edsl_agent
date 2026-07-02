@@ -15,7 +15,6 @@ MAX_ASSET_CANDIDATES = 40
 MAX_QUERY_CHARS = 4_000
 MAX_CONTEXT_CHARS = 8_000
 MAX_ASSET_SUMMARY_CHARS = 1_000
-MAX_ASSET_ID_CHARS = 256
 MAX_ASSET_TYPE_CHARS = 64
 
 
@@ -27,15 +26,23 @@ class LLMRerankOutput(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
     selected_asset_ids: list[str]
-    rejected_assets: list[dict[str, Any]] = Field(default_factory=list)
+    rejected_assets: list["LLMRejectedAsset"] = Field(default_factory=list)
     context_requirement_hints: list[ContextRequirementHint] = Field(default_factory=list)
     evidence_trace: list[ContextEvidenceItem] = Field(default_factory=list)
 
 
+class LLMRejectedAsset(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    asset_id: str
+    reason: str
+
+
 @dataclass(frozen=True)
 class LLMRerankResult:
+    selected_asset_ids: list[str]
     selected_assets: list[ContextAsset]
-    rejected_assets: list[dict[str, Any]]
+    rejected_assets: list[LLMRejectedAsset]
     context_requirement_hints: list[ContextRequirementHint]
     evidence_trace: list[ContextEvidenceItem]
 
@@ -46,17 +53,29 @@ class LLMReranker:
         self.prompt_manager = prompt_manager or globals()["prompt_manager"]
 
     def rerank(self, query: str, assets: list[ContextAsset], context: Any) -> LLMRerankResult:
-        bounded_assets = assets[:MAX_ASSET_CANDIDATES]
-        candidates = [
-            {"asset_id": item.asset_id[:MAX_ASSET_ID_CHARS], "asset_type": item.asset_type[:MAX_ASSET_TYPE_CHARS], "semantic_summary": item.index_text[:MAX_ASSET_SUMMARY_CHARS]}
-            for item in bounded_assets
-        ]
-        prompt = self.prompt_manager.render(
-            "context_namingsql_reranker", lang="zh",
-            query=str(query)[:MAX_QUERY_CHARS],
-            context_json=self._bounded_json(context, MAX_CONTEXT_CHARS),
-            candidates_json=json.dumps(candidates, ensure_ascii=False, separators=(",", ":")),
-        )
+        try:
+            bounded_assets = assets[:MAX_ASSET_CANDIDATES]
+            alias_to_asset = {
+                f"c{index:04d}": item for index, item in enumerate(bounded_assets)
+            }
+            candidates = [
+                {
+                    "asset_id": alias,
+                    "asset_type": item.asset_type[:MAX_ASSET_TYPE_CHARS],
+                    "semantic_summary": item.index_text[:MAX_ASSET_SUMMARY_CHARS],
+                }
+                for alias, item in alias_to_asset.items()
+            ]
+            prompt = self.prompt_manager.render(
+                "context_namingsql_reranker", lang="zh",
+                query=str(query)[:MAX_QUERY_CHARS],
+                context_json=self._bounded_json(context, MAX_CONTEXT_CHARS),
+                candidates_json=json.dumps(candidates, ensure_ascii=False, separators=(",", ":")),
+            )
+        except Exception as exc:
+            raise ContextBuildError(
+                LLM_RERANK_FAILED, "LLM reranking prompt preparation failed"
+            ) from exc
         try:
             raw = self.client.complete_json(prompt)
         except Exception as exc:
@@ -66,17 +85,45 @@ class LLMReranker:
             ids = output.selected_asset_ids
             if len(ids) != len(set(ids)):
                 raise ValueError("duplicate selected asset id")
-            asset_by_id = {item.asset_id[:MAX_ASSET_ID_CHARS]: item for item in bounded_assets}
-            if len(asset_by_id) != len(bounded_assets) or any(item not in asset_by_id for item in ids):
-                raise ValueError("unknown or ambiguous selected asset id")
-            self._validate_references(output, set(asset_by_id))
+            self._validate_references(output, set(alias_to_asset))
+            rejected_ids = {item.asset_id for item in output.rejected_assets}
+            if set(ids) & rejected_ids:
+                raise ValueError("selected and rejected asset ids overlap")
+            selected_assets = [alias_to_asset[item] for item in ids]
+            rejected_assets = [
+                item.model_copy(update={"asset_id": alias_to_asset[item.asset_id].asset_id})
+                for item in output.rejected_assets
+            ]
+            evidence_trace = [
+                item.model_copy(
+                    update={"asset_id": alias_to_asset[item.asset_id].asset_id}
+                )
+                if item.asset_id is not None
+                else item
+                for item in output.evidence_trace
+            ]
+            requirement_hints = [
+                item.model_copy(
+                    update={
+                        "bind_to_candidates": [
+                            alias_to_asset[alias].asset_id
+                            for alias in item.bind_to_candidates
+                        ]
+                    }
+                )
+                for item in output.context_requirement_hints
+            ]
+            canonical_selected_ids = [item.asset_id for item in selected_assets]
+            if set(canonical_selected_ids) & {item.asset_id for item in rejected_assets}:
+                raise ValueError("selected and rejected canonical asset ids overlap")
         except (ValidationError, ValueError, TypeError) as exc:
             raise ContextBuildError(INVALID_LLM_OUTPUT, "LLM reranking output violates contract") from exc
         return LLMRerankResult(
-            selected_assets=[asset_by_id[item] for item in ids],
-            rejected_assets=output.rejected_assets,
-            context_requirement_hints=output.context_requirement_hints,
-            evidence_trace=output.evidence_trace,
+            selected_asset_ids=canonical_selected_ids,
+            selected_assets=selected_assets,
+            rejected_assets=rejected_assets,
+            context_requirement_hints=requirement_hints,
+            evidence_trace=evidence_trace,
         )
 
     @staticmethod
@@ -103,7 +150,8 @@ class LLMReranker:
 
     @staticmethod
     def _validate_references(output: LLMRerankOutput, allowed: set[str]) -> None:
-        referenced = [item.get("asset_id") for item in output.rejected_assets if item.get("asset_id") is not None]
+        referenced = list(output.selected_asset_ids)
+        referenced += [item.asset_id for item in output.rejected_assets]
         referenced += [item.asset_id for item in output.evidence_trace if item.asset_id is not None]
         referenced += [asset_id for hint in output.context_requirement_hints for asset_id in hint.bind_to_candidates]
         if any(asset_id not in allowed for asset_id in referenced):

@@ -1,0 +1,142 @@
+from types import SimpleNamespace
+
+import pytest
+
+from agent.context_manager.errors import AI_CONFIGURATION_REQUIRED, EMBEDDING_FAILED, ContextBuildError
+from agent.context_manager.models import ContextAsset
+from agent.context_manager.retrieval import EmbeddingClient, HybridRetriever, LexicalRetriever, SemanticRetriever
+from agent.llm.config import OpenAISettings, load_openai_settings
+
+
+def asset(asset_id, index_text, content=None, metadata=None):
+    return ContextAsset(
+        asset_id=asset_id,
+        asset_type="naming_sql",
+        scope="project",
+        content=content or {},
+        index_text=index_text,
+        metadata=metadata or {},
+    )
+
+
+class FakeEmbeddings:
+    def __init__(self, vectors):
+        self.vectors = vectors
+        self.calls = []
+
+    def embed_texts(self, texts):
+        self.calls.append(texts)
+        return self.vectors[: len(texts)]
+
+
+def test_hybrid_returns_semantic_then_unseen_exact_without_mutation():
+    assets = [
+        asset("semantic", "customer lookup", {"name": "customerLookup"}, {"kept": True}),
+        asset("exact", "unrelated", {"naming_sql_name": "findInvoice"}),
+    ]
+    fake = FakeEmbeddings([[1, 0], [1, 0], [0, 1]])
+
+    result = HybridRetriever(SemanticRetriever(fake), LexicalRetriever()).retrieve(
+        "findInvoice", assets, semantic_limit=1
+    )
+
+    assert [item.asset_id for item in result] == ["semantic", "exact"]
+    assert result[0].metadata == {"kept": True, "embedding_similarity": 1.0}
+    assert "embedding_similarity" not in assets[0].metadata
+    assert result[0] is not assets[0]
+
+
+def test_hybrid_deduplicates_exact_asset_already_recalled_semantically():
+    assets = [asset("same", "findInvoice", {"name": "findInvoice"})]
+    result = HybridRetriever(
+        SemanticRetriever(FakeEmbeddings([[1], [1]])), LexicalRetriever()
+    ).retrieve("findInvoice", assets, semantic_limit=1)
+    assert [item.asset_id for item in result] == ["same"]
+
+
+def test_semantic_ties_preserve_original_order_and_zero_vectors_are_safe():
+    assets = [asset("first", "a"), asset("second", "b")]
+    result = SemanticRetriever(FakeEmbeddings([[0, 0], [0, 0], [0, 0]])).retrieve("q", assets, limit=2)
+    assert [item.asset_id for item in result] == ["first", "second"]
+    assert [item.metadata["embedding_similarity"] for item in result] == [0.0, 0.0]
+
+
+@pytest.mark.parametrize("vectors", [[], [[1]], [[1], [1, 2]]])
+def test_semantic_rejects_invalid_embedding_shapes(vectors):
+    with pytest.raises(ContextBuildError) as error:
+        SemanticRetriever(FakeEmbeddings(vectors)).retrieve("q", [asset("a", "a")], limit=1)
+    assert error.value.code == EMBEDDING_FAILED
+
+
+def test_retrievers_return_empty_without_embedding_call():
+    fake = FakeEmbeddings([])
+    assert SemanticRetriever(fake).retrieve("q", [], limit=3) == []
+    assert HybridRetriever(SemanticRetriever(fake), LexicalRetriever()).retrieve("q", []) == []
+    assert fake.calls == []
+
+
+def test_lexical_matches_stable_id_and_nested_useful_names_in_original_order():
+    assets = [
+        asset("sql.invoice", "other", {"params": [{"field_name": "accountId"}]}),
+        asset("accountId", "other"),
+        asset("miss", "other"),
+    ]
+    assert [a.asset_id for a in LexicalRetriever().retrieve("account id", assets)] == [
+        "sql.invoice", "accountId"
+    ]
+
+
+def test_embedding_client_uses_settings_order_and_empty_short_circuit():
+    settings = OpenAISettings(True, "key", "https://example.test", "base", "vl", 7, "embed")
+    client = EmbeddingClient(settings)
+    calls = []
+    client._client = SimpleNamespace(
+        embeddings=SimpleNamespace(
+            create=lambda **kwargs: calls.append(kwargs) or SimpleNamespace(
+                data=[SimpleNamespace(index=1, embedding=[2.0]), SimpleNamespace(index=0, embedding=[1.0])]
+            )
+        )
+    )
+    assert client.embed_texts([]) == []
+    assert client.embed_texts(["a", "b"]) == [[1.0], [2.0]]
+    assert calls == [{"model": "embed", "input": ["a", "b"]}]
+
+
+def test_embedding_client_configuration_and_provider_failures_are_sanitized():
+    unusable = OpenAISettings(False, "secret", None, "base", "vl", 3)
+    with pytest.raises(ContextBuildError) as config_error:
+        EmbeddingClient(unusable).embed_texts(["x"])
+    assert config_error.value.code == AI_CONFIGURATION_REQUIRED
+
+    usable = OpenAISettings(True, "secret", None, "base", "vl", 3)
+    client = EmbeddingClient(usable)
+    client._client = SimpleNamespace(
+        embeddings=SimpleNamespace(create=lambda **kwargs: (_ for _ in ()).throw(RuntimeError("secret leaked")))
+    )
+    with pytest.raises(ContextBuildError) as provider_error:
+        client.embed_texts(["x"])
+    assert provider_error.value.code == EMBEDDING_FAILED
+    assert "secret" not in str(provider_error.value)
+
+
+def test_embedding_client_rejects_duplicate_response_indexes():
+    settings = OpenAISettings(True, "key", None, "base", "vl", 3)
+    client = EmbeddingClient(settings)
+    client._client = SimpleNamespace(
+        embeddings=SimpleNamespace(
+            create=lambda **kwargs: SimpleNamespace(
+                data=[SimpleNamespace(index=0, embedding=[1.0]), SimpleNamespace(index=0, embedding=[2.0])]
+            )
+        )
+    )
+    with pytest.raises(ContextBuildError) as error:
+        client.embed_texts(["a", "b"])
+    assert error.value.code == EMBEDDING_FAILED
+
+
+def test_openai_settings_constructor_compatibility_and_embedding_env(tmp_path):
+    legacy = OpenAISettings(True, "key", None, "base", "vl", 30)
+    assert legacy.embedding_model
+    env = tmp_path / ".env"
+    env.write_text("OPENAI_EMBEDDING_MODEL=custom-embed\n", encoding="utf-8")
+    assert load_openai_settings(env).embedding_model == "custom-embed"

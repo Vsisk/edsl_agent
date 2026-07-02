@@ -57,6 +57,28 @@ def test_semantic_ties_preserve_original_order_and_zero_vectors_are_safe():
     assert [item.metadata["embedding_similarity"] for item in result] == [0.0, 0.0]
 
 
+@pytest.mark.parametrize(
+    "vector",
+    [
+        [1.0e308, 1.0e308],
+        [1.0e-308, 1.0e-308],
+    ],
+)
+def test_semantic_cosine_is_stable_for_huge_and_tiny_parallel_vectors(vector):
+    result = SemanticRetriever(FakeEmbeddings([vector, vector])).retrieve(
+        "q", [asset("parallel", "parallel")], limit=1
+    )
+    assert result[0].metadata["embedding_similarity"] == pytest.approx(1.0)
+
+
+def test_semantic_rejects_boolean_embedding_values():
+    with pytest.raises(ContextBuildError) as error:
+        SemanticRetriever(FakeEmbeddings([[True, 0.0], [1.0, 0.0]])).retrieve(
+            "q", [asset("a", "a")], limit=1
+        )
+    assert error.value.code == EMBEDDING_FAILED
+
+
 @pytest.mark.parametrize("vectors", [[], [[1]], [[1], [1, 2]]])
 def test_semantic_rejects_invalid_embedding_shapes(vectors):
     with pytest.raises(ContextBuildError) as error:

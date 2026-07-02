@@ -41,13 +41,26 @@ class SemanticRetriever:
         dimension = len(vectors[0])
         if dimension == 0 or any(len(vector) != dimension for vector in vectors):
             raise ContextBuildError(EMBEDDING_FAILED)
-        if any(not isinstance(value, (int, float)) or not math.isfinite(value) for vector in vectors for value in vector):
+        if any(
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(value)
+            for vector in vectors
+            for value in vector
+        ):
             raise ContextBuildError(EMBEDDING_FAILED)
 
     @staticmethod
     def _cosine(left: list[float], right: list[float]) -> float:
-        left_norm = math.sqrt(sum(value * value for value in left))
-        right_norm = math.sqrt(sum(value * value for value in right))
-        if left_norm == 0 or right_norm == 0:
+        left_scale = max(abs(value) for value in left)
+        right_scale = max(abs(value) for value in right)
+        if left_scale == 0 or right_scale == 0:
             return 0.0
-        return sum(a * b for a, b in zip(left, right)) / (left_norm * right_norm)
+        scaled_left = [value / left_scale for value in left]
+        scaled_right = [value / right_scale for value in right]
+        left_norm = math.sqrt(sum(value * value for value in scaled_left))
+        right_norm = math.sqrt(sum(value * value for value in scaled_right))
+        similarity = sum(a * b for a, b in zip(scaled_left, scaled_right)) / (left_norm * right_norm)
+        if not math.isfinite(similarity):
+            raise ContextBuildError(EMBEDDING_FAILED)
+        return max(-1.0, min(1.0, similarity))

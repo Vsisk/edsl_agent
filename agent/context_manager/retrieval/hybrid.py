@@ -1,13 +1,14 @@
 from agent.context_manager.models import ContextAsset
 
+from .embedding_client import EmbeddingClientProtocol
 from .lexical import LexicalRetriever
 from .semantic import SemanticRetriever
 
 
 class HybridRetriever:
-    def __init__(self, semantic: SemanticRetriever, lexical: LexicalRetriever) -> None:
-        self.semantic = semantic
-        self.lexical = lexical
+    def __init__(self, embedding_client: EmbeddingClientProtocol) -> None:
+        self.semantic = SemanticRetriever(embedding_client)
+        self.lexical = LexicalRetriever()
 
     def retrieve(
         self,
@@ -18,7 +19,12 @@ class HybridRetriever:
         if not assets:
             return []
         semantic_results = self.semantic.retrieve(query, assets, semantic_limit)
-        seen = {asset.asset_id for asset in semantic_results}
-        return semantic_results + [
-            asset for asset in self.lexical.retrieve(query, assets) if asset.asset_id not in seen
-        ]
+        lexical_results = self.lexical.retrieve(query, assets)
+        results = []
+        seen = set()
+        for asset in [*semantic_results, *lexical_results]:
+            if asset.asset_id in seen:
+                continue
+            results.append(asset)
+            seen.add(asset.asset_id)
+        return results

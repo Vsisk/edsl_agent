@@ -36,9 +36,7 @@ def test_hybrid_returns_semantic_then_unseen_exact_without_mutation():
     ]
     fake = FakeEmbeddings([[1, 0], [1, 0], [0, 1]])
 
-    result = HybridRetriever(SemanticRetriever(fake), LexicalRetriever()).retrieve(
-        "findInvoice", assets, semantic_limit=1
-    )
+    result = HybridRetriever(fake).retrieve("findInvoice", assets, semantic_limit=1)
 
     assert [item.asset_id for item in result] == ["semantic", "exact"]
     assert result[0].metadata == {"kept": True, "embedding_similarity": 1.0}
@@ -48,9 +46,7 @@ def test_hybrid_returns_semantic_then_unseen_exact_without_mutation():
 
 def test_hybrid_deduplicates_exact_asset_already_recalled_semantically():
     assets = [asset("same", "findInvoice", {"name": "findInvoice"})]
-    result = HybridRetriever(
-        SemanticRetriever(FakeEmbeddings([[1], [1]])), LexicalRetriever()
-    ).retrieve("findInvoice", assets, semantic_limit=1)
+    result = HybridRetriever(FakeEmbeddings([[1], [1]])).retrieve("findInvoice", assets, semantic_limit=1)
     assert [item.asset_id for item in result] == ["same"]
 
 
@@ -71,8 +67,32 @@ def test_semantic_rejects_invalid_embedding_shapes(vectors):
 def test_retrievers_return_empty_without_embedding_call():
     fake = FakeEmbeddings([])
     assert SemanticRetriever(fake).retrieve("q", [], limit=3) == []
-    assert HybridRetriever(SemanticRetriever(fake), LexicalRetriever()).retrieve("q", []) == []
+    assert HybridRetriever(fake).retrieve("q", []) == []
     assert fake.calls == []
+
+
+def test_hybrid_deduplicates_duplicate_ids_within_semantic_and_lexical_streams():
+    assets = [
+        asset("duplicate", "first", {"name": "findInvoice"}),
+        asset("duplicate", "second", {"name": "findInvoice"}),
+        asset("exact", "third", {"name": "findInvoice"}),
+    ]
+    fake = FakeEmbeddings([[1, 0], [1, 0], [0.9, 0.1], [0, 1]])
+
+    result = HybridRetriever(fake).retrieve("findInvoice", assets, semantic_limit=2)
+
+    assert [item.asset_id for item in result] == ["duplicate", "exact"]
+
+
+def test_hybrid_deduplicates_duplicate_ids_when_only_lexical_recall_runs():
+    assets = [
+        asset("duplicate", "first", {"name": "findInvoice"}),
+        asset("duplicate", "second", {"name": "findInvoice"}),
+    ]
+
+    result = HybridRetriever(FakeEmbeddings([])).retrieve("findInvoice", assets, semantic_limit=0)
+
+    assert [item.asset_id for item in result] == ["duplicate"]
 
 
 def test_lexical_matches_stable_id_and_nested_useful_names_in_original_order():

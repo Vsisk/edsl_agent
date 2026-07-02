@@ -13,6 +13,7 @@ class OpenAISettings:
     base_model: str
     vl_model: str
     timeout_seconds: float
+    embedding_model: str = "text-embedding-3-small"
 
     @property
     def is_usable(self) -> bool:
@@ -40,6 +41,7 @@ def load_openai_settings(env_path: str | Path | None = None) -> OpenAISettings:
         base_model=base_model,
         vl_model=values.get("OPENAI_VL_MODEL", base_model),
         timeout_seconds=_as_float(values.get("OPENAI_TIMEOUT_SECONDS"), default=30.0),
+        embedding_model=values.get("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small"),
     )
 
 

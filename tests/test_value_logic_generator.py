@@ -1,868 +1,280 @@
-import unittest
-from types import SimpleNamespace
+import pytest
 
+from agent.context_manager.models import NamingSqlCandidate
+from agent.context_manager.errors import NO_NAMING_SQL_CANDIDATES
 from agent.models import ValueLogicRequest
-from agent.naming_sql_selector import NamingSqlSelectionResult
+from agent.naming_sql_selector import NamingSqlSelectResponse
 from agent.planner.models import Plan
-from agent.resource_manager.loader.registry_models import ContextRegistry, FilterTarget, LocalContextRegistry, PropertyTypeEnum, ReturnType, SourceType
 from agent.resource_manager.loader.resource_loader import ResourceLoader
-from agent.value_logic_generator import ValueLogicGenerator
+from agent.value_logic_generator import ExpressionSpec, ValueLogicGenerator, requires_naming_sql
 from tests.test_environment import FakeResourceFilter, sample_edsl_tree_payload
 
 
-class FakePlanner:
-    def __init__(self):
-        self.calls = []
-
-    def plan(self, *, node_info, user_query, filtered_env):
-        self.calls.append(
-            {
-                "node_info": node_info,
-                "user_query": user_query,
-                "filtered_env": filtered_env,
-            }
-        )
-        return Plan.model_validate(
-            {
-                "nodes": [
-                    {
-                        "type": "return",
-                        "value": {
-                            "type": "select_one",
-                            "bo": "BB_PREP_SUB",
-                            "filter": {
-                                "type": "compare",
-                                "op": "==",
-                                "left": {"type": "context_path", "path": "it.ID"},
-                                "right": {"type": "context_path", "path": "$ctx$.id"},
-                            },
-                        },
-                    }
-                ]
-            }
-        )
+class Targets:
+    def generate(self, **kwargs): return []
 
 
-class FailingDifficultyRouter:
-    def route_resources(self, *, node_info, user_query):
-        raise AssertionError("difficulty router must not be called on the default resource filter path")
+class Specs:
+    def generate(self, *, request, node_info): return ExpressionSpec(nl=request.query)
 
 
-class FailingLegacyResourceFilter(FakeResourceFilter):
-    def __init__(self):
-        super().__init__({})
-
-    def plan_resource_search_commands(self, *, node_info, user_query, search_space, limits):
-        raise AssertionError("legacy resource search must not be called on the default path")
-
-    def filter_resources(self, *, node_info, user_query, candidates, limits):
-        raise AssertionError("legacy tag selector must not be called on the default path")
-
-
-class FakeExpressionSpecGenerator:
-    def __init__(self, nl):
-        self.nl = nl
-        self.calls = []
-
-    def generate(self, *, request, node_info):
-        self.calls.append({"request": request, "node_info": node_info})
-        from agent.value_logic_generator import ExpressionSpec
-
-        return ExpressionSpec(nl=self.nl)
+class Planner:
+    def __init__(self, fetch=True): self.calls, self.fetch = [], fetch
+    def plan(self, **kwargs):
+        self.calls.append(kwargs)
+        if self.fetch:
+            return Plan.model_validate({"nodes": [{"type": "return", "value": {"type": "fetch_one",
+                "name": "FindCustomerRecent", "params": [{"name": "id", "value": {"type": "literal", "value": "x"}}]}}]})
+        return Plan.model_validate({"nodes": [{"type": "return", "value": {"type": "literal", "value": "ok"}}]})
 
 
-class FakeTargetGenerator:
-    def __init__(self, targets):
-        self.targets = targets
-        self.calls = []
-        self.selection_trace = []
-
-    def generate(self, *, query, domain_registry, resource_count_summary=None):
-        self.calls.append(
-            {
-                "query": query,
-                "domain_registry": domain_registry,
-                "resource_count_summary": resource_count_summary,
-            }
-        )
-        return self.targets
+class Selector:
+    def __init__(self, result): self.result, self.calls = result, []
+    def select(self, request): self.calls.append(request); return self.result
 
 
-class FakeResourceRoute:
-    def __init__(self, *, use_bo: bool, use_function: bool, resource_count_hint: int = 5):
-        self.use_bo = use_bo
-        self.use_function = use_function
+class Route:
+    def __init__(self, use_bo, use_function, resource_count_hint=5):
+        self.use_bo, self.use_function = use_bo, use_function
         self.resource_count_hint = resource_count_hint
 
 
-class FakeDifficultyRouter:
-    def __init__(self, route: FakeResourceRoute):
-        self.route = route
-        self.calls = []
-
-    def route_resources(self, *, node_info, user_query):
-        self.calls.append(
-            {
-                "node_info": node_info,
-                "user_query": user_query,
-            }
-        )
-        return self.route
-
-
-def naming_sql_selection(*, source_ref="$ctx$.billStatement.CUST_ID", status="selected"):
-    return NamingSqlSelectionResult.model_validate({
-        "status": status, "selected_bo": "BB_BAK_TRANS",
-        "selected": None if status == "needs_review" else {"naming_sql_id": "2025112610460822566018",
-            "sql_name": "BB_BAK_TRANS_queryDataLoadData", "score": 1.0,
-            "binding_plan": {"bindings": [{"param_name": "CUST_ID", "source_ref": source_ref,
-                "confidence": 1.0, "reason": "exact"}], "unbound_params": [], "ambiguous_params": [], "is_complete": True}, "reasons": []},
-        "fallback_candidates": [], "rejected_candidates": [], "review_mode": "not_required"})
-
-
-class CapturingSelector:
-    def __init__(self, result): self.result, self.calls = result, []
-    def select(self, request, loaded_resource): self.calls.append((request, loaded_resource)); return self.result
-
-
-class FetchPlanner:
-    def __init__(self, *, source_ref="$ctx$.billStatement.CUST_ID", sql_name="BB_BAK_TRANS_queryDataLoadData"):
-        self.calls, self.source_ref, self.sql_name = [], source_ref, sql_name
-    def plan(self, *, node_info, user_query, filtered_env):
-        self.calls.append({"filtered_env": filtered_env})
-        return Plan.model_validate({"nodes": [{"type": "return", "value": {"type": "fetch_one",
-            "name": self.sql_name, "params": [{"name": "CUST_ID", "value": {"type": "context_path", "path": self.source_ref}}]}}]})
-
-
-class MutatingPlanner:
-    def __init__(self): self.calls = []
-    def plan(self, *, node_info, user_query, filtered_env):
-        self.calls.append(filtered_env)
-        filtered_env.naming_sql_selection.selected.sql_name = "attacker_sql"
-        filtered_env.naming_sql_selection.selected.binding_plan.bindings[0].source_ref = "$ctx$.billStatement.BE_ID"
-        return Plan.model_validate({"nodes": [{"type": "return", "value": {"type": "fetch_one",
-            "name": "attacker_sql", "params": [{"name": "CUST_ID", "value": {"type": "context_path",
-                "path": "$ctx$.billStatement.BE_ID"}}]}}]})
-
-
-class ValueLogicGeneratorTest(unittest.TestCase):
-    def test_structured_false_skips_naming_sql_selector(self):
-        class FailingSelector:
-            def select(self, request, loaded_resource):
-                raise AssertionError("selector must not be called")
-
-        planner = FakePlanner()
-        generator = ValueLogicGenerator(
-            resource_loader=ResourceLoader(), llm_planner=planner,
-            naming_sql_selector=FailingSelector(),
-            expression_spec_generator=FakeExpressionSpecGenerator("please query datasource"),
-            resource_filter_target_generator=FakeTargetGenerator([]),
-        )
-
-        generator.generate(ValueLogicRequest(
-            site_id="site1", project_id="project1", node_path="$.x",
-            node={"node_id": "x", "name": "x"}, query="please query datasource",
-            structured_spec={"requires_naming_sql": False}, edsl_tree={},
-        ))
-
-        self.assertEqual(len(planner.calls), 1)
-
-    def test_structured_true_selects_narrows_and_renders_fetch_one(self):
-        selector, planner = CapturingSelector(naming_sql_selection()), FetchPlanner()
-        generator = ValueLogicGenerator(resource_loader=ResourceLoader(), llm_planner=planner,
-            naming_sql_selector=selector, resource_filter_target_generator=FakeTargetGenerator([]))
-        result = generator.generate(ValueLogicRequest(site_id="site1", project_id="project1", node_path="$.x",
-            node={"node_id": "x", "name": "x"}, query="use explicit SQL",
-            structured_spec={"requires_naming_sql": True, "bo_name": "BB_BAK_TRANS"}, edsl_tree=sample_edsl_tree_payload()))
-        env = planner.calls[0]["filtered_env"]
-        self.assertEqual(len(selector.calls), 1)
-        self.assertEqual(selector.calls[0][0].bo_name, "BB_BAK_TRANS")
-        self.assertEqual((len(env.selected_bos), len(env.selected_bos[0].naming_sql_list)), (1, 1))
-        self.assertEqual(env.naming_sql_selection, selector.result)
-        self.assertIsNot(env.naming_sql_selection, selector.result)
-        self.assertIn("$ctx$.billStatement.CUST_ID", [x.context_name for x in env.selected_global_contexts])
-        self.assertEqual(result.expression, "fetch_one(BB_BAK_TRANS_queryDataLoadData, pair(it.CUST_ID, $ctx$.billStatement.CUST_ID))")
-
-    def test_missing_binding_source_stops_before_planner(self):
-        selector = CapturingSelector(naming_sql_selection(source_ref="$ctx$.missing.value")); planner = FetchPlanner()
-        generator = ValueLogicGenerator(resource_loader=ResourceLoader(), llm_planner=planner,
-            naming_sql_selector=selector, resource_filter_target_generator=FakeTargetGenerator([]))
-        with self.assertRaisesRegex(ValueError, "NAMING_SQL_BINDING_SOURCE_NOT_LOADED"):
-            generator.generate(ValueLogicRequest(site_id="site1", project_id="project1", node_path="$.x",
-                node={"node_id": "x"}, query="查表", edsl_tree={}))
-        self.assertEqual(planner.calls, [])
-
-    def test_needs_review_stops_before_planner(self):
-        selector = CapturingSelector(naming_sql_selection(status="needs_review")); planner = FetchPlanner()
-        generator = ValueLogicGenerator(resource_loader=ResourceLoader(), llm_planner=planner,
-            naming_sql_selector=selector, resource_filter_target_generator=FakeTargetGenerator([]))
-        with self.assertRaisesRegex(ValueError, "NAMING_SQL_REVIEW_REQUIRED"):
-            generator.generate(ValueLogicRequest(site_id="site1", project_id="project1", node_path="$.x",
-                node={"node_id": "x"}, query="查表", edsl_tree={}))
-        self.assertEqual(planner.calls, [])
-
-    def test_local_validator_rejects_fake_planner_reselection(self):
-        selector = CapturingSelector(naming_sql_selection()); planner = FetchPlanner(sql_name="wrong_sql")
-        generator = ValueLogicGenerator(resource_loader=ResourceLoader(), llm_planner=planner,
-            naming_sql_selector=selector, resource_filter_target_generator=FakeTargetGenerator([]))
-        with self.assertRaisesRegex(ValueError, "NAMING_SQL_RESELECTED"):
-            generator.generate(ValueLogicRequest(site_id="site1", project_id="project1", node_path="$.x",
-                node={"node_id": "x"}, query="查表", edsl_tree=sample_edsl_tree_payload()))
-
-    def test_selector_request_context_metadata_and_bo_precedence(self):
-        selector, planner = CapturingSelector(naming_sql_selection()), FetchPlanner()
-        target = FilterTarget(SourceType.CONTEXT, "billStatement", "CUST_ID")
-        generator = ValueLogicGenerator(resource_loader=ResourceLoader(), llm_planner=planner,
-            naming_sql_selector=selector, resource_filter_target_generator=FakeTargetGenerator([target]))
-        generator.generate(ValueLogicRequest(site_id="site1", project_id="project1", node_path="$.x",
-            node={"node_id": "x"}, parent_node={"ab_content": {"data_source": {"data_source_type": "sql",
-                "sql_query": {"bo_name": "PARENT_BO"}}}}, query="NamingSQL",
-            structured_spec={"bo_name": "BB_BAK_TRANS"}, edsl_tree=sample_edsl_tree_payload()))
-        sent = selector.calls[0][0]
-        self.assertEqual(sent.bo_name, "BB_BAK_TRANS")
-        self.assertEqual(sent.available_context[0]["source_ref"], "$ctx$.billStatement.CUST_ID")
-        self.assertEqual(sent.available_context[0]["data_type"], "INT64")
-        self.assertFalse(sent.available_context[0]["is_list"])
-        self.assertEqual(len({item["source_ref"] for item in sent.available_context}), len(sent.available_context))
-
-    def test_raw_query_lookup_routes_when_expression_spec_is_ordinary(self):
-        selector, planner = CapturingSelector(naming_sql_selection()), FetchPlanner()
-        generator = ValueLogicGenerator(resource_loader=ResourceLoader(), llm_planner=planner,
-            naming_sql_selector=selector, expression_spec_generator=FakeExpressionSpecGenerator("ordinary wording"),
-            resource_filter_target_generator=FakeTargetGenerator([]))
-        generator.generate(ValueLogicRequest(site_id="site1", project_id="project1", node_path="$.x",
-            node={"node_id": "x"}, query="please use datasource", edsl_tree=sample_edsl_tree_payload()))
-        self.assertEqual(len(selector.calls), 1)
-
-    def test_expression_spec_lookup_routes_when_raw_query_is_ordinary(self):
-        selector, planner = CapturingSelector(naming_sql_selection()), FetchPlanner()
-        generator = ValueLogicGenerator(resource_loader=ResourceLoader(), llm_planner=planner,
-            naming_sql_selector=selector, expression_spec_generator=FakeExpressionSpecGenerator("use naming sql"),
-            resource_filter_target_generator=FakeTargetGenerator([]))
-        generator.generate(ValueLogicRequest(site_id="site1", project_id="project1", node_path="$.x",
-            node={"node_id": "x"}, query="ordinary wording", edsl_tree=sample_edsl_tree_payload()))
-        self.assertEqual(len(selector.calls), 1)
-
-    def test_available_context_keeps_visible_local_ahead_of_remaining_globals_at_cap(self):
-        generator = ValueLogicGenerator()
-        globals_ = {}
-        for index in range(100):
-            item = ContextRegistry(resource_id=f"g{index}", context_name=f"$ctx$.bulk.g{index}",
-                return_type=ReturnType(data_type="basic", data_type_name="STRING", is_list=False),
-                property_type=PropertyTypeEnum.system, annotation="", tag=[])
-            globals_[item.context_name] = item
-        local = LocalContextRegistry(resource_id="local", context_name="$local$.must_keep",
-            return_type=ReturnType(data_type="basic", data_type_name="INT", is_list=False))
-        loaded = SimpleNamespace(context_registry=globals_, get_visible_local_context_registry=lambda path: {local.context_name: local})
-        env = SimpleNamespace(selected_global_contexts=[globals_["$ctx$.bulk.g0"]], visible_local_context=[])
-        result = generator._available_context(env, loaded, "$.x")
-        self.assertEqual(len(result), 100)
-        self.assertEqual([item["source_ref"] for item in result[:2]], ["$ctx$.bulk.g0", "$local$.must_keep"])
-        self.assertNotIn("$ctx$.bulk.g99", [item["source_ref"] for item in result])
-
-    def test_parent_sql_bo_extraction_accepts_all_supported_shapes(self):
-        generator = ValueLogicGenerator()
-        shapes = [
-            {"source_type": "sql", "sql_query": {"bo_name": "TOP"}},
-            {"data_source_type": "sql", "bo_name": "DIRECT"},
-            {"data_source": {"data_source_type": "sql", "sql_query": {"bo_name": "DATA"}}},
-            {"ab_data_source": {"source_type": "sql", "sql_query": {"bo_name": "AB"}}},
-            {"ab_content": {"data_source": {"data_source_type": "sql", "sql_query": {"bo_name": "CONTENT"}}}},
-        ]
-        self.assertEqual([generator._extract_parent_sql_bo_name(item) for item in shapes],
-            ["TOP", "DIRECT", "DATA", "AB", "CONTENT"])
-
-    def test_definition_identity_rejects_duplicate_id_and_name_mismatch(self):
-        generator = ValueLogicGenerator()
-        loaded = ResourceLoader().load_resource("site1", "project1", {})
-        bo = loaded.bo_registry["BB_BAK_TRANS"]
-        definition = bo.naming_sql_list[0]
-        env = SimpleNamespace(selected_global_contexts=[], visible_local_context=[], selected_bos=[], selected_bo_ids=[],
-            selected_global_context_ids=[], selected_local_context_ids=[], naming_sql_selection=None)
-        loaded.bo_registry["BB_BAK_TRANS"] = bo.model_copy(update={"naming_sql_list": [definition, definition.model_copy()]})
-        with self.assertRaisesRegex(ValueError, "NAMING_SQL_DEFINITION_AMBIGUOUS"):
-            generator._narrow_naming_sql_environment(env, loaded, "$.x", naming_sql_selection())
-        loaded.bo_registry["BB_BAK_TRANS"] = bo
-        mismatch = naming_sql_selection().model_copy(deep=True)
-        mismatch.selected.sql_name = "wrong"
-        with self.assertRaisesRegex(ValueError, "NAMING_SQL_DEFINITION_NOT_LOADED"):
-            generator._narrow_naming_sql_environment(env, loaded, "$.x", mismatch)
-        empty_id = naming_sql_selection().model_copy(deep=True)
-        empty_id.selected.naming_sql_id = ""
-        with self.assertRaisesRegex(ValueError, "NAMING_SQL_DEFINITION_NOT_LOADED"):
-            generator._narrow_naming_sql_environment(env, loaded, "$.x", empty_id)
-
-    def test_planner_cannot_mutate_approved_selection_snapshot(self):
-        approved = naming_sql_selection()
-        selector, planner = CapturingSelector(approved), MutatingPlanner()
-        generator = ValueLogicGenerator(resource_loader=ResourceLoader(), llm_planner=planner,
-            naming_sql_selector=selector, resource_filter_target_generator=FakeTargetGenerator([]))
-        with self.assertRaisesRegex(ValueError, "NAMING_SQL_RESELECTED"):
-            generator.generate(ValueLogicRequest(site_id="site1", project_id="project1", node_path="$.x",
-                node={"node_id": "x"}, query="查表", edsl_tree=sample_edsl_tree_payload()))
-        self.assertEqual(approved.selected.sql_name, "BB_BAK_TRANS_queryDataLoadData")
-        self.assertEqual(approved.selected.binding_plan.bindings[0].source_ref, "$ctx$.billStatement.CUST_ID")
-
-    def test_invalid_selector_bindings_stop_before_planner(self):
-        invalid_results = []
-        for mutation in ("incomplete", "unbound", "ambiguous", "duplicate"):
-            result = naming_sql_selection().model_copy(deep=True)
-            plan = result.selected.binding_plan
-            if mutation == "incomplete": plan.is_complete = False
-            if mutation == "unbound": plan.unbound_params = ["MISSING"]
-            if mutation == "ambiguous": plan.ambiguous_params = ["CUST_ID"]
-            if mutation == "duplicate": plan.bindings.append(plan.bindings[0].model_copy())
-            invalid_results.append(result)
-        for result in invalid_results:
-            with self.subTest(result=result):
-                planner = FetchPlanner()
-                generator = ValueLogicGenerator(resource_loader=ResourceLoader(), llm_planner=planner,
-                    naming_sql_selector=CapturingSelector(result), resource_filter_target_generator=FakeTargetGenerator([]))
-                with self.assertRaisesRegex(ValueError, "NAMING_SQL_REVIEW_REQUIRED"):
-                    generator.generate(ValueLogicRequest(site_id="site1", project_id="project1", node_path="$.x",
-                        node={"node_id": "x"}, query="查表", edsl_tree=sample_edsl_tree_payload()))
-                self.assertEqual(planner.calls, [])
-
-    def test_distinct_params_may_share_one_binding_source(self):
-        result = naming_sql_selection().model_copy(deep=True)
-        second = result.selected.binding_plan.bindings[0].model_copy(update={"param_name": "ACCOUNT_ID"})
-        result.selected.binding_plan.bindings.append(second)
-
-        class SharedSourcePlanner:
-            def __init__(self): self.calls = []
-            def plan(self, *, node_info, user_query, filtered_env):
-                self.calls.append(filtered_env)
-                params = [{"name": name, "value": {"type": "context_path", "path": "$ctx$.billStatement.CUST_ID"}}
-                    for name in ("CUST_ID", "ACCOUNT_ID")]
-                return Plan.model_validate({"nodes": [{"type": "return", "value": {"type": "fetch_one",
-                    "name": "BB_BAK_TRANS_queryDataLoadData", "params": params}}]})
-
-        planner = SharedSourcePlanner()
-        generator = ValueLogicGenerator(resource_loader=ResourceLoader(), llm_planner=planner,
-            naming_sql_selector=CapturingSelector(result), resource_filter_target_generator=FakeTargetGenerator([]))
-        generated = generator.generate(ValueLogicRequest(site_id="site1", project_id="project1", node_path="$.x",
-            node={"node_id": "x"}, query="查表", edsl_tree=sample_edsl_tree_payload()))
-        self.assertEqual(len(planner.calls), 1)
-        self.assertIn("pair(it.ACCOUNT_ID, $ctx$.billStatement.CUST_ID)", generated.expression)
-
-    def test_default_path_uses_expression_spec_nl_and_does_not_call_legacy_filtering(self):
-        planner = FakePlanner()
-        expression_spec_generator = FakeExpressionSpecGenerator("上下文 billStatement 的 CUST_ID")
-        target_generator = FakeTargetGenerator(
-            [FilterTarget(SourceType.CONTEXT, "billStatement", "CUST_ID")]
-        )
-        generator = ValueLogicGenerator(
-            resource_loader=ResourceLoader(),
-            llm_resource_filter=FailingLegacyResourceFilter(),
-            llm_difficulty_router=FailingDifficultyRouter(),
-            llm_planner=planner,
-            expression_spec_generator=expression_spec_generator,
-            resource_filter_target_generator=target_generator,
-        )
-
-        result = generator.generate(
-            ValueLogicRequest(
-                site_id="site1",
-                project_id="project1",
-                node_path="$.mapping_content.children[1]",
-                node={
-                    "node_id": "node-1",
-                    "tree_node_type": "simple_leaf",
-                    "xml_name_property": {"xml_name": "SUB_INFO"},
-                    "annotation": "user information node",
-                },
-                query="raw query should not be used for resource filtering",
-                edsl_tree=sample_edsl_tree_payload(),
-            )
-        )
-
-        self.assertEqual(result.logic_type, "expression")
-        self.assertEqual(target_generator.calls[0]["query"], "上下文 billStatement 的 CUST_ID")
-        self.assertEqual(planner.calls[0]["filtered_env"].selected_global_context_ids, ["ctx.0001"])
-        self.assertEqual(planner.calls[0]["user_query"], "raw query should not be used for resource filtering")
-
-    def test_empty_targets_use_empty_filtered_environment_by_default(self):
-        planner = FakePlanner()
-        generator = ValueLogicGenerator(
-            resource_loader=ResourceLoader(),
-            llm_resource_filter=FailingLegacyResourceFilter(),
-            llm_difficulty_router=FailingDifficultyRouter(),
-            llm_planner=planner,
-            expression_spec_generator=FakeExpressionSpecGenerator("no resource"),
-            resource_filter_target_generator=FakeTargetGenerator([]),
-        )
-
-        generator.generate(
-            ValueLogicRequest(
-                site_id="site1",
-                project_id="project1",
-                node_path="$.mapping_content.children[1]",
-                node={
-                    "node_id": "node-1",
-                    "tree_node_type": "simple_leaf",
-                    "xml_name_property": {"xml_name": "SUB_INFO"},
-                },
-                query="anything",
-                edsl_tree=sample_edsl_tree_payload(),
-            )
-        )
-
-        filtered_env = planner.calls[0]["filtered_env"]
-        self.assertEqual(filtered_env.selected_global_context_ids, [])
-        self.assertEqual(filtered_env.selection_trace[-1]["reason"], "FILTER_TARGET_EMPTY")
-
-    def test_simple_leaf_generates_expression_by_existing_plan(self):
-        planner = FakePlanner()
-        generator = ValueLogicGenerator(
-            resource_loader=ResourceLoader(),
-            llm_resource_filter=FakeResourceFilter(
-                {
-                    "bo": [{"resource_id": "bo.0000"}],
-                    "function": [],
-                    "local_context": [],
-                    "global_context": [],
-                }
-            ),
-            llm_planner=planner,
-        )
-
-        result = generator.generate(
-            ValueLogicRequest(
-                site_id="site1",
-                project_id="project1",
-                node_path="$.mapping_content.children[1]",
-                node={
-                    "node_id": "node-1",
-                    "tree_node_type": "simple_leaf",
-                    "xml_name_property": {"xml_name": "SUB_INFO"},
-                    "annotation": "user information node",
-                },
-                query="query one prep sub by id",
-            )
-        )
-
-        self.assertEqual(result.node_id, "node-1")
-        self.assertEqual(result.logic_type, "expression")
-        self.assertEqual(result.expression, "select_one(BB_PREP_SUB, it.ID == $ctx$.id)")
-        self.assertEqual(result.source.source_type, "plan")
-        self.assertEqual(planner.calls[0]["node_info"].node_path, "$.mapping_content.children[1]")
-        self.assertEqual(planner.calls[0]["node_info"].node_name, "SUB_INFO")
-        self.assertEqual(planner.calls[0]["user_query"], "query one prep sub by id")
-
-    def test_context_only_route_filters_context_without_bo_or_functions(self):
-        planner = FakePlanner()
-        resource_filter = FakeResourceFilter(
-            {
-                "bo": [{"resource_id": "bo.0000"}],
-                "function": [{"resource_id": "func.0001"}],
-                "local_context": [{"resource_id": "local.0002"}],
-                "global_context": [{"resource_id": "ctx.0001"}],
-            }
-        )
-        difficulty_router = FakeDifficultyRouter(FakeResourceRoute(use_bo=False, use_function=False))
-        generator = ValueLogicGenerator(
-            resource_loader=ResourceLoader(),
-            llm_resource_filter=resource_filter,
-            llm_difficulty_router=difficulty_router,
-            llm_planner=planner,
-            enable_legacy_filter_fallback=True,
-        )
-
-        result = generator.generate(
-            ValueLogicRequest(
-                site_id="site1",
-                project_id="project1",
-                node_path="$.mapping_content.children[1]",
-                node={
-                    "node_id": "node-1",
-                    "tree_node_type": "simple_leaf",
-                    "xml_name_property": {"xml_name": "SUB_INFO"},
-                    "annotation": "user information node",
-                },
-                query="assign CUST_ID from subId context directly",
-                edsl_tree=sample_edsl_tree_payload(),
-            )
-        )
-
-        filtered_env = planner.calls[0]["filtered_env"]
-        self.assertEqual(result.logic_type, "expression")
-        self.assertEqual(len(resource_filter.calls), 1)
-        self.assertEqual(difficulty_router.calls[0]["node_info"].node_name, "SUB_INFO")
-        self.assertEqual(difficulty_router.calls[0]["user_query"], "assign CUST_ID from subId context directly")
-        self.assertEqual(resource_filter.calls[0]["limits"]["bo"], 0)
-        self.assertEqual(resource_filter.calls[0]["limits"]["function"], 0)
-        self.assertEqual(resource_filter.calls[0]["candidates"]["bo"], [])
-        self.assertEqual(resource_filter.calls[0]["candidates"]["function"], [])
-        self.assertEqual(filtered_env.selected_local_context_ids[0], "local.0002")
-        self.assertEqual(filtered_env.selected_global_context_ids[0], "ctx.0001")
-        self.assertEqual(filtered_env.selected_bo_ids, [])
-        self.assertEqual(filtered_env.selected_function_ids, [])
-
-    def test_bo_only_route_filters_bo_and_context_without_functions(self):
-        planner = FakePlanner()
-        resource_filter = FakeResourceFilter(
-            {
-                "bo": [{"resource_id": "bo.0000"}],
-                "function": [{"resource_id": "func.0001"}],
-                "local_context": [{"resource_id": "local.0002"}],
-                "global_context": [{"resource_id": "ctx.0001"}],
-            }
-        )
-        generator = ValueLogicGenerator(
-            resource_loader=ResourceLoader(),
-            llm_resource_filter=resource_filter,
-            llm_difficulty_router=FakeDifficultyRouter(FakeResourceRoute(use_bo=True, use_function=False)),
-            llm_planner=planner,
-            enable_legacy_filter_fallback=True,
-        )
-
-        generator.generate(
-            ValueLogicRequest(
-                site_id="site1",
-                project_id="project1",
-                node_path="$.mapping_content.children[1]",
-                node={
-                    "node_id": "node-1",
-                    "tree_node_type": "simple_leaf",
-                    "xml_name_property": {"xml_name": "SUB_INFO"},
-                    "annotation": "user information node",
-                },
-                query="lookup BO by CUST_ID",
-                edsl_tree=sample_edsl_tree_payload(),
-            )
-        )
-
-        filtered_env = planner.calls[0]["filtered_env"]
-        self.assertEqual(resource_filter.calls[0]["limits"]["bo"], 5)
-        self.assertEqual(resource_filter.calls[0]["limits"]["function"], 0)
-        self.assertNotEqual(resource_filter.calls[0]["candidates"]["bo"], [])
-        self.assertEqual(resource_filter.calls[0]["candidates"]["function"], [])
-        self.assertEqual(filtered_env.selected_bo_ids, ["bo.0000"])
-        self.assertEqual(filtered_env.selected_function_ids, [])
-        self.assertEqual(filtered_env.selected_local_context_ids[0], "local.0002")
-        self.assertEqual(filtered_env.selected_global_context_ids[0], "ctx.0001")
-
-    def test_function_only_route_filters_function_and_context_without_bo(self):
-        planner = FakePlanner()
-        resource_filter = FakeResourceFilter(
-            {
-                "bo": [{"resource_id": "bo.0000"}],
-                "function": [{"resource_id": "func.0001"}],
-                "local_context": [{"resource_id": "local.0002"}],
-                "global_context": [{"resource_id": "ctx.0001"}],
-            }
-        )
-        generator = ValueLogicGenerator(
-            resource_loader=ResourceLoader(),
-            llm_resource_filter=resource_filter,
-            llm_difficulty_router=FakeDifficultyRouter(FakeResourceRoute(use_bo=False, use_function=True)),
-            llm_planner=planner,
-            enable_legacy_filter_fallback=True,
-        )
-
-        generator.generate(
-            ValueLogicRequest(
-                site_id="site1",
-                project_id="project1",
-                node_path="$.mapping_content.children[1]",
-                node={
-                    "node_id": "node-1",
-                    "tree_node_type": "simple_leaf",
-                    "xml_name_property": {"xml_name": "SUB_INFO"},
-                    "annotation": "user information node",
-                },
-                query="mask CUST_ID with function",
-                edsl_tree=sample_edsl_tree_payload(),
-            )
-        )
-
-        filtered_env = planner.calls[0]["filtered_env"]
-        self.assertEqual(resource_filter.calls[0]["limits"]["bo"], 0)
-        self.assertEqual(resource_filter.calls[0]["limits"]["function"], 5)
-        self.assertEqual(resource_filter.calls[0]["candidates"]["bo"], [])
-        self.assertNotEqual(resource_filter.calls[0]["candidates"]["function"], [])
-        self.assertEqual(filtered_env.selected_bo_ids, [])
-        self.assertEqual(filtered_env.selected_function_ids[0], "func.0001")
-        self.assertEqual(filtered_env.selected_local_context_ids[0], "local.0002")
-        self.assertEqual(filtered_env.selected_global_context_ids[0], "ctx.0001")
-
-    def test_resource_count_hint_expands_filter_limits(self):
-        planner = FakePlanner()
-        resource_filter = FakeResourceFilter(
-            {
-                "bo": [{"resource_id": "bo.0000"}],
-                "function": [{"resource_id": "func.0001"}],
-                "local_context": [{"resource_id": "local.0002"}],
-                "global_context": [{"resource_id": "ctx.0001"}],
-            }
-        )
-        generator = ValueLogicGenerator(
-            resource_loader=ResourceLoader(),
-            llm_resource_filter=resource_filter,
-            llm_difficulty_router=FakeDifficultyRouter(
-                FakeResourceRoute(use_bo=True, use_function=True, resource_count_hint=9)
-            ),
-            llm_planner=planner,
-            enable_legacy_filter_fallback=True,
-        )
-
-        generator.generate(
-            ValueLogicRequest(
-                site_id="site1",
-                project_id="project1",
-                node_path="$.mapping_content.children[1]",
-                node={
-                    "node_id": "node-1",
-                    "tree_node_type": "simple_leaf",
-                    "xml_name_property": {"xml_name": "SUB_INFO"},
-                    "annotation": "user information node",
-                },
-                query="use several resources",
-                edsl_tree=sample_edsl_tree_payload(),
-            )
-        )
-
-        self.assertEqual(resource_filter.calls[0]["limits"]["global_context"], 9)
-        self.assertEqual(resource_filter.calls[0]["limits"]["local_context"], 9)
-        self.assertEqual(resource_filter.calls[0]["limits"]["bo"], 9)
-        self.assertEqual(resource_filter.calls[0]["limits"]["function"], 9)
-
-    def test_resource_count_hint_keeps_disabled_groups_zero(self):
-        planner = FakePlanner()
-        resource_filter = FakeResourceFilter(
-            {
-                "bo": [{"resource_id": "bo.0000"}],
-                "function": [{"resource_id": "func.0001"}],
-                "local_context": [{"resource_id": "local.0002"}],
-                "global_context": [{"resource_id": "ctx.0001"}],
-            }
-        )
-        generator = ValueLogicGenerator(
-            resource_loader=ResourceLoader(),
-            llm_resource_filter=resource_filter,
-            llm_difficulty_router=FakeDifficultyRouter(
-                FakeResourceRoute(use_bo=False, use_function=False, resource_count_hint=12)
-            ),
-            llm_planner=planner,
-            enable_legacy_filter_fallback=True,
-        )
-
-        generator.generate(
-            ValueLogicRequest(
-                site_id="site1",
-                project_id="project1",
-                node_path="$.mapping_content.children[1]",
-                node={
-                    "node_id": "node-1",
-                    "tree_node_type": "simple_leaf",
-                    "xml_name_property": {"xml_name": "SUB_INFO"},
-                    "annotation": "user information node",
-                },
-                query="context only but many mentions",
-                edsl_tree=sample_edsl_tree_payload(),
-            )
-        )
-
-        self.assertEqual(resource_filter.calls[0]["limits"]["global_context"], 12)
-        self.assertEqual(resource_filter.calls[0]["limits"]["local_context"], 12)
-        self.assertEqual(resource_filter.calls[0]["limits"]["bo"], 0)
-        self.assertEqual(resource_filter.calls[0]["limits"]["function"], 0)
-
-    def test_summary_field_returns_summary_result_without_calling_plan(self):
-        planner = FakePlanner()
-        generator = ValueLogicGenerator(
-            resource_loader=ResourceLoader(),
-            llm_resource_filter=FakeResourceFilter({}),
-            llm_planner=planner,
-        )
-
-        result = generator.generate(
-            ValueLogicRequest(
-                site_id="site1",
-                project_id="project1",
-                node_path="$.mapping_content.children[1].fields[0]",
-                is_ab=True,
-                node={
-                    "node_id": "amount-total",
-                    "tree_node_type": "field",
-                    "field_type": "summary",
-                    "summary_type": "sum",
-                    "detail_field": "AMOUNT",
-                    "xml_name_property": {"xml_name": "TOTAL_AMOUNT"},
-                },
-                query="sum detail amount",
-            )
-        )
-
-        self.assertEqual(result.node_id, "amount-total")
-        self.assertEqual(result.logic_type, "summary")
-        self.assertIsNone(result.expression)
-        self.assertEqual(result.source.source_type, "detail_field")
-        self.assertEqual(result.source.summary_type, "sum")
-        self.assertEqual(result.source.detail_field, "AMOUNT")
-        self.assertEqual(planner.calls, [])
-
-    def test_ab_sql_field_maps_from_parent_sql_bo_field_when_query_requests_direct_mapping(self):
-        planner = FakePlanner()
-        generator = ValueLogicGenerator(
-            resource_loader=ResourceLoader(),
-            llm_resource_filter=FakeResourceFilter({}),
-            llm_planner=planner,
-        )
-
-        result = generator.generate(
-            ValueLogicRequest(
-                site_id="site1",
-                project_id="project1",
-                node_path="$.mapping_content.children[1].fields[1]",
-                is_ab=True,
-                node={
-                    "node_id": "normal-field",
-                    "tree_node_type": "field",
-                    "xml_name_property": {"xml_name": "LOG_ID"},
-                },
-                parent_node={
-                    "node_id": "ab-parent",
-                    "is_ab": True,
-                    "ab_content": {
-                        "data_source": {
-                            "data_source_type": "sql",
-                            "sql_query": {
-                                "bo_name": "BB_BAK_TRANS",
-                            },
-                        },
-                    },
-                },
-                query="directly map LOG_ID from table field",
-            )
-        )
-
-        self.assertEqual(result.logic_type, "bo_field_mapping")
-        self.assertEqual(result.expression, "LOG_ID")
-        self.assertEqual(result.source.source_type, "bo")
-        self.assertEqual(result.source.bo_name, "BB_BAK_TRANS")
-        self.assertEqual(result.source.bo_field, "LOG_ID")
-        self.assertEqual(planner.calls, [])
-
-    def test_ab_sql_field_uses_plan_when_query_requires_more_than_field_mapping(self):
-        planner = FakePlanner()
-        generator = ValueLogicGenerator(
-            resource_loader=ResourceLoader(),
-            llm_resource_filter=FakeResourceFilter({}),
-            llm_planner=planner,
-        )
-
-        result = generator.generate(
-            ValueLogicRequest(
-                site_id="site1",
-                project_id="project1",
-                node_path="$.mapping_content.children[1].fields[1]",
-                is_ab=True,
-                node={
-                    "node_id": "normal-field",
-                    "tree_node_type": "field",
-                    "xml_name_property": {"xml_name": "LOG_ID"},
-                },
-                parent_node={
-                    "node_id": "ab-parent",
-                    "is_ab": True,
-                    "ab_content": {
-                        "data_source": {
-                            "data_source_type": "sql",
-                            "sql_query": {
-                                "bo_name": "BB_BAK_TRANS",
-                            },
-                        },
-                    },
-                },
-                query="derive a formatted LOG_ID with fallback when missing",
-            )
-        )
-
-        self.assertEqual(result.logic_type, "expression")
-        self.assertEqual(result.source.source_type, "plan")
-        self.assertEqual(result.expression, "select_one(BB_PREP_SUB, it.ID == $ctx$.id)")
-        self.assertEqual(len(planner.calls), 1)
-
-    def test_ab_sql_field_falls_back_to_plan_when_bo_field_not_found(self):
-        planner = FakePlanner()
-        generator = ValueLogicGenerator(
-            resource_loader=ResourceLoader(),
-            llm_resource_filter=FakeResourceFilter({}),
-            llm_planner=planner,
-        )
-
-        result = generator.generate(
-            ValueLogicRequest(
-                site_id="site1",
-                project_id="project1",
-                node_path="$.mapping_content.children[1].fields[1]",
-                is_ab=True,
-                node={
-                    "node_id": "normal-field",
-                    "tree_node_type": "field",
-                    "xml_name_property": {"xml_name": "MISSING_FIELD"},
-                },
-                parent_node={
-                    "node_id": "ab-parent",
-                    "is_ab": True,
-                    "ab_content": {
-                        "data_source": {
-                            "data_source_type": "sql",
-                            "sql_query": {
-                                "bo_name": "BB_BAK_TRANS",
-                            },
-                        },
-                    },
-                },
-                query="map or derive missing field",
-            )
-        )
-
-        self.assertEqual(result.logic_type, "expression")
-        self.assertEqual(result.source.source_type, "plan")
-        self.assertEqual(result.expression, "select_one(BB_PREP_SUB, it.ID == $ctx$.id)")
-        self.assertEqual(len(planner.calls), 1)
-
-    def test_ab_non_sql_field_does_not_read_nested_bo_name(self):
-        planner = FakePlanner()
-        generator = ValueLogicGenerator(
-            resource_loader=ResourceLoader(),
-            llm_resource_filter=FakeResourceFilter({}),
-            llm_planner=planner,
-        )
-
-        result = generator.generate(
-            ValueLogicRequest(
-                site_id="site1",
-                project_id="project1",
-                node_path="$.mapping_content.children[1].fields[1]",
-                is_ab=True,
-                node={
-                    "node_id": "normal-field",
-                    "tree_node_type": "field",
-                    "xml_name_property": {"xml_name": "LOG_ID"},
-                },
-                parent_node={
-                    "node_id": "ab-parent",
-                    "is_ab": True,
-                    "ab_content": {
-                        "data_source": {
-                            "data_source_type": "expression",
-                            "sql_query": {
-                                "bo_name": "SHOULD_NOT_BE_USED",
-                            },
-                        },
-                    },
-                },
-                query="derive log id",
-            )
-        )
-
-        self.assertEqual(result.logic_type, "expression")
-        self.assertEqual(result.source.source_type, "plan")
-        self.assertEqual(len(planner.calls), 1)
-
-
-if __name__ == "__main__":
-    unittest.main()
+class Router:
+    def __init__(self, route): self.route, self.calls = route, []
+    def route_resources(self, **kwargs): self.calls.append(kwargs); return self.route
+
+
+class SelectPlanner(Planner):
+    def __init__(self): super().__init__(fetch=False)
+    def plan(self, **kwargs):
+        self.calls.append(kwargs)
+        return Plan.model_validate({"nodes": [{"type": "return", "value": {"type": "select_one",
+            "bo": "BB_PREP_SUB", "filter": {"type": "compare", "op": "==",
+                "left": {"type": "context_path", "path": "it.ID"},
+                "right": {"type": "context_path", "path": "$ctx$.id"}}}}]})
+
+
+def candidate(cid, name, rank):
+    return NamingSqlCandidate(candidate_id=f"internal:{cid}", bo_name="BB_BAK_TRANS", naming_sql_id=cid,
+        naming_sql_name=name, param_list=[{"param_name": "id", "data_type_name": "String"}],
+        source="resource_registry", rank=rank)
+
+
+def success():
+    return NamingSqlSelectResponse(success=True, candidates=[candidate("a", "FindCustomer", 1),
+        candidate("b", "FindCustomerRecent", 2)])
+
+
+def request(route=True):
+    return ValueLogicRequest(site_id="site1", project_id="project1", node_path="$.x",
+        node={"node_id": "x", "name": "x", "reference_logic_area_id_list": ["area.1"]},
+        parent_node={"data_source_type": "sql", "bo_name": "ParentBO"}, query="use naming sql" if route else "ordinary",
+        structured_spec={"requires_naming_sql": route, "bo_name": "BB_BAK_TRANS"}, edsl_tree=sample_edsl_tree_payload())
+
+
+def generator(factory, planner):
+    return ValueLogicGenerator(resource_loader=ResourceLoader(), llm_planner=planner,
+        naming_sql_selector_factory=factory, expression_spec_generator=Specs(),
+        resource_filter_target_generator=Targets())
+
+
+def test_non_naming_sql_route_does_not_construct_factory_and_regresses_ordinary_path():
+    planner = Planner(fetch=False)
+    def fail(_): raise AssertionError("factory must not be called")
+    result = generator(fail, planner).generate(request(False))
+    assert result.expression == '"ok"' and planner.calls[0]["filtered_env"].naming_sql_selection is None
+
+
+def test_route_factory_receives_current_loaded_resource_and_request_fields():
+    planner, seen = Planner(), []
+    selector = Selector(success())
+    def factory(loaded): seen.append(loaded); return selector
+    generator(factory, planner).generate(request())
+    call = selector.calls[0]
+    assert seen and call.site_id == "site1" and call.project_id == "project1" and call.json_path == "$.x"
+    assert call.target_bo_name == "BB_BAK_TRANS" and call.parent_bo_hint == "ParentBO"
+    assert call.target_logic_area_id_list == ["area.1"] and call.top_k == 5
+
+
+def test_known_selector_failure_raises_exact_documented_code_and_stops_planner():
+    planner = Planner()
+    selector = Selector(NamingSqlSelectResponse(success=False, failure_reason=NO_NAMING_SQL_CANDIDATES))
+    with pytest.raises(ValueError) as raised:
+        generator(lambda loaded: selector, planner).generate(request())
+    assert str(raised.value) == NO_NAMING_SQL_CANDIDATES
+    assert not planner.calls
+
+
+def test_unknown_selector_failure_is_generic_and_does_not_leak_private_detail():
+    planner = Planner()
+    selector = Selector(NamingSqlSelectResponse(success=False, failure_reason="PRIVATE backend detail\nsecret"))
+    with pytest.raises(ValueError) as raised:
+        generator(lambda loaded: selector, planner).generate(request())
+    assert str(raised.value) == "NAMING_SQL_SELECTION_FAILED"
+    assert "PRIVATE" not in str(raised.value) and "secret" not in str(raised.value)
+    assert not planner.calls
+
+
+def test_success_reaches_planner_with_all_top_k_and_without_narrowing_loaded_resource():
+    planner, loaded_seen = Planner(), []
+    selector = Selector(success())
+    def factory(loaded): loaded_seen.append(loaded); return selector
+    generator(factory, planner).generate(request())
+    env = planner.calls[0]["filtered_env"]
+    assert [item.naming_sql_name for item in env.naming_sql_selection.candidates] == ["FindCustomer", "FindCustomerRecent"]
+    assert len(loaded_seen[0].bo_registry["BB_BAK_TRANS"].naming_sql_list) == 1
+
+
+@pytest.mark.parametrize("signal", [
+    "查表", "查询表", "data source", "data_source", "data-source",
+    "naming sql", "naming_sql", "naming-sql",
+])
+def test_prior_naming_sql_route_signal_variants_are_preserved(signal):
+    assert requires_naming_sql({}, signal)
+
+
+def test_explicit_route_boolean_has_precedence_over_inferred_signals():
+    assert requires_naming_sql({"requires_naming_sql": True}, "ordinary")
+    assert not requires_naming_sql({"requires_naming_sql": False}, "use naming sql")
+
+
+def test_each_route_input_gets_a_fair_share_of_the_combined_bound():
+    long_query = "x" * 4000
+    assert requires_naming_sql({}, long_query, "use naming sql", {}, None)
+    assert requires_naming_sql({}, long_query, "ordinary", {"annotation": "data source"}, None)
+    assert requires_naming_sql({}, long_query, "ordinary", {}, {"annotation": "查询表"})
+
+
+@pytest.mark.parametrize("value", ["renamingsqltable", "mydatasourcevalue"])
+def test_route_terms_do_not_match_inside_larger_ascii_identifiers(value):
+    assert not requires_naming_sql({}, value)
+
+
+def test_summary_field_bypasses_factory_and_planner():
+    planner = Planner(fetch=False)
+    def fail(_): raise AssertionError("factory must not be called")
+    summary_request = request(False).model_copy(update={"is_ab": True, "node": {
+        "node_id": "sum", "name": "total", "field_type": "summary",
+        "summary_type": "sum", "detail_field": "AMOUNT",
+    }})
+    result = generator(fail, planner).generate(summary_request)
+    assert result.logic_type == "summary" and result.source.summary_type == "sum"
+    assert result.source.detail_field == "AMOUNT" and not planner.calls
+
+
+def test_default_filter_path_uses_expression_spec_text():
+    class CapturingTargets:
+        def __init__(self): self.calls = []
+        def generate(self, **kwargs): self.calls.append(kwargs); return []
+    targets, planner = CapturingTargets(), Planner(fetch=False)
+    gen = ValueLogicGenerator(resource_loader=ResourceLoader(), llm_planner=planner,
+        naming_sql_selector_factory=lambda loaded: (_ for _ in ()).throw(AssertionError()),
+        expression_spec_generator=Specs(), resource_filter_target_generator=targets)
+    gen.generate(request(False))
+    assert targets.calls[0]["query"] == "ordinary"
+
+
+def test_parent_sql_direct_field_mapping_still_bypasses_planner():
+    planner = Planner(fetch=False)
+    req = request(False).model_copy(update={
+        "is_ab": True,
+        "node": {"node_id": "log", "name": "LOG_ID", "is_ab": True},
+        "parent_node": {"data_source_type": "sql", "bo_name": "BB_BAK_TRANS"},
+        "query": "direct BO field mapping",
+    })
+    result = generator(lambda loaded: (_ for _ in ()).throw(AssertionError()), planner).generate(req)
+    assert result.logic_type == "bo_field_mapping" and result.expression == "LOG_ID"
+    assert not planner.calls
+
+
+def test_empty_targets_keep_empty_environment_and_trace():
+    planner = Planner(fetch=False)
+    generator(lambda loaded: (_ for _ in ()).throw(AssertionError()), planner).generate(request(False))
+    env = planner.calls[0]["filtered_env"]
+    assert env.selected_global_context_ids == []
+    assert env.selection_trace[-1]["reason"] == "FILTER_TARGET_EMPTY"
+
+
+def test_simple_leaf_renders_existing_select_plan():
+    planner = SelectPlanner()
+    result = generator(lambda loaded: (_ for _ in ()).throw(AssertionError()), planner).generate(request(False))
+    assert result.expression == "select_one(BB_PREP_SUB, it.ID == $ctx$.id)"
+    assert result.source.source_type == "plan"
+
+
+def _legacy_generator(route, result, planner=None):
+    resource_filter = FakeResourceFilter(result)
+    planner = planner or Planner(fetch=False)
+    gen = ValueLogicGenerator(resource_loader=ResourceLoader(), llm_resource_filter=resource_filter,
+        llm_difficulty_router=Router(route), llm_planner=planner,
+        naming_sql_selector_factory=lambda loaded: (_ for _ in ()).throw(AssertionError()),
+        expression_spec_generator=Specs(), resource_filter_target_generator=Targets(),
+        enable_legacy_filter_fallback=True)
+    return gen, resource_filter, planner
+
+
+@pytest.mark.parametrize(("route", "expected_bo", "expected_function"), [
+    (Route(False, False), [], []),
+    (Route(True, False), ["bo.0000"], []),
+    (Route(False, True), [], ["func.0001"]),
+])
+def test_legacy_fallback_gates_context_bo_and_function_groups(route, expected_bo, expected_function):
+    result = {"bo": [{"resource_id": "bo.0000"}], "function": [{"resource_id": "func.0001"}],
+        "local_context": [{"resource_id": "local.0002"}], "global_context": [{"resource_id": "ctx.0001"}]}
+    gen, resource_filter, planner = _legacy_generator(route, result)
+    query = "lookup BO by CUST_ID" if route.use_bo else "mask CUST_ID with function" if route.use_function else "assign CUST_ID from subId context directly"
+    gen.generate(request(False).model_copy(update={"node_path": "$.mapping_content.children[1]", "query": query}))
+    env, call = planner.calls[0]["filtered_env"], resource_filter.calls[0]
+    assert env.selected_bo_ids == expected_bo
+    assert env.selected_function_ids[:len(expected_function)] == expected_function
+    if not route.use_function:
+        assert env.selected_function_ids == []
+    assert env.selected_local_context_ids[0] == "local.0002" and env.selected_global_context_ids[0] == "ctx.0001"
+    assert call["limits"]["bo"] == (5 if route.use_bo else 0)
+    assert call["limits"]["function"] == (5 if route.use_function else 0)
+
+
+@pytest.mark.parametrize(("route", "expected"), [
+    (Route(True, True, 9), {"global_context": 9, "local_context": 9, "bo": 9, "function": 9}),
+    (Route(False, False, 12), {"global_context": 12, "local_context": 12, "bo": 0, "function": 0}),
+])
+def test_legacy_fallback_dynamic_limits_and_disabled_groups(route, expected):
+    gen, resource_filter, _ = _legacy_generator(route, {})
+    gen.generate(request(False).model_copy(update={"query": "use CUST_ID LOG_ID and mask resources"}))
+    assert resource_filter.calls[0]["limits"] == expected
+
+
+def _ab_request(*, source_type="sql", field="LOG_ID", query="directly map LOG_ID from table field"):
+    return request(False).model_copy(update={"is_ab": True, "node": {
+        "node_id": "normal-field", "tree_node_type": "field", "xml_name_property": {"xml_name": field}},
+        "parent_node": {"node_id": "ab-parent", "is_ab": True, "ab_content": {"data_source": {
+            "data_source_type": source_type, "sql_query": {"bo_name": "BB_BAK_TRANS"}}}}, "query": query})
+
+
+def test_complex_ab_sql_parent_path_maps_loaded_bo_field():
+    planner = SelectPlanner()
+    result = generator(lambda loaded: (_ for _ in ()).throw(AssertionError()), planner).generate(_ab_request())
+    assert result.logic_type == "bo_field_mapping" and result.expression == "LOG_ID"
+    assert result.source.bo_name == "BB_BAK_TRANS" and not planner.calls
+
+
+def test_ab_sql_missing_bo_field_falls_back_to_plan():
+    planner = SelectPlanner()
+    result = generator(lambda loaded: (_ for _ in ()).throw(AssertionError()), planner).generate(
+        _ab_request(field="MISSING_FIELD", query="map or derive missing field"))
+    assert result.logic_type == "expression" and len(planner.calls) == 1
+
+
+def test_ab_sql_existing_field_uses_plan_for_complex_expression_intent():
+    planner = SelectPlanner()
+    result = generator(lambda loaded: (_ for _ in ()).throw(AssertionError()), planner).generate(
+        _ab_request(query="derive a formatted LOG_ID with fallback when missing"))
+    assert result.logic_type == "expression" and result.source.source_type == "plan"
+    assert len(planner.calls) == 1
+
+
+def test_ab_non_sql_parent_does_not_use_nested_bo_name():
+    planner = SelectPlanner()
+    result = generator(lambda loaded: (_ for _ in ()).throw(AssertionError()), planner).generate(
+        _ab_request(source_type="expression", query="derive log id"))
+    assert result.logic_type == "expression" and len(planner.calls) == 1

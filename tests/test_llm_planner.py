@@ -12,7 +12,8 @@ from agent.planner.llm_planner import (
     _summarize_filtered_environment_json,
 )
 from agent.planner.models import Plan, ReturnExprPlanNode
-from agent.naming_sql_selector.models import NamingSqlSelectionResult, ParamBinding, ParamBindingPlan, SelectedNamingSql
+from agent.context_manager.models import ContextEvidenceItem, NamingSqlCandidate
+from agent.naming_sql_selector import NamingSqlSelectResponse
 
 
 class FakeSettings:
@@ -118,9 +119,9 @@ class LLMPlannerTest(unittest.TestCase):
         env = FilteredEnvironment(selected_bos=[Resource(resource_id="bo.1", bo_name="Customer", bo_desc="", property_list=[], naming_sql_list=[Resource(sql_name="FindCustomer", sql_description="secret query", param_list=[]), Resource(sql_name="SiblingSql", sql_description="", param_list=[])])], naming_sql_selection=_selection())
         LLMPlanner(client=client).plan(node_info=_node_info(), user_query="find", filtered_env=env)
         resources = json.loads(client.calls[0]["prompt"].split(" RESOURCES:", 1)[1].split(" SCHEMA:", 1)[0])
-        self.assertEqual(resources["naming_sql_selection"], {"bo":"Customer","name":"FindCustomer","bindings":[{"name":"id","source_ref":"$ctx$.id"}]})
+        self.assertEqual([item["name"] for item in resources["naming_sql_selection"]["candidates"]], ["FindCustomer", "FindCustomerRecent"])
         self.assertNotIn("naming_sql", resources["bo"][0]); self.assertNotIn("SiblingSql", client.calls[0]["prompt"]); self.assertNotIn("secret query", client.calls[0]["prompt"])
-        for forbidden in ("ns.1", "exact", "confidence", "reason", "fallback_candidates", "rejected_candidates", "sql_command"):
+        for forbidden in ("internal-candidate", "confidence", "reason", "fallback_candidates", "rejected_candidates", "sql_command"):
             self.assertNotIn(forbidden, client.calls[0]["prompt"])
 
     def test_plan_without_selection_omits_selection_summary(self):
@@ -128,22 +129,30 @@ class LLMPlannerTest(unittest.TestCase):
         LLMPlanner(client=client).plan(node_info=_node_info(), user_query="x", filtered_env=FilteredEnvironment())
         self.assertNotIn("naming_sql_selection", client.calls[0]["prompt"])
 
+    def test_selection_summary_includes_safe_bounded_decision_evidence_only(self):
+        selection = _selection()
+        selection.evidence_trace = [ContextEvidenceItem(source="resolver\nsource", action="rerank",
+            asset_id="SECRET-INTERNAL-ASSET-ID", evidence="chosen because semantic match " + "x" * 1000,
+            payload={"private": "SECRET-PAYLOAD"})]
+        rendered = _summarize_filtered_environment_json(FilteredEnvironment(naming_sql_selection=selection))
+        decoded = json.loads(rendered)["naming_sql_selection"]["evidence_trace"][0]
+        self.assertEqual(set(decoded), {"source", "action", "evidence"})
+        self.assertEqual(decoded["source"], "resolver source")
+        self.assertEqual(decoded["action"], "rerank")
+        self.assertLessEqual(len(decoded["evidence"]), 512)
+        self.assertNotIn("SECRET-INTERNAL-ASSET-ID", rendered)
+        self.assertNotIn("SECRET-PAYLOAD", rendered)
+
     def test_oversized_authoritative_selection_fails_before_llm(self):
         cases = []
         huge_sql = _selection()
-        huge_sql.selected.sql_name = "S" * (2 * 1024 * 1024)
+        huge_sql.candidates[0].naming_sql_name = "S" * (2 * 1024 * 1024)
         cases.append(huge_sql)
-        huge_source = _selection()
-        huge_source.selected.binding_plan.bindings[0].source_ref = "R" * (2 * 1024 * 1024)
-        cases.append(huge_source)
-        too_many = _selection()
-        too_many.selected.binding_plan.bindings = [
-            ParamBinding(param_name=f"p{i}", source_ref=f"$ctx$.p{i}", confidence=.9, reason="x")
-            for i in range(101)
-        ]
-        cases.append(too_many)
+        huge_evidence = _selection()
+        huge_evidence.candidates[0].evidence = ["R" * (2 * 1024 * 1024)]
+        cases.append(huge_evidence)
         for result in cases:
-            with self.subTest(sql_length=len(result.selected.sql_name), bindings=len(result.selected.binding_plan.bindings)):
+            with self.subTest(candidate=result.candidates[0].naming_sql_name):
                 client = FakeClient(['{"nodes":[{"type":"return","value":{"type":"literal","value":null}}]}'])
                 with self.assertRaisesRegex(ValueError, "NAMING_SQL_SELECTION_TOO_LARGE"):
                     LLMPlanner(client=client).plan(node_info=_node_info(), user_query="x", filtered_env=FilteredEnvironment(naming_sql_selection=result))
@@ -160,7 +169,7 @@ class LLMPlannerTest(unittest.TestCase):
         decoded = json.loads(first)
         self.assertEqual(first, second)
         self.assertLessEqual(len(first), MAX_RESOURCES_JSON_CHARS)
-        self.assertEqual(decoded["naming_sql_selection"], {"bo":"Customer","name":"FindCustomer","bindings":[{"name":"id","source_ref":"$ctx$.id"}]})
+        self.assertEqual([item["name"] for item in decoded["naming_sql_selection"]["candidates"]], ["FindCustomer", "FindCustomerRecent"])
 
     def test_plan_repairs_once_when_initial_output_fails_pydantic_validation(self):
         client = FakeClient(
@@ -238,7 +247,14 @@ def _node_info() -> NodeDef:
     )
 
 def _selection():
-    return NamingSqlSelectionResult(status="selected", selected_bo="Customer", review_mode="not_required", selected=SelectedNamingSql(naming_sql_id="ns.1", sql_name="FindCustomer", score=1.0, binding_plan=ParamBindingPlan(bindings=[ParamBinding(param_name="id", source_ref="$ctx$.id", confidence=.9, reason="exact")], is_complete=True)))
+    return NamingSqlSelectResponse(success=True, candidates=[
+        NamingSqlCandidate(candidate_id="internal-candidate-1", bo_name="Customer", naming_sql_id="ns.1",
+            naming_sql_name="FindCustomer", param_list=[{"param_name": "id", "data_type_name": "String"}],
+            source="resource_registry", rank=1),
+        NamingSqlCandidate(candidate_id="internal-candidate-2", bo_name="Customer", naming_sql_id="ns.2",
+            naming_sql_name="FindCustomerRecent", param_list=[{"param_name": "id", "data_type_name": "String"}],
+            source="resource_registry", rank=2),
+    ])
 
 
 if __name__ == "__main__":

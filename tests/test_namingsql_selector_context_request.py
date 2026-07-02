@@ -112,6 +112,13 @@ def test_unexpected_errors_propagate():
         NamingSqlSelector(CapturingManager(error=RuntimeError("boom"))).select(_request())
 
 
+def test_unknown_context_build_error_propagates():
+    error = ContextBuildError("ARBITRARY_INTERNAL_CODE", "private detail")
+    with pytest.raises(ContextBuildError) as raised:
+        NamingSqlSelector(CapturingManager(error=error)).select(_request())
+    assert raised.value is error
+
+
 @pytest.mark.parametrize("values", [
     {"success": True},
     {"success": True, "candidates": [_context().resource_candidates.candidates[0]],
@@ -143,3 +150,23 @@ def test_request_rejects_coercion(updates):
 def test_response_rejects_coercion():
     with pytest.raises(ValidationError):
         NamingSqlSelectResponse(success=1, candidates=_context().resource_candidates.candidates)
+
+
+@pytest.mark.parametrize(("field", "value"), [
+    ("candidates", [{
+        "candidate_id": "c1", "bo_name": "Fee", "naming_sql_id": "sql1",
+        "source": "resource_registry", "rank": "1",
+    }]),
+    ("context_requirements_hint", [{"semantic_name": 1}]),
+    ("selection_constraints", {"max_candidates": "5"}),
+    ("selection_constraints", {"allowed_bo_names": [True]}),
+    ("evidence_trace", [{"source": 1, "action": "selected", "evidence": "match"}]),
+])
+def test_response_rejects_nested_domain_coercion(field, value):
+    values = {
+        "success": True,
+        "candidates": _context().resource_candidates.candidates,
+        field: value,
+    }
+    with pytest.raises(ValidationError):
+        NamingSqlSelectResponse(**values)

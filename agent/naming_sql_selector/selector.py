@@ -3,10 +3,34 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any
 
-from agent.context_manager.errors import ContextBuildError
+from agent.context_manager.errors import (
+    AI_CONFIGURATION_REQUIRED,
+    EDSL_NODE_NOT_FOUND,
+    EMBEDDING_FAILED,
+    INVALID_LLM_OUTPUT,
+    LLM_ORGANIZER_FAILED,
+    LLM_RERANK_FAILED,
+    NO_NAMING_SQL_CANDIDATES,
+    RULE_FILE_MISSING,
+    UNSUPPORTED_CONTEXT_CHAIN,
+    ContextBuildError,
+)
 from agent.context_manager.models import BuildContextRequest
 
 from .models import NamingSqlSelectRequest, NamingSqlSelectResponse
+
+
+KNOWN_CONTEXT_ERROR_CODES = frozenset({
+    AI_CONFIGURATION_REQUIRED,
+    EMBEDDING_FAILED,
+    LLM_RERANK_FAILED,
+    LLM_ORGANIZER_FAILED,
+    INVALID_LLM_OUTPUT,
+    RULE_FILE_MISSING,
+    EDSL_NODE_NOT_FOUND,
+    UNSUPPORTED_CONTEXT_CHAIN,
+    NO_NAMING_SQL_CANDIDATES,
+})
 
 
 class NamingSqlSelector:
@@ -31,6 +55,8 @@ class NamingSqlSelector:
         try:
             context = self.manager.build_context(context_request)
         except ContextBuildError as error:
+            if error.code not in KNOWN_CONTEXT_ERROR_CODES:
+                raise
             return NamingSqlSelectResponse(success=False, failure_reason=error.code)
 
         return NamingSqlSelectResponse(

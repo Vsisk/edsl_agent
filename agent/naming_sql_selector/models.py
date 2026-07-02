@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from agent.context_manager.models import (
     ContextEvidenceItem,
@@ -37,6 +37,34 @@ class NamingSqlSelectResponse(BaseModel):
     evidence_trace: list[ContextEvidenceItem] = Field(default_factory=list)
     prompt_view: dict[str, Any] | None = None
     failure_reason: str | None = None
+
+    @field_validator("candidates", mode="before")
+    @classmethod
+    def validate_candidates_strictly(cls, value: Any) -> Any:
+        if isinstance(value, list):
+            return [NamingSqlCandidate.model_validate(item, strict=True) for item in value]
+        return value
+
+    @field_validator("context_requirements_hint", mode="before")
+    @classmethod
+    def validate_hints_strictly(cls, value: Any) -> Any:
+        if isinstance(value, list):
+            return [ContextRequirementHint.model_validate(item, strict=True) for item in value]
+        return value
+
+    @field_validator("selection_constraints", mode="before")
+    @classmethod
+    def validate_constraints_strictly(cls, value: Any) -> Any:
+        if value is None:
+            return None
+        return NamingSqlSelectionConstraints.model_validate(value, strict=True)
+
+    @field_validator("evidence_trace", mode="before")
+    @classmethod
+    def validate_evidence_strictly(cls, value: Any) -> Any:
+        if isinstance(value, list):
+            return [ContextEvidenceItem.model_validate(item, strict=True) for item in value]
+        return value
 
     @model_validator(mode="after")
     def validate_outcome(self) -> "NamingSqlSelectResponse":

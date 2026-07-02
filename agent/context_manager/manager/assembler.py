@@ -66,13 +66,20 @@ class ContextPackAssembler:
                  logic_area_context: Any, resource_candidates: NamingSqlResourceCandidates,
                  ootb_reference_cases: ReferenceCaseBlock, site_knowledge_cases: ReferenceCaseBlock) -> NamingSqlSelectionContext:
         item_budget = min(max(0, request.max_context_items), self.renderer.max_items)
-        visible_candidates = list(resource_candidates.candidates[:item_budget])
+        all_refs = list(ootb_reference_cases.candidates) + list(site_knowledge_cases.candidates)
+        visible_candidates, refs = self.renderer.budget_inputs(
+            list(resource_candidates.candidates), all_refs, item_budget)
         if not visible_candidates:
             raise ContextBuildError(NO_NAMING_SQL_CANDIDATES, "No NamingSQL candidates")
         candidates = {f"c{i:04d}": item for i, item in enumerate(visible_candidates)}
-        remaining_budget = max(0, item_budget - len(candidates))
-        refs = (list(ootb_reference_cases.candidates) + list(site_knowledge_cases.candidates))[:remaining_budget]
         references = {f"r{i:04d}": item for i, item in enumerate(refs)}
+        reference_provenance: dict[str, tuple[str, int]] = {}
+        for alias, item in references.items():
+            global_index = int(alias[1:])
+            if global_index < len(ootb_reference_cases.candidates):
+                reference_provenance[alias] = ("ootb", global_index)
+            else:
+                reference_provenance[alias] = ("site", global_index - len(ootb_reference_cases.candidates))
         try:
             context_json = self.renderer.render(request=request, global_context=global_context,
                 node_context=node_context, logic_area_context=logic_area_context,
@@ -119,6 +126,13 @@ class ContextPackAssembler:
             for hint in output.requirement_hints:
                 if any(alias not in allowed_hint_refs for alias in hint.bind_to_candidates):
                     raise ValueError("unknown hint alias")
+                nested_ids = [event.asset_id for event in hint.evidence if event.asset_id is not None]
+                self._unique(nested_ids)
+                if any(alias not in allowed_hint_refs for alias in nested_ids):
+                    raise ValueError("unknown hint evidence alias")
+                authoritative_paths = self._authoritative_paths(node_context)
+                if any(path not in authoritative_paths for path in hint.candidate_context_paths):
+                    raise ValueError("unknown candidate context path")
             if any(event.asset_id is not None and event.asset_id not in allowed_hint_refs
                    for event in output.evidence_trace):
                 raise ValueError("unknown evidence alias")
@@ -126,15 +140,21 @@ class ContextPackAssembler:
             raise ContextBuildError(INVALID_LLM_OUTPUT, "LLM organizer output violates contract") from exc
         selected = [candidates[alias].model_copy(update={"rank": rank})
                     for rank, alias in enumerate(output.selected_candidate_aliases, 1)]
-        canonical_hints = [ContextRequirementHint.model_validate(hint.model_dump()).model_copy(update={"bind_to_candidates": [
-            candidates[a].candidate_id if a in candidates else references[a].asset.asset_id
-            for a in hint.bind_to_candidates]}) for hint in output.requirement_hints]
+        canonical_hints = []
+        for hint in output.requirement_hints:
+            canonical_hint_evidence = [ContextEvidenceItem.model_validate(event.model_dump()).model_copy(
+                update={"asset_id": candidates[event.asset_id].candidate_id if event.asset_id in candidates
+                    else references[event.asset_id].asset.asset_id}) if event.asset_id is not None
+                else ContextEvidenceItem.model_validate(event.model_dump()) for event in hint.evidence]
+            canonical_hints.append(ContextRequirementHint.model_validate(hint.model_dump()).model_copy(update={
+                "bind_to_candidates": [candidates[a].candidate_id if a in candidates else references[a].asset.asset_id
+                    for a in hint.bind_to_candidates], "evidence": canonical_hint_evidence}))
         canonical_evidence = [ContextEvidenceItem.model_validate(event.model_dump()).model_copy(update={"asset_id": (
             candidates[event.asset_id].candidate_id if event.asset_id in candidates else references[event.asset_id].asset.asset_id
         )}) if event.asset_id is not None else event for event in output.evidence_trace]
         retained = set(output.retained_reference_aliases)
-        ootb = self._retained_block(ootb_reference_cases, references, retained)
-        site = self._retained_block(site_knowledge_cases, references, retained)
+        ootb = self._retained_block(ootb_reference_cases, reference_provenance, retained, "ootb")
+        site = self._retained_block(site_knowledge_cases, reference_provenance, retained, "site")
         evidence = list(global_context.evidence) + list(node_context.evidence)
         if logic_area_context is not None: evidence += list(logic_area_context.evidence)
         evidence += list(resource_candidates.evidence) + list(ootb.evidence_trace) + list(site.evidence_trace) + canonical_evidence
@@ -154,6 +174,16 @@ class ContextPackAssembler:
         if len(items) != len(set(items)): raise ValueError("duplicate aliases")
 
     @staticmethod
-    def _retained_block(block: ReferenceCaseBlock, aliases: dict[str, Any], retained: set[str]) -> ReferenceCaseBlock:
-        keep_ids = {id(aliases[a]) for a in retained}
-        return block.model_copy(update={"candidates": [item for item in block.candidates if id(item) in keep_ids]})
+    def _retained_block(block: ReferenceCaseBlock, provenance: dict[str, tuple[str, int]],
+                        retained: set[str], source: str) -> ReferenceCaseBlock:
+        indexes = {index for alias, (kind, index) in provenance.items() if alias in retained and kind == source}
+        return block.model_copy(update={"candidates": [item for index, item in enumerate(block.candidates) if index in indexes]})
+
+    @staticmethod
+    def _authoritative_paths(node_context: Any) -> set[str]:
+        paths = {str(node_context.json_path)}
+        for item in list(node_context.visible_local_context) + list(node_context.visible_iter_context):
+            if isinstance(item, dict):
+                for key in ("context_name", "source_path", "json_path"):
+                    if item.get(key): paths.add(str(item[key]))
+        return paths

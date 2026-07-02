@@ -217,3 +217,53 @@ def test_resource_candidate_retains_enriched_structured_return_information_witho
     result = ResourceContextResolver._candidate(asset)
     assert result.return_type == {"fields": [{"field_name": "amount", "data_type_name": "decimal"}]}
     assert result.rank == 0
+
+
+def test_forty_oversized_rows_keep_essential_facts_under_global_cap():
+    renderer = NamingSqlContextRenderer()
+    items = [NamingSqlCandidate(candidate_id=f"id{i}", bo_name=f"BO{i}", naming_sql_id=f"sql{i}",
+        naming_sql_name=f"name{i}", annotation="x" * 10000,
+        param_list=[{"param_name": f"p{i}", "data_type_name": "string", "junk": "y" * 10000}],
+        return_type={"type": "row", "junk": "z" * 10000}, source="resource_registry", rank=0,
+        evidence=["e" * 10000]) for i in range(40)]
+    visible, refs = renderer.budget_inputs(items, [], 40)
+    aliases = {f"c{i:04d}": item for i, item in enumerate(visible)}
+    text = renderer.render(request=request(top_k=20), global_context=GlobalContextBlock(),
+        node_context=NodeContextBlock(json_path="$.x", node={}), logic_area_context=None,
+        resource_candidates=NamingSqlResourceCandidates(candidates=visible),
+        ootb_reference_cases=ReferenceCaseBlock(), site_knowledge_cases=ReferenceCaseBlock(),
+        candidate_aliases=aliases, reference_aliases={})
+    assert len(visible) == 40 and len(text) <= renderer.max_total_chars
+    for i in range(40):
+        assert all(value in text for value in (f"c{i:04d}", f"BO{i}", f"sql{i}", f"name{i}", f"p{i}", "string"))
+
+
+def test_hint_evidence_unknown_alias_and_context_path_are_invalid():
+    bad_parts = [
+        {"evidence": [{"source": "x", "action": "x", "asset_id": "raw-id", "evidence": "x"}]},
+        {"candidate_context_paths": ["$ctx$.invented"]},
+    ]
+    for extra in bad_parts:
+        hint = {"semantic_name": "id", **extra}
+        client = SimpleNamespace(complete_json=lambda prompt, hint=hint: {
+            "selected_candidate_aliases": ["c0000"], "requirement_hints": [hint],
+            "constraints": {"max_candidates": 1}})
+        with pytest.raises(ContextBuildError) as error:
+            ContextPackAssembler(client, PM()).assemble(request(top_k=1), GlobalContextBlock(),
+                NodeContextBlock(json_path="$.x", node={}), None,
+                NamingSqlResourceCandidates(candidates=[candidate("a")]),
+                ReferenceCaseBlock(), ReferenceCaseBlock())
+        assert error.value.code == "INVALID_LLM_OUTPUT"
+
+
+def test_shared_reference_instance_retains_only_selected_occurrence():
+    shared = ReferenceCaseCandidate(asset=ContextAsset(asset_id="ootb_case:shared",
+        asset_type="ootb_case", scope="global", content={}, index_text="shared"))
+    client = SimpleNamespace(complete_json=lambda prompt: {"selected_candidate_aliases": ["c0000"],
+        "retained_reference_aliases": ["r0001"], "constraints": {"max_candidates": 1}})
+    result = ContextPackAssembler(client, PM()).assemble(request(top_k=1, max_context_items=3),
+        GlobalContextBlock(), NodeContextBlock(json_path="$.x", node={}), None,
+        NamingSqlResourceCandidates(candidates=[candidate("a")]),
+        ReferenceCaseBlock(candidates=[shared]), ReferenceCaseBlock(candidates=[shared]))
+    assert result.ootb_reference_cases.candidates == []
+    assert result.site_knowledge_cases.candidates == [shared]

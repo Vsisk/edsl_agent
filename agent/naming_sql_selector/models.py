@@ -12,6 +12,11 @@ from agent.context_manager.models import (
 )
 
 
+def _strict_copy(model_type: type[BaseModel], value: Any) -> BaseModel:
+    raw_value = value.model_dump(mode="python") if isinstance(value, BaseModel) else value
+    return model_type.model_validate(raw_value, strict=True)
+
+
 class NamingSqlSelectRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
@@ -42,14 +47,14 @@ class NamingSqlSelectResponse(BaseModel):
     @classmethod
     def validate_candidates_strictly(cls, value: Any) -> Any:
         if isinstance(value, list):
-            return [NamingSqlCandidate.model_validate(item, strict=True) for item in value]
+            return [_strict_copy(NamingSqlCandidate, item) for item in value]
         return value
 
     @field_validator("context_requirements_hint", mode="before")
     @classmethod
     def validate_hints_strictly(cls, value: Any) -> Any:
         if isinstance(value, list):
-            return [ContextRequirementHint.model_validate(item, strict=True) for item in value]
+            return [_strict_copy(ContextRequirementHint, item) for item in value]
         return value
 
     @field_validator("selection_constraints", mode="before")
@@ -57,13 +62,13 @@ class NamingSqlSelectResponse(BaseModel):
     def validate_constraints_strictly(cls, value: Any) -> Any:
         if value is None:
             return None
-        return NamingSqlSelectionConstraints.model_validate(value, strict=True)
+        return _strict_copy(NamingSqlSelectionConstraints, value)
 
     @field_validator("evidence_trace", mode="before")
     @classmethod
     def validate_evidence_strictly(cls, value: Any) -> Any:
         if isinstance(value, list):
-            return [ContextEvidenceItem.model_validate(item, strict=True) for item in value]
+            return [_strict_copy(ContextEvidenceItem, item) for item in value]
         return value
 
     @model_validator(mode="after")

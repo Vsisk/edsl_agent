@@ -4,6 +4,7 @@ from pydantic import ValidationError
 
 from agent.context_manager.errors import ContextBuildError
 from agent.context_manager.models import (
+    ContextEvidenceItem,
     ContextRequirementHint,
     GlobalContextBlock,
     NamingSqlCandidate,
@@ -170,3 +171,50 @@ def test_response_rejects_nested_domain_coercion(field, value):
     }
     with pytest.raises(ValidationError):
         NamingSqlSelectResponse(**values)
+
+
+@pytest.mark.parametrize("field", [
+    "candidate", "hint", "constraint", "evidence",
+])
+def test_response_revalidates_mutated_domain_instances_strictly(field):
+    candidate = _context().resource_candidates.candidates[0]
+    hint = ContextRequirementHint(semantic_name="account_id")
+    constraint = NamingSqlSelectionConstraints(max_candidates=5)
+    evidence = ContextEvidenceItem(source="organizer", action="selected", evidence="match")
+    if field == "candidate":
+        candidate.rank = "1"
+    elif field == "hint":
+        hint.semantic_name = 1
+    elif field == "constraint":
+        constraint.max_candidates = "5"
+    else:
+        evidence.source = True
+
+    with pytest.raises(ValidationError):
+        NamingSqlSelectResponse(
+            success=True,
+            candidates=[candidate],
+            context_requirements_hint=[hint],
+            selection_constraints=constraint,
+            evidence_trace=[evidence],
+        )
+
+
+def test_response_copies_valid_domain_instances():
+    candidate = _context().resource_candidates.candidates[0]
+    hint = ContextRequirementHint(semantic_name="account_id")
+    constraint = NamingSqlSelectionConstraints(max_candidates=5)
+    evidence = ContextEvidenceItem(source="organizer", action="selected", evidence="match")
+
+    response = NamingSqlSelectResponse(
+        success=True,
+        candidates=[candidate],
+        context_requirements_hint=[hint],
+        selection_constraints=constraint,
+        evidence_trace=[evidence],
+    )
+
+    assert response.candidates[0] is not candidate
+    assert response.context_requirements_hint[0] is not hint
+    assert response.selection_constraints is not constraint
+    assert response.evidence_trace[0] is not evidence

@@ -23,6 +23,8 @@ _DEFAULT_DATA = Path(__file__).resolve().parent.parent / "mock_data"
 _MAX_LINE_BYTES = 64 * 1024
 _MAX_SOURCE_BYTES = 4 * 1024 * 1024
 _MAX_RECORDS = 10_000
+_MAX_SEMANTIC_DEPTH = 32
+_MAX_SEMANTIC_ITEMS = 2_000
 
 
 class ReferenceCaseResolver:
@@ -59,12 +61,12 @@ class ReferenceCaseResolver:
                 _validate_record(record)
                 asset = _to_asset(record, self.asset_type, self.path, request)
                 _to_candidate(asset, 1, self.asset_type)
-            except (ValidationError, TypeError, ValueError):
+            except (ValidationError, TypeError, ValueError, RecursionError):
                 evidence.append(_evidence(
                     self.path,
                     "record_skipped",
                     "Schema-invalid reference-case record",
-                    asset.asset_id if asset is not None else f"{self.asset_type}:{_case_id(record)}",
+                    asset.asset_id if asset is not None else _safe_asset_id(record, self.asset_type),
                 ))
                 continue
             if asset.asset_id in seen_ids:
@@ -143,7 +145,7 @@ def _load_jsonl(path: Path) -> tuple[list[dict[str, Any]] | None, list[ContextEv
                 continue
             try:
                 value = json.loads(raw.decode("utf-8"))
-            except (UnicodeDecodeError, json.JSONDecodeError):
+            except (UnicodeDecodeError, json.JSONDecodeError, RecursionError):
                 evidence.append(_evidence(path, "record_skipped", "Malformed UTF-8 JSONL record", payload={"line": line_number}))
                 continue
             if not isinstance(value, dict):
@@ -189,6 +191,13 @@ def _case_id(record: dict[str, Any]) -> str:
     return hashlib.sha256(encoded).hexdigest()[:20]
 
 
+def _safe_asset_id(record: dict[str, Any], asset_type: ReferenceAssetType) -> str | None:
+    try:
+        return f"{asset_type}:{_case_id(record)}"
+    except (RecursionError, TypeError, ValueError):
+        return None
+
+
 def _semantic_text(record: dict[str, Any]) -> str:
     keys = (
         "description", "node_pattern", "node_patterns", "logic_area", "logic_area_id",
@@ -226,15 +235,26 @@ def _validate_record(record: dict[str, Any]) -> None:
 
 
 def _texts(value: Any) -> list[str]:
-    if value is None or isinstance(value, bool):
-        return []
-    if isinstance(value, (str, int, float)):
-        return [str(value).strip()]
-    if isinstance(value, list):
-        return [text for item in value for text in _texts(item)]
-    if isinstance(value, dict):
-        return [text for item in value.values() for text in _texts(item)]
-    return []
+    texts: list[str] = []
+    stack: list[tuple[Any, int]] = [(value, 0)]
+    visited = 0
+    while stack and visited < _MAX_SEMANTIC_ITEMS:
+        current, depth = stack.pop()
+        visited += 1
+        if current is None or isinstance(current, bool):
+            continue
+        if isinstance(current, (str, int, float)):
+            text = str(current).strip()
+            if text:
+                texts.append(text)
+            continue
+        if depth >= _MAX_SEMANTIC_DEPTH:
+            continue
+        if isinstance(current, list):
+            stack.extend((item, depth + 1) for item in reversed(current))
+        elif isinstance(current, dict):
+            stack.extend((item, depth + 1) for item in reversed(tuple(current.values())))
+    return texts
 
 
 def _query_text(request: BuildContextRequest) -> str:

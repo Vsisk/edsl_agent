@@ -293,6 +293,54 @@ def test_reference_schema_invalid_object_is_skipped_without_losing_valid_case(tm
     assert invalid["description"] not in skipped[0].evidence
 
 
+def test_reference_deep_json_is_skipped_and_valid_neighbor_survives(tmp_path):
+    path = tmp_path / "deep.jsonl"
+    deep = '{"case_id":"deep","description":' + '[' * 1100 + '"secret"' + ']' * 1100 + '}\n'
+    valid = '{"case_id":"good","description":"usable"}\n'
+    path.write_text(deep + valid, encoding="utf-8")
+
+    block = OOTBContextResolver(path).resolve(request(), {})
+    assert [item.asset.content["case_id"] for item in block.candidates] == ["good"]
+    skipped = [item for item in block.evidence_trace if item.action == "record_skipped"]
+    assert len(skipped) == 1 and "secret" not in skipped[0].evidence
+
+
+def test_reference_decoder_recursion_error_is_safely_skipped(tmp_path, monkeypatch):
+    path = tmp_path / "decoder.jsonl"
+    path.write_text('{"case_id":"deep"}\n{"case_id":"good","description":"usable"}\n', encoding="utf-8")
+    from agent.context_manager.resolvers import reference_cases
+    real_loads = reference_cases.json.loads
+    calls = 0
+
+    def loads(value):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise RecursionError("decoder exposed sensitive input")
+        return real_loads(value)
+
+    monkeypatch.setattr(reference_cases.json, "loads", loads)
+    block = OOTBContextResolver(path).resolve(request(), {})
+    assert [item.asset.content["case_id"] for item in block.candidates] == ["good"]
+    skipped = [item for item in block.evidence_trace if item.action == "record_skipped"]
+    assert len(skipped) == 1 and "sensitive" not in skipped[0].evidence
+
+
+def test_reference_semantic_traversal_is_depth_bounded_and_neighbor_survives(tmp_path):
+    path = tmp_path / "semantic-depth.jsonl"
+    nested = '[' * 1100 + '"deep secret"' + ']' * 1100
+    path.write_text(
+        '{"case_id":"deep","query_terms":' + nested + '}\n'
+        '{"case_id":"good","description":"usable"}\n',
+        encoding="utf-8",
+    )
+
+    block = OOTBContextResolver(path).resolve(request(), {})
+    assert [item.asset.content["case_id"] for item in block.candidates] == ["deep", "good"]
+    assert "deep secret" not in block.candidates[0].asset.index_text
+    assert len(block.candidates[0].asset.index_text) <= 16_000
+
+
 @pytest.mark.parametrize("kind", ["unknown", "duplicate"])
 def test_reference_retriever_enforces_canonical_boundary(tmp_path, kind):
     path = tmp_path / "cases.jsonl"

@@ -1,11 +1,12 @@
 from copy import deepcopy
+import json
 from types import SimpleNamespace
 
 import pytest
 
 from agent.context_manager.errors import ContextBuildError, EDSL_NODE_NOT_FOUND, INVALID_LLM_OUTPUT, RULE_FILE_MISSING
 from agent.context_manager.models import BuildContextRequest
-from agent.context_manager.resolvers import EdslProjectContextResolver, GlobalContextResolver, LogicAreaContextResolver
+from agent.context_manager.resolvers import EdslProjectContextResolver, GlobalContextResolver, LogicAreaContextResolver, OOTBContextResolver, SiteKnowledgeContextResolver
 
 
 def request(path="$.nodes[0].children[0].children[1]", ids=None):
@@ -209,3 +210,101 @@ def test_fee_summary_does_not_expand_malformed_dicts_or_strings():
     assert block.fee_table_summary["group_by_fields"] == []
     assert block.fee_table_summary["summary_fields"] == []
     assert block.fee_table_summary["group_region"] == {"summary_fields": {"bad": "shape"}}
+
+
+def test_missing_reference_file_is_nonfatal(tmp_path):
+    block = OOTBContextResolver(tmp_path / "missing.jsonl").resolve(request(), {})
+    assert block.candidates == []
+    assert block.evidence_trace[0].action == "source_missing"
+
+
+def test_site_cases_are_filtered_before_recall(tmp_path):
+    path = tmp_path / "site.jsonl"
+    path.write_text(
+        '\n'.join([
+            '{"case_id":"match","site_id":"s","project_id":"p","description":"charge"}',
+            '{"case_id":"other-site","site_id":"x","project_id":"p","description":"charge"}',
+            '{"case_id":"other-project","site_id":"s","project_id":"x","description":"charge"}',
+        ]),
+        encoding="utf-8",
+    )
+
+    class Retriever:
+        def retrieve(self, query, assets, semantic_limit=10):
+            self.seen = assets
+            return assets
+
+    class Reranker:
+        def rerank(self, query, assets, context):
+            return SimpleNamespace(selected_assets=assets, evidence_trace=[])
+
+    retriever = Retriever()
+    block = SiteKnowledgeContextResolver(path, retriever, Reranker()).resolve(request(), {})
+    assert [item.asset.content["case_id"] for item in block.candidates] == ["match"]
+    assert [item.content["case_id"] for item in retriever.seen] == ["match"]
+
+
+def test_reference_jsonl_skips_bad_records_and_builds_semantic_candidate(tmp_path):
+    path = tmp_path / "ootb.jsonl"
+    valid = {
+        "case_id": "fee-case", "description": "fee lookup", "node_pattern": "pivot table",
+        "logic_area_terms": ["billing", "charge"], "query_terms": ["account", "fee"],
+        "selected_bo": {"bo_name": "ChargeBO"},
+        "selected_sql": {"naming_sql_id": "sql.fee", "sql_name": "findFee", "param_list": [{"name": "accountId"}]},
+        "param_hints": {"accountId": "$ctx$.account"}, "bindings": [{"param": "accountId", "source": "$ctx$.account"}],
+        "source": "curated", "evidence": ["manually verified"],
+    }
+    path.write_bytes(b'{bad}\n[]\n' + json.dumps(valid).encode("utf-8") + b'\n' + b'x' * 70000 + b'\n')
+    before = deepcopy(valid)
+
+    class Retriever:
+        def retrieve(self, query, assets, semantic_limit=10): return assets
+    class Reranker:
+        def rerank(self, query, assets, context): return SimpleNamespace(selected_assets=assets, evidence_trace=[])
+
+    block = OOTBContextResolver(path, Retriever(), Reranker()).resolve(request(), {"node": "safe"})
+    item = block.candidates[0]
+    assert item.asset.content == before
+    assert all(term in item.asset.index_text for term in ("fee lookup", "pivot table", "billing", "account", "ChargeBO", "sql.fee", "$ctx$.account"))
+    assert item.candidate.bo_name == "ChargeBO" and item.candidate.naming_sql_id == "sql.fee"
+    assert item.candidate.param_list == [{"name": "accountId"}]
+    assert item.candidate.retrieval_metadata["bindings"] == valid["bindings"]
+    assert item.evidence[0].evidence == "manually verified"
+    assert sum(event.action == "record_skipped" for event in block.evidence_trace) == 3
+    assert valid == before
+
+
+@pytest.mark.parametrize("kind", ["unknown", "duplicate", "malformed"])
+def test_reference_reranker_enforces_canonical_boundary(tmp_path, kind):
+    path = tmp_path / "cases.jsonl"
+    path.write_text('{"case_id":"one","description":"original"}\n{"case_id":"two","description":"second"}\n', encoding="utf-8")
+
+    class Retriever:
+        def retrieve(self, query, assets, semantic_limit=10): return assets
+    class Reranker:
+        def rerank(self, query, assets, context):
+            if kind == "unknown": selected = [assets[0].model_copy(update={"asset_id": "ootb_case:invented"})]
+            elif kind == "duplicate": selected = [assets[0], assets[0]]
+            else: selected = [object()]
+            return SimpleNamespace(selected_assets=selected, evidence_trace=[])
+
+    with pytest.raises(ContextBuildError) as exc:
+        OOTBContextResolver(path, Retriever(), Reranker()).resolve(request(), {})
+    assert exc.value.code == INVALID_LLM_OUTPUT
+
+
+def test_reference_reranker_order_and_forged_content_are_canonicalized(tmp_path):
+    path = tmp_path / "cases.jsonl"
+    path.write_text('{"case_id":"one","description":"original"}\n{"case_id":"two","description":"second"}\n', encoding="utf-8")
+
+    class Retriever:
+        def retrieve(self, query, assets, semantic_limit=10): return assets
+    class Reranker:
+        def rerank(self, query, assets, context):
+            forged = assets[0].model_copy(update={"content": {"case_id": "one", "description": "forged"}})
+            return SimpleNamespace(selected_assets=[assets[1], forged], evidence_trace=[])
+
+    block = OOTBContextResolver(path, Retriever(), Reranker()).resolve(request(), {})
+    assert [item.asset.content["case_id"] for item in block.candidates] == ["two", "one"]
+    assert block.candidates[1].asset.content["description"] == "original"
+    assert [event.asset_id for event in block.evidence_trace if event.action == "case_selected"] == ["ootb_case:two", "ootb_case:one"]

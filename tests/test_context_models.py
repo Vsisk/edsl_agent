@@ -5,8 +5,14 @@ from agent.context_manager.errors import ContextBuildError
 from agent.context_manager.models import (
     BuildContextRequest,
     ContextAsset,
+    ContextEvidenceItem,
+    GlobalContextBlock,
     NamingSqlCandidate,
+    NamingSqlContextRequestSummary,
+    NamingSqlResourceCandidates,
     NamingSqlSelectionContext,
+    NodeContextBlock,
+    ReferenceCaseBlock,
 )
 
 
@@ -111,3 +117,54 @@ def test_naming_sql_selection_context_prompt_view_is_a_dict():
     field = NamingSqlSelectionContext.model_fields["prompt_view"]
 
     assert field.annotation == dict | None
+
+
+def _selection_context(**overrides):
+    values = {
+        "request": NamingSqlContextRequestSummary(
+            site_id="s",
+            project_id="p",
+            query="fee",
+            json_path="$.nodes[0]",
+        ),
+        "global_context": GlobalContextBlock(),
+        "node_context": NodeContextBlock(json_path="$.nodes[0]", node={}),
+        "resource_candidates": NamingSqlResourceCandidates(),
+    }
+    values.update(overrides)
+    return NamingSqlSelectionContext(**values)
+
+
+def test_aggregate_models_use_evidence_trace_with_independent_defaults():
+    evidence = ContextEvidenceItem(
+        source="resource_registry",
+        action="loaded",
+        evidence="resource exists",
+    )
+    reference = ReferenceCaseBlock(evidence_trace=[evidence])
+    context = _selection_context(evidence_trace=[evidence])
+
+    assert reference.evidence_trace == [evidence]
+    assert context.evidence_trace == [evidence]
+
+    first_reference = ReferenceCaseBlock()
+    second_reference = ReferenceCaseBlock()
+    first_reference.evidence_trace.append(evidence)
+    assert second_reference.evidence_trace == []
+
+    first_context = _selection_context()
+    second_context = _selection_context()
+    first_context.evidence_trace.append(evidence)
+    assert second_context.evidence_trace == []
+
+
+@pytest.mark.parametrize(
+    "factory",
+    [
+        lambda: ReferenceCaseBlock(unexpected=True),
+        lambda: _selection_context(unexpected=True),
+    ],
+)
+def test_aggregate_models_reject_extra_fields(factory):
+    with pytest.raises(ValidationError):
+        factory()

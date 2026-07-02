@@ -76,7 +76,7 @@ class ReferenceCaseBlock(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     candidates: list[ReferenceCaseCandidate] = Field(default_factory=list)
-    evidence: list[ContextEvidenceItem] = Field(default_factory=list)
+    evidence_trace: list[ContextEvidenceItem] = Field(default_factory=list)
 
 
 class NamingSqlSelectionContext(BaseModel):
@@ -95,5 +95,5 @@ class NamingSqlSelectionContext(BaseModel):
     constraints: NamingSqlSelectionConstraints = Field(
         default_factory=NamingSqlSelectionConstraints
     )
-    evidence: list[ContextEvidenceItem] = Field(default_factory=list)
+    evidence_trace: list[ContextEvidenceItem] = Field(default_factory=list)
     prompt_view: dict | None = None

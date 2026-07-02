@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from agent.context_manager.errors import ContextBuildError, INVALID_LLM_OUTPUT
 from agent.context_manager.models import BuildContextRequest, ContextAsset, ContextEvidenceItem, LogicAreaContextBlock, NodeContextBlock
 
 
@@ -21,8 +22,9 @@ class LogicAreaContextResolver:
         elif self.retriever is not None and self.reranker is not None:
             retrieval_query = _retrieval_query(request.query, node_block.current_node)
             recalled = self.retriever.retrieve(retrieval_query, assets, semantic_limit=max(request.top_k, 10))
-            result = self.reranker.rerank(retrieval_query, recalled, {"node": node_block.model_dump(mode="json")})
-            selected = list(result.selected_assets)
+            canonical_recalled = _canonical_assets(recalled, {asset.asset_id: asset for asset in assets}, "retriever")
+            result = self.reranker.rerank(retrieval_query, canonical_recalled, {"node": node_block.model_dump(mode="json")})
+            selected = _canonical_assets(getattr(result, "selected_assets", None), {asset.asset_id: asset for asset in canonical_recalled}, "reranker")
             evidence.extend(getattr(result, "evidence_trace", []) or [])
             action = "logic_area_semantic_match"
         else:
@@ -111,3 +113,20 @@ def _retrieval_query(query: str, node: dict, limit: int = 2_000) -> str:
         text = str(part or "").strip()
         if text and text not in unique: unique.append(text)
     return "\n".join(unique)[:limit]
+
+
+def _canonical_assets(returned: Any, canonical: dict[str, ContextAsset], source: str) -> list[ContextAsset]:
+    if not isinstance(returned, (list, tuple)):
+        raise ContextBuildError(INVALID_LLM_OUTPUT, f"{source} returned malformed asset selection")
+    selected: list[ContextAsset] = []
+    seen: set[str] = set()
+    for item in returned:
+        if not isinstance(item, ContextAsset) or item.asset_type != "logic_area":
+            raise ContextBuildError(INVALID_LLM_OUTPUT, f"{source} returned malformed logic-area asset")
+        if item.asset_id not in canonical:
+            raise ContextBuildError(INVALID_LLM_OUTPUT, f"{source} returned unknown logic-area asset")
+        if item.asset_id in seen:
+            raise ContextBuildError(INVALID_LLM_OUTPUT, f"{source} returned duplicate logic-area asset")
+        seen.add(item.asset_id)
+        selected.append(canonical[item.asset_id])
+    return selected

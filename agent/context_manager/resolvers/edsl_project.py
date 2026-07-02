@@ -89,17 +89,17 @@ def _fee_summary(node: dict) -> dict | None:
     node_type = node.get("tree_node_type")
     group_region = content.get("group_region") if isinstance(content.get("group_region"), dict) else None
     detail_region = content.get("detail_region") if isinstance(content.get("detail_region"), dict) else None
-    detail_fields = list(content.get("detail_fields") or [])
-    if detail_region: detail_fields.extend(detail_region.get("detail_fields") or [])
-    summary_fields = list(content.get("summary_fields") or [])
+    detail_fields = _list_items(content.get("detail_fields"))
+    if detail_region: detail_fields.extend(_list_items(detail_region.get("detail_fields")))
+    summary_fields = _list_items(content.get("summary_fields"))
     if node_type == "ab_pivot_table" and group_region:
-        summary_fields.extend(group_region.get("sum_fields") or [])
+        summary_fields.extend(_list_items(group_region.get("sum_fields")))
     elif node_type == "ab_two_level_table" and group_region:
-        summary_fields.extend(group_region.get("summary_fields") or [])
+        summary_fields.extend(_list_items(group_region.get("summary_fields")))
     return {
         "data_source": content.get("data_source"),
         "detail_fields": _dedupe(detail_fields),
-        "group_by_fields": list(content.get("group_by_fields") or []),
+        "group_by_fields": _list_items(content.get("group_by_fields")),
         "detail_region": detail_region,
         "group_region": group_region,
         "summary_fields": _dedupe(summary_fields),
@@ -144,3 +144,7 @@ def _dedupe(values: list[Any]) -> list[Any]:
     for value in values:
         if value not in result: result.append(value)
     return result
+
+
+def _list_items(value: Any) -> list[Any]:
+    return list(value) if isinstance(value, (list, tuple)) else []

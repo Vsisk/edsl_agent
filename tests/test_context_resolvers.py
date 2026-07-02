@@ -3,7 +3,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from agent.context_manager.errors import ContextBuildError, EDSL_NODE_NOT_FOUND, RULE_FILE_MISSING
+from agent.context_manager.errors import ContextBuildError, EDSL_NODE_NOT_FOUND, INVALID_LLM_OUTPUT, RULE_FILE_MISSING
 from agent.context_manager.models import BuildContextRequest
 from agent.context_manager.resolvers import EdslProjectContextResolver, GlobalContextResolver, LogicAreaContextResolver
 
@@ -167,3 +167,45 @@ def test_logic_error_path_does_not_mutate_tree(tree):
     with pytest.raises(RuntimeError, match="rerank failed"):
         LogicAreaContextResolver(Retriever(), BrokenReranker()).resolve(request("$.nodes[0]"), loaded, node)
     assert tree == before
+
+
+@pytest.mark.parametrize("returned", ["unknown", "duplicate", "malformed"])
+def test_logic_reranker_rejects_noncanonical_selections(tree, returned):
+    class Retriever:
+        def retrieve(self, query, assets, semantic_limit=10): return assets[:2]
+    class Reranker:
+        def rerank(self, query, assets, context):
+            if returned == "unknown":
+                selected = [assets[0].model_copy(update={"asset_id": "logic_area:invented", "logic_area_id": "invented"})]
+            elif returned == "duplicate":
+                selected = [assets[0], assets[0]]
+            else:
+                selected = [object()]
+            return SimpleNamespace(selected_assets=selected, evidence_trace=[])
+    loaded = SimpleNamespace(edsl_tree=tree, bo_registry={})
+    node = EdslProjectContextResolver().resolve(request("$.nodes[0]"), loaded)
+    with pytest.raises(ContextBuildError) as exc:
+        LogicAreaContextResolver(Retriever(), Reranker()).resolve(request("$.nodes[0]"), loaded, node)
+    assert exc.value.code == INVALID_LLM_OUTPUT
+
+
+def test_logic_reranker_same_id_uses_canonical_content(tree):
+    class Retriever:
+        def retrieve(self, query, assets, semantic_limit=10): return assets[:1]
+    class Reranker:
+        def rerank(self, query, assets, context):
+            forged = assets[0].model_copy(update={"content": {"id": "la.node", "name": "forged"}, "index_text": "forged"})
+            return SimpleNamespace(selected_assets=[forged], evidence_trace=[])
+    loaded = SimpleNamespace(edsl_tree=tree, bo_registry={})
+    node = EdslProjectContextResolver().resolve(request("$.nodes[0]"), loaded)
+    block = LogicAreaContextResolver(Retriever(), Reranker()).resolve(request("$.nodes[0]"), loaded, node)
+    assert block.assets[0].content["name"] == "Charge"
+
+
+def test_fee_summary_does_not_expand_malformed_dicts_or_strings():
+    node = {"node_id": "fee", "tree_node_type": "ab_two_level_table", "ab_content": {"detail_fields": "abc", "group_by_fields": {"bad": "shape"}, "summary_fields": "xyz", "group_region": {"summary_fields": {"bad": "shape"}}, "detail_region": {"detail_fields": "chars"}}}
+    block = EdslProjectContextResolver().resolve(request("$.mapping_content"), SimpleNamespace(edsl_tree={"mapping_content": node}, bo_registry={}))
+    assert block.fee_table_summary["detail_fields"] == []
+    assert block.fee_table_summary["group_by_fields"] == []
+    assert block.fee_table_summary["summary_fields"] == []
+    assert block.fee_table_summary["group_region"] == {"summary_fields": {"bad": "shape"}}

@@ -31,6 +31,7 @@ class GlobalContextBlock(BaseModel):
 
     assets: list[ContextAsset] = Field(default_factory=list)
     evidence: list[ContextEvidenceItem] = Field(default_factory=list)
+    loaded_paths: list[str] = Field(default_factory=list)
 
 
 class NodeContextBlock(BaseModel):
@@ -40,6 +41,17 @@ class NodeContextBlock(BaseModel):
     node: dict[str, Any]
     assets: list[ContextAsset] = Field(default_factory=list)
     evidence: list[ContextEvidenceItem] = Field(default_factory=list)
+    current_node: dict[str, Any] = Field(default_factory=dict)
+    parent_node: dict[str, Any] | None = None
+    ancestors: list[dict[str, Any]] = Field(default_factory=list)
+    sibling_summaries: list[dict[str, Any]] = Field(default_factory=list)
+    visible_local_context: list[dict[str, Any]] = Field(default_factory=list)
+    visible_iter_context: list[dict[str, Any]] = Field(default_factory=list)
+    existing_data_source_ids: list[str] = Field(default_factory=list)
+    existing_bo_ids: list[str] = Field(default_factory=list)
+    existing_naming_sql_ids: list[str] = Field(default_factory=list)
+    is_simple_leaf: bool = False
+    fee_table_summary: dict[str, Any] | None = None
 
 
 class LogicAreaContextBlock(BaseModel):
@@ -48,6 +60,12 @@ class LogicAreaContextBlock(BaseModel):
     logic_area_ids: list[str] = Field(default_factory=list)
     assets: list[ContextAsset] = Field(default_factory=list)
     evidence: list[ContextEvidenceItem] = Field(default_factory=list)
+    sa_texts: list[str] = Field(default_factory=list)
+    se_texts: list[str] = Field(default_factory=list)
+    cbs_terms: list[str] = Field(default_factory=list)
+    fee_category_summaries: list[dict[str, Any]] = Field(default_factory=list)
+    columns: list[Any] = Field(default_factory=list)
+    samples: list[Any] = Field(default_factory=list)
 
 
 class ProjectSearchContextBlock(BaseModel):

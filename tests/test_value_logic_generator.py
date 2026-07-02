@@ -5,7 +5,7 @@ from agent.models import ValueLogicRequest
 from agent.naming_sql_selector import NamingSqlSelectResponse
 from agent.planner.models import Plan
 from agent.resource_manager.loader.resource_loader import ResourceLoader
-from agent.value_logic_generator import ExpressionSpec, ValueLogicGenerator
+from agent.value_logic_generator import ExpressionSpec, ValueLogicGenerator, requires_naming_sql
 from tests.test_environment import sample_edsl_tree_payload
 
 
@@ -90,3 +90,65 @@ def test_success_reaches_planner_with_all_top_k_and_without_narrowing_loaded_res
     env = planner.calls[0]["filtered_env"]
     assert [item.naming_sql_name for item in env.naming_sql_selection.candidates] == ["FindCustomer", "FindCustomerRecent"]
     assert len(loaded_seen[0].bo_registry["BB_BAK_TRANS"].naming_sql_list) == 1
+
+
+@pytest.mark.parametrize("signal", [
+    "查表", "查询表", "data source", "data_source", "data-source",
+    "naming sql", "naming_sql", "naming-sql",
+])
+def test_prior_naming_sql_route_signal_variants_are_preserved(signal):
+    assert requires_naming_sql({}, signal)
+
+
+def test_explicit_route_boolean_has_precedence_over_inferred_signals():
+    assert requires_naming_sql({"requires_naming_sql": True}, "ordinary")
+    assert not requires_naming_sql({"requires_naming_sql": False}, "use naming sql")
+
+
+def test_each_route_input_gets_a_fair_share_of_the_combined_bound():
+    long_query = "x" * 4000
+    assert requires_naming_sql({}, long_query, "use naming sql", {}, None)
+    assert requires_naming_sql({}, long_query, "ordinary", {"annotation": "data source"}, None)
+    assert requires_naming_sql({}, long_query, "ordinary", {}, {"annotation": "查询表"})
+
+
+@pytest.mark.parametrize("value", ["renamingsqltable", "mydatasourcevalue"])
+def test_route_terms_do_not_match_inside_larger_ascii_identifiers(value):
+    assert not requires_naming_sql({}, value)
+
+
+def test_summary_field_bypasses_factory_and_planner():
+    planner = Planner(fetch=False)
+    def fail(_): raise AssertionError("factory must not be called")
+    summary_request = request(False).model_copy(update={"is_ab": True, "node": {
+        "node_id": "sum", "name": "total", "field_type": "summary",
+        "summary_type": "sum", "detail_field": "AMOUNT",
+    }})
+    result = generator(fail, planner).generate(summary_request)
+    assert result.logic_type == "summary" and result.source.summary_type == "sum"
+    assert result.source.detail_field == "AMOUNT" and not planner.calls
+
+
+def test_default_filter_path_uses_expression_spec_text():
+    class CapturingTargets:
+        def __init__(self): self.calls = []
+        def generate(self, **kwargs): self.calls.append(kwargs); return []
+    targets, planner = CapturingTargets(), Planner(fetch=False)
+    gen = ValueLogicGenerator(resource_loader=ResourceLoader(), llm_planner=planner,
+        naming_sql_selector_factory=lambda loaded: (_ for _ in ()).throw(AssertionError()),
+        expression_spec_generator=Specs(), resource_filter_target_generator=targets)
+    gen.generate(request(False))
+    assert targets.calls[0]["query"] == "ordinary"
+
+
+def test_parent_sql_direct_field_mapping_still_bypasses_planner():
+    planner = Planner(fetch=False)
+    req = request(False).model_copy(update={
+        "is_ab": True,
+        "node": {"node_id": "log", "name": "LOG_ID", "is_ab": True},
+        "parent_node": {"data_source_type": "sql", "bo_name": "BB_BAK_TRANS"},
+        "query": "direct BO field mapping",
+    })
+    result = generator(lambda loaded: (_ for _ in ()).throw(AssertionError()), planner).generate(req)
+    assert result.logic_type == "bo_field_mapping" and result.expression == "LOG_ID"
+    assert not planner.calls

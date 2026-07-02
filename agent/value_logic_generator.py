@@ -510,7 +510,13 @@ def requires_naming_sql(structured_spec: dict[str, Any], *text_values: Any) -> b
     explicit = structured_spec.get("requires_naming_sql")
     if isinstance(explicit, bool):
         return explicit
-    text = " ".join(_visible_text(value) for value in text_values)[:4000]
+    parts = [_visible_text(value) for value in text_values]
+    present = [part for part in parts if part]
+    if not present:
+        return False
+    separator_chars = len(present) - 1
+    per_part = max((4000 - separator_chars) // len(present), 1)
+    text = " ".join(part[:per_part] for part in present)[:4000]
     return any(re.search(pattern, text, flags=re.IGNORECASE) for pattern in (
         r"(?<![a-z0-9])查表(?![a-z0-9])",
         r"(?<![a-z0-9])查询表(?![a-z0-9])",

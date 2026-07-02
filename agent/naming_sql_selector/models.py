@@ -12,6 +12,31 @@ from agent.context_manager.models import (
 )
 
 
+class SelectorModel(BaseModel):
+    """Legacy profile storage base retained until the resource cache is removed."""
+    model_config = ConfigDict(extra="forbid")
+
+
+class NamingSqlParamProfile(SelectorModel):
+    name: str
+    data_type: str = ""
+    is_list: bool = False
+
+
+class NamingSqlProfile(SelectorModel):
+    site_id: str
+    bo_name: str
+    naming_sql_id: str
+    sql_name: str
+    label_name: str = ""
+    sql_description: str = ""
+    params: list[NamingSqlParamProfile] = Field(default_factory=list)
+    filter_fields: list[str] = Field(default_factory=list)
+    scope_tags: list[str] = Field(default_factory=list)
+    is_full_table: bool = True
+    search_text: str = ""
+
+
 def _strict_copy(model_type: type[BaseModel], value: Any) -> BaseModel:
     raw_value = value.model_dump(mode="python") if isinstance(value, BaseModel) else value
     return model_type.model_validate(raw_value, strict=True)

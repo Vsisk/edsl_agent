@@ -41,3 +41,25 @@ def test_rejects_unknown_parameter_but_not_binding_source():
 def test_duplicate_candidate_names_are_rejected_as_ambiguous():
     with pytest.raises(ValueError, match="NAMING_SQL_CANDIDATE_AMBIGUOUS"):
         validate_naming_sql_plan(plan(), response(candidate("a", "FindCustomer"), candidate("b", "FindCustomer", rank=2)))
+
+
+def test_plan_without_fetch_is_rejected():
+    plain = Plan.model_validate({"nodes": [{"type": "return", "value": {"type": "literal", "value": 1}}]})
+    with pytest.raises(ValueError, match="NAMING_SQL_NOT_USED"):
+        validate_naming_sql_plan(plain, response(candidate("a", "FindCustomer")))
+
+
+def test_nested_and_multiple_top_k_fetches_are_validated():
+    nested = Plan.model_validate({"nodes": [{"type": "return", "value": {"type": "call", "name": "IF", "args": [
+        {"type": "literal", "value": True},
+        {"type": "fetch_one", "name": "FindCustomer", "params": [{"name": "id", "value": {"type": "literal", "value": 1}}]},
+        {"type": "fetch", "name": "FindByEmail", "params": [{"name": "email", "value": {"type": "literal", "value": "a"}}]},
+    ]}}]})
+    validate_naming_sql_plan(nested, response(candidate("a", "FindCustomer"), candidate("b", "FindByEmail", ("email",), 2)))
+
+
+def test_cyclic_plan_is_rejected_with_stable_complexity_error():
+    cyclic = Plan.model_construct(nodes=[])
+    cyclic.nodes.append(cyclic)
+    with pytest.raises(ValueError, match="NAMING_SQL_PLAN_TOO_COMPLEX"):
+        validate_naming_sql_plan(cyclic, response(candidate("a", "FindCustomer")))

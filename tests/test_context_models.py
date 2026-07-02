@@ -1,7 +1,13 @@
 import pytest
 from pydantic import ValidationError
 
-from agent.context_manager.models import BuildContextRequest, NamingSqlCandidate
+from agent.context_manager.errors import ContextBuildError
+from agent.context_manager.models import (
+    BuildContextRequest,
+    ContextAsset,
+    NamingSqlCandidate,
+    NamingSqlSelectionContext,
+)
 
 
 def test_build_context_request_defaults_chain_type_and_top_k():
@@ -50,3 +56,58 @@ def test_naming_sql_candidate_has_rank_and_no_score_field():
             rank=1,
             score=0.9,
         )
+
+
+def test_context_build_error_formats_optional_detail():
+    without_detail = ContextBuildError("EMBEDDING_FAILED")
+    with_detail = ContextBuildError("EMBEDDING_FAILED", "provider unavailable")
+
+    assert without_detail.code == "EMBEDDING_FAILED"
+    assert without_detail.detail == ""
+    assert str(without_detail) == "EMBEDDING_FAILED"
+    assert str(with_detail) == "EMBEDDING_FAILED: provider unavailable"
+
+
+def test_context_asset_supports_optional_logic_area_id():
+    asset = ContextAsset(
+        asset_id="logic-area-1",
+        asset_type="logic_area",
+        scope="logic_area",
+        logic_area_id="la-1",
+        content={},
+        index_text="Logic area",
+    )
+
+    assert asset.logic_area_id == "la-1"
+
+
+def test_naming_sql_candidate_uses_structured_params_return_type_and_string_evidence():
+    candidate = NamingSqlCandidate(
+        candidate_id="candidate-1",
+        bo_name="Invoice",
+        naming_sql_id="fee",
+        source="resource_registry",
+        rank=1,
+        param_list=[{"name": "invoiceId", "type": "string"}],
+        return_type={"type": "number"},
+        evidence=["matched annotation"],
+    )
+
+    assert candidate.param_list == [{"name": "invoiceId", "type": "string"}]
+    assert candidate.return_type == {"type": "number"}
+    assert candidate.evidence == ["matched annotation"]
+    with pytest.raises(ValidationError):
+        NamingSqlCandidate(
+            candidate_id="candidate-1",
+            bo_name="Invoice",
+            naming_sql_id="fee",
+            source="resource_registry",
+            rank=1,
+            param_list=["invoiceId"],
+        )
+
+
+def test_naming_sql_selection_context_prompt_view_is_a_dict():
+    field = NamingSqlSelectionContext.model_fields["prompt_view"]
+
+    assert field.annotation == dict | None

@@ -96,4 +96,4 @@ class NamingSqlSelectionContext(BaseModel):
         default_factory=NamingSqlSelectionConstraints
     )
     evidence: list[ContextEvidenceItem] = Field(default_factory=list)
-    prompt_view: str | None = None
+    prompt_view: dict | None = None

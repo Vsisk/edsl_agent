@@ -36,6 +36,7 @@ class ContextAsset(BaseModel):
     scope: Literal["global", "site", "project", "logic_area", "node", "task"]
     site_id: str | None = None
     project_id: str | None = None
+    logic_area_id: str | None = None
     json_path: str | None = None
     content: dict[str, Any]
     index_text: str
@@ -52,8 +53,8 @@ class NamingSqlCandidate(BaseModel):
     naming_sql_id: str
     naming_sql_name: str | None = None
     annotation: str = ""
-    param_list: list[Any] = Field(default_factory=list)
-    return_type: str | None = None
+    param_list: list[dict] = Field(default_factory=list)
+    return_type: dict | None = None
     source: Literal[
         "resource_registry",
         "current_project",
@@ -62,7 +63,7 @@ class NamingSqlCandidate(BaseModel):
         "history_case",
     ]
     rank: int
-    evidence: list[ContextEvidenceItem] = Field(default_factory=list)
+    evidence: list[str] = Field(default_factory=list)
     matched_terms: list[str] = Field(default_factory=list)
     retrieval_metadata: dict[str, Any] = Field(default_factory=dict)
 

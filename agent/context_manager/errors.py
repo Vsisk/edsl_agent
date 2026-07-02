@@ -1,10 +1,10 @@
 class ContextBuildError(RuntimeError):
     """A context-building failure with a stable machine-readable code."""
 
-    def __init__(self, code: str, detail: str) -> None:
+    def __init__(self, code: str, detail: str = "") -> None:
         self.code = code
         self.detail = detail
-        super().__init__(f"{code}: {detail}")
+        super().__init__(f"{code}: {detail}" if detail else code)
 
 
 AI_CONFIGURATION_REQUIRED = "AI_CONFIGURATION_REQUIRED"

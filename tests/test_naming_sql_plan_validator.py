@@ -1,12 +1,12 @@
 import pytest
 
-from agent.context_manager.models import NamingSqlCandidate
+from agent.context_manager.models import NamingSqlCandidate, NamingSqlSelectionConstraints
 from agent.naming_sql_selector import NamingSqlSelectResponse, validate_naming_sql_plan
 from agent.planner.models import Plan
 
 
-def response(*candidates):
-    return NamingSqlSelectResponse(success=True, candidates=list(candidates))
+def response(*candidates, constraints=None):
+    return NamingSqlSelectResponse(success=True, candidates=list(candidates), selection_constraints=constraints)
 
 
 def candidate(cid, name, params=("id",), rank=1):
@@ -23,6 +23,29 @@ def plan(name="FindCustomer", param="id"):
 def test_planner_may_choose_any_top_k_candidate():
     validate_naming_sql_plan(plan("FindByEmail", "email"), response(
         candidate("a", "FindCustomer"), candidate("b", "FindByEmail", ("email",), 2)))
+
+
+def constraints(ids, bos=("Customer",), max_candidates=None):
+    return NamingSqlSelectionConstraints(allowed_naming_sql_ids=list(ids), allowed_bo_names=list(bos),
+        max_candidates=max_candidates if max_candidates is not None else len(ids))
+
+
+def test_constraints_limit_fetch_to_permitted_top_k_candidate():
+    selection = response(candidate("a", "FindCustomer"), candidate("b", "FindByEmail", ("email",), 2),
+        constraints=constraints(["a"]))
+    validate_naming_sql_plan(plan("FindCustomer"), selection)
+    with pytest.raises(ValueError, match="NAMING_SQL_OUTSIDE_CONSTRAINTS"):
+        validate_naming_sql_plan(plan("FindByEmail", "email"), selection)
+
+
+def test_constraints_reject_wrong_bo_and_invalid_ids_or_max_before_plan_walk():
+    a = candidate("a", "FindCustomer")
+    invalid = [constraints(["missing"]), constraints(["a"], bos=("Other",)), constraints(["a"], max_candidates=2)]
+    cyclic = Plan.model_construct(nodes=[])
+    cyclic.nodes.append(cyclic)
+    for item in invalid:
+        with pytest.raises(ValueError, match="NAMING_SQL_INVALID_CONSTRAINTS"):
+            validate_naming_sql_plan(cyclic, response(a, constraints=item))
 
 
 def test_rejects_fetch_name_outside_top_k():

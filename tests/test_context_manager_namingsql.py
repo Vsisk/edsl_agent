@@ -210,12 +210,12 @@ def test_reference_hint_evidence_are_canonicalized_and_debug_is_opt_in():
     assert normal.evidence_trace[-1].asset_id == "ootb_case:one"
 
 
-def test_resource_candidate_retains_enriched_structured_return_information_without_rank():
+def test_resource_candidate_does_not_fabricate_return_type_from_bo_fields():
     asset = ContextAsset(asset_id="naming_sql:BO:sql.one", asset_type="naming_sql",
         scope="global", index_text="candidate", content={"bo_name": "BO",
-        "naming_sql_id": "sql.one", "return_information": [{"field_name": "amount", "data_type_name": "decimal"}]})
+        "naming_sql_id": "sql.one", "bo_field_facts": [{"field_name": "amount", "data_type_name": "decimal"}]})
     result = ResourceContextResolver._candidate(asset)
-    assert result.return_type == {"fields": [{"field_name": "amount", "data_type_name": "decimal"}]}
+    assert result.return_type is None
     assert result.rank == 0
 
 

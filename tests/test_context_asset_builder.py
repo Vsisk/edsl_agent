@@ -7,6 +7,23 @@ from agent.resource_manager.models import (
 )
 
 
+def test_naming_sql_bo_fields_are_retrieval_facts_not_return_schema():
+    builder = ResourceAssetBuilder()
+    definition = NamingSqlDefTerm(naming_sql_id="n1", sql_name="findInvoice", param_list=[])
+    bo = BoRegistry(resource_id="bo.invoice", bo_name="Invoice", bo_desc="invoices", property_list=[
+        PropertyTerm(field_name="amount", data_type=DataTypeEnum.basic,
+            data_type_name="decimal", description="invoice amount")
+    ])
+
+    asset = builder.naming_sql("Invoice", definition, bo)
+    candidate = builder._candidate(asset)
+
+    assert asset.content["bo_field_facts"][0]["field_name"] == "amount"
+    assert "amount" in asset.index_text and "invoice amount" in asset.index_text
+    assert "return_information" not in asset.content
+    assert candidate.return_type is None
+
+
 def test_resource_builder_creates_semantic_stable_assets_without_mutation():
     field = PropertyTerm(field_name="CUST_ID", description="customer identifier", data_type=DataTypeEnum.basic, data_type_name="string")
     sql = NamingSqlDefTerm(naming_sql_id="n1", sql_name="findCustomer", sql_description="find customer", label_name="customer lookup", sql_command="SELECT secret", param_list=[ParamTerm(param_name="id", data_type_name="string")])

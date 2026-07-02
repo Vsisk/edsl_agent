@@ -98,9 +98,7 @@ class ResourceAssetBuilder(_ResourceAssetBase):
             naming_sql_id=sql_id, naming_sql_name=content.get("sql_name") or content.get("naming_sql_name"),
             annotation=str(content.get("sql_description") or content.get("annotation") or ""),
             param_list=list(content.get("param_list") or []),
-            return_type=content.get("return_type") or (
-                {"fields": content.get("return_information")} if content.get("return_information") else None
-            ),
+            return_type=content.get("return_type"),
             source="resource_registry", rank=0, evidence=[asset.index_text],
             retrieval_metadata=dict(asset.metadata))
 
@@ -129,7 +127,7 @@ class ResourceAssetBuilder(_ResourceAssetBase):
         content = {"bo_name": bo_name, **definition.model_dump(mode="json")}
         if bo_registry is not None:
             content.update({"bo_description": bo_description, "bo_tags": bo_tags,
-                            "bo_field_facts": field_facts, "return_information": field_facts})
+                            "bo_field_facts": field_facts})
         return ContextAsset(
             asset_id=f"naming_sql:{bo_name}:{definition.naming_sql_id}", asset_type="naming_sql", scope="global",
             content=content,
@@ -138,7 +136,7 @@ class ResourceAssetBuilder(_ResourceAssetBase):
                 tags=", ".join(bo_tags), id=definition.naming_sql_id,
                 name=definition.sql_name, purpose=definition.sql_description,
                 label=definition.label_name, parameters=params,
-                return_information=", ".join(_labeled(name=f["field_name"],
+                bo_field_facts=", ".join(_labeled(name=f["field_name"],
                     description=f["description"], type=f["data_type_name"], list=f["is_list"])
                     for f in field_facts)),
             source=self.source,

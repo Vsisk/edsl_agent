@@ -15,19 +15,21 @@ def validate_naming_sql_plan(plan: Plan, result: NamingSqlSelectResponse) -> Non
     """Constrain fetch nodes to the request's authoritative Top-K candidates."""
     if not result.success or not result.candidates:
         raise ValueError("NAMING_SQL_SELECTION_FAILED")
+    permitted = _permitted_candidates(result)
     fetches = [node for node in _walk(plan) if isinstance(node, (FetchExprPlanNode, FetchOneExprPlanNode))]
     if not fetches:
         raise ValueError("NAMING_SQL_NOT_USED")
 
     by_name: dict[str, list] = {}
-    for candidate in result.candidates:
+    for candidate in permitted:
         name = str(candidate.naming_sql_name or "").strip()
         if name:
             by_name.setdefault(name, []).append(candidate)
     for node in fetches:
         matches = by_name.get(node.name, [])
         if not matches:
-            raise ValueError(f"NAMING_SQL_OUTSIDE_TOP_K name={_bounded(node.name)}")
+            code = "NAMING_SQL_OUTSIDE_CONSTRAINTS" if result.selection_constraints is not None else "NAMING_SQL_OUTSIDE_TOP_K"
+            raise ValueError(f"{code} name={_bounded(node.name)}")
         if len(matches) != 1:
             raise ValueError(f"NAMING_SQL_CANDIDATE_AMBIGUOUS name={_bounded(node.name)}")
         allowed_params = {
@@ -40,6 +42,31 @@ def validate_naming_sql_plan(plan: Plan, result: NamingSqlSelectResponse) -> Non
         unknown = next((name for name in actual_names if name not in allowed_params), None)
         if unknown is not None:
             raise ValueError(f"NAMING_SQL_UNKNOWN_PARAM name={_bounded(unknown)}")
+
+
+def _permitted_candidates(result: NamingSqlSelectResponse) -> list:
+    constraints = result.selection_constraints
+    if constraints is None:
+        return list(result.candidates)
+
+    top_ids = {candidate.naming_sql_id for candidate in result.candidates}
+    top_bos = {candidate.bo_name for candidate in result.candidates}
+    allowed_ids = set(constraints.allowed_naming_sql_ids)
+    allowed_bos = set(constraints.allowed_bo_names)
+    if (len(allowed_ids) != len(constraints.allowed_naming_sql_ids)
+            or len(allowed_bos) != len(constraints.allowed_bo_names)
+            or not allowed_ids.issubset(top_ids)
+            or not allowed_bos.issubset(top_bos)
+            or constraints.max_candidates > len(result.candidates)
+            or (allowed_ids and constraints.max_candidates != len(allowed_ids))):
+        raise ValueError("NAMING_SQL_INVALID_CONSTRAINTS")
+
+    permitted = [candidate for candidate in result.candidates
+        if (not allowed_ids or candidate.naming_sql_id in allowed_ids)
+        and (not allowed_bos or candidate.bo_name in allowed_bos)]
+    if not permitted or len(permitted) > constraints.max_candidates:
+        raise ValueError("NAMING_SQL_INVALID_CONSTRAINTS")
+    return permitted
 
 
 def _walk(value: object) -> Iterator[BaseModel]:

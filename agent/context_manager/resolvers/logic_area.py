@@ -19,8 +19,9 @@ class LogicAreaContextResolver:
             selected = [asset for asset in assets if asset.logic_area_id in requested]
             action = "logic_area_id_match"
         elif self.retriever is not None and self.reranker is not None:
-            recalled = self.retriever.retrieve(request.query, assets, semantic_limit=max(request.top_k, 10))
-            result = self.reranker.rerank(request.query, recalled, {"node": node_block.model_dump(mode="json")})
+            retrieval_query = _retrieval_query(request.query, node_block.current_node)
+            recalled = self.retriever.retrieve(retrieval_query, assets, semantic_limit=max(request.top_k, 10))
+            result = self.reranker.rerank(retrieval_query, recalled, {"node": node_block.model_dump(mode="json")})
             selected = list(result.selected_assets)
             evidence.extend(getattr(result, "evidence_trace", []) or [])
             action = "logic_area_semantic_match"
@@ -99,3 +100,14 @@ def _extend_unique(target: list, value: Any) -> None:
     items = value if isinstance(value, list) else ([] if value is None else [value])
     for item in items:
         if item not in target: target.append(item)
+
+
+def _retrieval_query(query: str, node: dict, limit: int = 2_000) -> str:
+    xml = node.get("xml_name_property")
+    xml_name = xml.get("xml_name") if isinstance(xml, dict) else None
+    parts = [query, node.get("name"), xml_name, node.get("annotation")]
+    unique: list[str] = []
+    for part in parts:
+        text = str(part or "").strip()
+        if text and text not in unique: unique.append(text)
+    return "\n".join(unique)[:limit]

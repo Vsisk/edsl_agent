@@ -48,9 +48,12 @@ class NodeContextBlock(BaseModel):
     visible_local_context: list[dict[str, Any]] = Field(default_factory=list)
     visible_iter_context: list[dict[str, Any]] = Field(default_factory=list)
     existing_data_source_ids: list[str] = Field(default_factory=list)
+    existing_data_source: dict[str, Any] | None = None
+    existing_bo_name: str | None = None
     existing_bo_ids: list[str] = Field(default_factory=list)
     existing_naming_sql_ids: list[str] = Field(default_factory=list)
     is_simple_leaf: bool = False
+    simple_leaf_summary: dict[str, Any] | None = None
     fee_table_summary: dict[str, Any] | None = None
 
 

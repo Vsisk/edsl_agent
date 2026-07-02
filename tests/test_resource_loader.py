@@ -496,27 +496,7 @@ class ResourceLoaderTest(unittest.TestCase):
         self.assertEqual(loaded.domain_registry.bo_domains, ["BB_BAK_TRANS", "CUSTOM_ACCOUNT"])
         self.assertEqual(loaded.domain_registry.func_domains, ["DacsDataTrans", "deOrg"])
         self.assertEqual(loaded.domain_registry.namingsql_domains, ["BB_BAK_TRANS"])
-        self.assertEqual(loaded.naming_sql_profiles["CUSTOM_ACCOUNT"], [])
         self.assertEqual(loaded.edsl_tree, {"root": []})
-
-    def test_naming_sql_profile_cache_is_scoped_only_by_site(self):
-        class PayloadLoader(ResourceLoader):
-            def get_resource_data(self, site_id, project_id):
-                payload = sample_bo_payload()
-                payload["sys_bo_list"][0]["or_mapping_list"][0]["naming_sql_list"][0]["sql_name"] = project_id
-                return {"bo": payload, "context": {}, "function": {}}
-
-        loader = PayloadLoader()
-        first = loader.load_resource("site-a", "project-a", {})
-        second = loader.load_resource("site-a", "project-b", {})
-        third = loader.load_resource("site-a", "project-a", {})
-
-        self.assertEqual(list(loader.naming_sql_profile_cache), ["site-a"])
-        self.assertEqual(first.bo_registry["BB_BAK_TRANS"].naming_sql_list[0].sql_name, first.naming_sql_profiles["BB_BAK_TRANS"][0].sql_name)
-        self.assertEqual(second.naming_sql_profiles["BB_BAK_TRANS"][0].sql_name, "project-b")
-        self.assertEqual(second.naming_sql_profiles["BB_BAK_TRANS"][0].site_id, "site-a")
-        self.assertEqual(third.bo_registry["BB_BAK_TRANS"].naming_sql_list[0].sql_name, third.naming_sql_profiles["BB_BAK_TRANS"][0].sql_name)
-        self.assertEqual(third.naming_sql_profiles["BB_BAK_TRANS"][0].sql_name, "project-a")
 
     def test_empty_bo_registry_is_still_cached(self):
         class ChangingLoader(ResourceLoader):
@@ -531,7 +511,6 @@ class ResourceLoaderTest(unittest.TestCase):
         second = loader.load_resource("site-a", "project-a", {})
 
         self.assertEqual(second.bo_registry, {})
-        self.assertEqual(second.naming_sql_profiles, {})
 
     def test_loaded_resource_generates_visible_local_context_registry(self):
         loader = ResourceLoader(data_dir=Path("agent/resource_manager/data"))

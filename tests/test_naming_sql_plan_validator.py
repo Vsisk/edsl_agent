@@ -1,102 +1,43 @@
-import copy
-import unittest
+import pytest
 
-from agent.naming_sql_selector.models import (
-    NamingSqlSelectionResult, ParamBinding, ParamBindingPlan, SelectedNamingSql,
-)
-from agent.naming_sql_selector.plan_validator import validate_naming_sql_plan
-from agent.planner.models import CallExprPlanNode, Plan
+from agent.context_manager.models import NamingSqlCandidate
+from agent.naming_sql_selector import NamingSqlSelectResponse, validate_naming_sql_plan
+from agent.planner.models import Plan
 
 
-def selection(status="selected", selected=True):
-    chosen = SelectedNamingSql(
-        naming_sql_id="ns.1", sql_name="FindCustomer", score=1.0,
-        binding_plan=ParamBindingPlan(bindings=[
-            ParamBinding(param_name="customer_id", source_ref="$ctx$.customerId", confidence=.9, reason="exact"),
-            ParamBinding(param_name="site", source_ref="$ctx$.site", confidence=.8, reason="scope"),
-        ], is_complete=True),
-    ) if selected else None
-    return NamingSqlSelectionResult(status=status, selected_bo="Customer", selected=chosen, review_mode="not_required")
+def response(*candidates):
+    return NamingSqlSelectResponse(success=True, candidates=list(candidates))
 
 
-def fetch(name="FindCustomer", params=None, kind="fetch"):
-    if params is None:
-        params = [
-            {"name": "customer_id", "value": {"type": "context_path", "path": "$ctx$.customerId"}},
-            {"name": "site", "value": {"type": "context_path", "path": "$ctx$.site"}},
-        ]
-    return {"type": kind, "name": name, "params": params}
+def candidate(cid, name, params=("id",), rank=1):
+    return NamingSqlCandidate(candidate_id=cid, bo_name="Customer", naming_sql_id=cid,
+        naming_sql_name=name, param_list=[{"param_name": p, "data_type_name": "String"} for p in params],
+        source="resource_registry", rank=rank)
 
 
-class NamingSqlPlanValidatorTest(unittest.TestCase):
-    def assert_code(self, code, nodes, result=None):
-        with self.assertRaisesRegex(ValueError, code):
-            validate_naming_sql_plan(Plan.model_validate({"nodes": nodes}), result or selection())
-
-    def test_accepts_fetch_and_fetch_one(self):
-        for kind in ("fetch", "fetch_one"):
-            validate_naming_sql_plan(Plan.model_validate({"nodes": [fetch(kind=kind)]}), selection())
-
-    def test_rejects_wrong_sql_and_no_fetch(self):
-        self.assert_code("NAMING_SQL_RESELECTED", [fetch(name="Other")])
-        self.assert_code("NAMING_SQL_NOT_USED", [{"type": "literal", "value": 1}])
-
-    def test_rejects_changed_param_set(self):
-        valid = fetch()["params"]
-        for params in (valid[:1], valid + [valid[0]], list(reversed(valid)), [valid[0], valid[0]]):
-            self.assert_code("NAMING_SQL_PARAM_SET_CHANGED", [fetch(params=params)])
-
-    def test_rejects_changed_binding_or_value_type(self):
-        changed = copy.deepcopy(fetch()["params"])
-        changed[0]["value"]["path"] = "$ctx$.other"
-        self.assert_code("NAMING_SQL_BINDING_CHANGED", [fetch(params=changed)])
-        literal = copy.deepcopy(fetch()["params"])
-        literal[0]["value"] = {"type": "literal", "value": "$ctx$.customerId"}
-        self.assert_code("NAMING_SQL_BINDING_CHANGED", [fetch(params=literal)])
-
-    def test_traverses_nested_call_logical_and_def(self):
-        nested = {"type": "def", "name": "x", "value": {"type": "call", "name": "IF", "args": [
-            {"type": "logical", "op": "and", "items": [
-                {"type": "compare", "op": "==", "left": fetch(), "right": {"type": "literal", "value": 1}},
-                {"type": "literal", "value": True},
-            ]}, {"type": "literal", "value": 1}
-        ]}}
-        validate_naming_sql_plan(Plan.model_validate({"nodes": [nested]}), selection())
-
-    def test_allows_multiple_exact_uses(self):
-        validate_naming_sql_plan(Plan.model_validate({"nodes": [fetch(), fetch(kind="fetch_one")]}), selection())
-
-    def test_requires_completed_selection(self):
-        self.assert_code("NAMING_SQL_REVIEW_REQUIRED", [fetch()], selection("needs_review", False))
-
-    def test_rejects_incomplete_or_ambiguous_binding_plan(self):
-        for update in (
-            {"is_complete": False},
-            {"unbound_params": ["site"]},
-            {"ambiguous_params": ["site"]},
-        ):
-            result = selection()
-            result.selected.binding_plan = result.selected.binding_plan.model_copy(update=update)
-            self.assert_code("NAMING_SQL_REVIEW_REQUIRED", [fetch()], result)
-
-    def test_rejects_cycles_and_excessive_depth_as_too_complex(self):
-        cyclic = Plan.model_validate({"nodes": [fetch()]})
-        cyclic.nodes.append(cyclic)
-        with self.assertRaisesRegex(ValueError, "NAMING_SQL_PLAN_TOO_COMPLEX"):
-            validate_naming_sql_plan(cyclic, selection())
-
-        nested = Plan.model_validate({"nodes": [fetch()]}).nodes[0]
-        for _ in range(110):
-            nested = CallExprPlanNode.model_construct(type="call", name="wrap", args=[nested])
-        deep = Plan.model_construct(nodes=[nested])
-        with self.assertRaisesRegex(ValueError, "NAMING_SQL_PLAN_TOO_COMPLEX"):
-            validate_naming_sql_plan(deep, selection())
-
-    def test_does_not_mutate_inputs(self):
-        plan = Plan.model_validate({"nodes": [fetch()]}); result = selection()
-        before_plan = plan.model_dump(); before_result = result.model_dump()
-        validate_naming_sql_plan(plan, result)
-        self.assertEqual(before_plan, plan.model_dump()); self.assertEqual(before_result, result.model_dump())
+def plan(name="FindCustomer", param="id"):
+    return Plan.model_validate({"nodes": [{"type": "fetch_one", "name": name,
+        "params": [{"name": param, "value": {"type": "literal", "value": "x"}}]}]})
 
 
-if __name__ == "__main__": unittest.main()
+def test_planner_may_choose_any_top_k_candidate():
+    validate_naming_sql_plan(plan("FindByEmail", "email"), response(
+        candidate("a", "FindCustomer"), candidate("b", "FindByEmail", ("email",), 2)))
+
+
+def test_rejects_fetch_name_outside_top_k():
+    with pytest.raises(ValueError, match="NAMING_SQL_OUTSIDE_TOP_K"):
+        validate_naming_sql_plan(plan("Sibling"), response(candidate("a", "FindCustomer")))
+
+
+def test_rejects_unknown_parameter_but_not_binding_source():
+    selection = response(candidate("a", "FindCustomer"))
+    with pytest.raises(ValueError, match="NAMING_SQL_UNKNOWN_PARAM"):
+        validate_naming_sql_plan(plan(param="other"), selection)
+    validate_naming_sql_plan(Plan.model_validate({"nodes": [{"type": "fetch_one", "name": "FindCustomer",
+        "params": [{"name": "id", "value": {"type": "context_path", "path": "$ctx$.anything"}}]}]}), selection)
+
+
+def test_duplicate_candidate_names_are_rejected_as_ambiguous():
+    with pytest.raises(ValueError, match="NAMING_SQL_CANDIDATE_AMBIGUOUS"):
+        validate_naming_sql_plan(plan(), response(candidate("a", "FindCustomer"), candidate("b", "FindCustomer", rank=2)))

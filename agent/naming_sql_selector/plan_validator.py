@@ -4,64 +4,42 @@ from collections.abc import Iterator
 
 from pydantic import BaseModel
 
-from agent.naming_sql_selector.models import NamingSqlSelectionResult
-from agent.planner.models import (
-    ContextPathExprPlanNode,
-    FetchExprPlanNode,
-    FetchOneExprPlanNode,
-    Plan,
-)
+from agent.naming_sql_selector.models import NamingSqlSelectResponse
+from agent.planner.models import FetchExprPlanNode, FetchOneExprPlanNode, Plan
 
 MAX_PLAN_DEPTH = 100
 MAX_VISITED_NODES = 10_000
 
 
-def validate_naming_sql_selection_ready(result: NamingSqlSelectionResult | None) -> None:
-    selected = getattr(result, "selected", None)
-    if getattr(result, "status", None) != "selected" or selected is None:
-        raise ValueError("NAMING_SQL_REVIEW_REQUIRED")
-    binding_plan = selected.binding_plan
-    bindings = binding_plan.bindings
-    param_names = [binding.param_name.strip() for binding in bindings]
-    source_refs = [binding.source_ref.strip() for binding in bindings]
-    if (
-        not binding_plan.is_complete
-        or binding_plan.unbound_params
-        or binding_plan.ambiguous_params
-        or not selected.naming_sql_id.strip()
-        or not selected.sql_name.strip()
-        or any(not value for value in param_names)
-        or any(not value for value in source_refs)
-        or len(param_names) != len(set(param_names))
-    ):
-        raise ValueError("NAMING_SQL_REVIEW_REQUIRED")
-
-
-def validate_naming_sql_plan(plan: Plan, result: NamingSqlSelectionResult) -> None:
-    """Reject any planner mutation of an approved NamingSQL selection and bindings."""
-    validate_naming_sql_selection_ready(result)
-    selected = result.selected
-    assert selected is not None
-
-    expected = selected.binding_plan.bindings
-    fetches = [
-        node
-        for node in _walk(plan)
-        if isinstance(node, (FetchExprPlanNode, FetchOneExprPlanNode))
-    ]
+def validate_naming_sql_plan(plan: Plan, result: NamingSqlSelectResponse) -> None:
+    """Constrain fetch nodes to the request's authoritative Top-K candidates."""
+    if not result.success or not result.candidates:
+        raise ValueError("NAMING_SQL_SELECTION_FAILED")
+    fetches = [node for node in _walk(plan) if isinstance(node, (FetchExprPlanNode, FetchOneExprPlanNode))]
     if not fetches:
         raise ValueError("NAMING_SQL_NOT_USED")
 
+    by_name: dict[str, list] = {}
+    for candidate in result.candidates:
+        name = str(candidate.naming_sql_name or "").strip()
+        if name:
+            by_name.setdefault(name, []).append(candidate)
     for node in fetches:
-        if node.name != selected.sql_name:
-            raise ValueError(f"NAMING_SQL_RESELECTED name={_bounded(node.name)}")
+        matches = by_name.get(node.name, [])
+        if not matches:
+            raise ValueError(f"NAMING_SQL_OUTSIDE_TOP_K name={_bounded(node.name)}")
+        if len(matches) != 1:
+            raise ValueError(f"NAMING_SQL_CANDIDATE_AMBIGUOUS name={_bounded(node.name)}")
+        allowed_params = {
+            str(item.get("param_name") or item.get("name") or "").strip()
+            for item in matches[0].param_list if isinstance(item, dict)
+        }
         actual_names = [param.name for param in node.params]
-        expected_names = [binding.param_name for binding in expected]
-        if len(actual_names) != len(set(actual_names)) or actual_names != expected_names:
-            raise ValueError(f"NAMING_SQL_PARAM_SET_CHANGED params={_bounded(','.join(actual_names))}")
-        for param, binding in zip(node.params, expected):
-            if not isinstance(param.value, ContextPathExprPlanNode) or param.value.path != binding.source_ref:
-                raise ValueError(f"NAMING_SQL_BINDING_CHANGED param={_bounded(param.name)}")
+        if len(actual_names) != len(set(actual_names)):
+            raise ValueError(f"NAMING_SQL_UNKNOWN_PARAM name={_bounded(node.name)}")
+        unknown = next((name for name in actual_names if name not in allowed_params), None)
+        if unknown is not None:
+            raise ValueError(f"NAMING_SQL_UNKNOWN_PARAM name={_bounded(unknown)}")
 
 
 def _walk(value: object) -> Iterator[BaseModel]:
@@ -71,15 +49,13 @@ def _walk(value: object) -> Iterator[BaseModel]:
     while stack:
         current, depth, exiting = stack.pop()
         if exiting:
-            active.remove(id(current))
-            continue
+            active.remove(id(current)); continue
         if not isinstance(current, (BaseModel, list, tuple)):
             continue
         visited += 1
         if depth > MAX_PLAN_DEPTH or visited > MAX_VISITED_NODES or id(current) in active:
             raise ValueError("NAMING_SQL_PLAN_TOO_COMPLEX")
-        active.add(id(current))
-        stack.append((current, depth, True))
+        active.add(id(current)); stack.append((current, depth, True))
         if isinstance(current, BaseModel):
             yield current
             children = [getattr(current, name) for name in type(current).model_fields]
@@ -89,5 +65,4 @@ def _walk(value: object) -> Iterator[BaseModel]:
 
 
 def _bounded(value: str, limit: int = 80) -> str:
-    safe = "".join(ch if ch.isprintable() and ch not in "\r\n" else "?" for ch in str(value))
-    return safe[:limit]
+    return "".join(ch if ch.isprintable() and ch not in "\r\n" else "?" for ch in str(value))[:limit]

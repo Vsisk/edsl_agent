@@ -235,7 +235,8 @@ def test_forty_oversized_rows_keep_essential_facts_under_global_cap():
         candidate_aliases=aliases, reference_aliases={})
     assert len(visible) == 40 and len(text) <= renderer.max_total_chars
     for i in range(40):
-        assert all(value in text for value in (f"c{i:04d}", f"BO{i}", f"sql{i}", f"name{i}", f"p{i}", "string"))
+        assert all(value in text for value in (f"c{i:04d}", f"BO{i}", f"name{i}", f"p{i}", "string"))
+        assert f'"naming_sql_id":"sql{i}"' not in text
 
 
 def test_hint_evidence_unknown_alias_and_context_path_are_invalid():
@@ -267,3 +268,19 @@ def test_shared_reference_instance_retains_only_selected_occurrence():
         ReferenceCaseBlock(candidates=[shared]), ReferenceCaseBlock(candidates=[shared]))
     assert result.ootb_reference_cases.candidates == []
     assert result.site_knowledge_cases.candidates == [shared]
+
+
+def test_organizer_context_uses_alias_as_sole_candidate_identifier():
+    item = NamingSqlCandidate(candidate_id="DISTINCT-CANDIDATE-SECRET",
+        bo_name="InvoiceBO", naming_sql_id="DISTINCT-SQL-SECRET",
+        naming_sql_name="findInvoice", annotation="invoice lookup",
+        source="resource_registry", rank=0)
+    renderer = NamingSqlContextRenderer()
+    context = renderer.render(request=request(top_k=1), global_context=GlobalContextBlock(),
+        node_context=NodeContextBlock(json_path="$.x", node={}), logic_area_context=None,
+        resource_candidates=NamingSqlResourceCandidates(candidates=[item]),
+        ootb_reference_cases=ReferenceCaseBlock(), site_knowledge_cases=ReferenceCaseBlock(),
+        candidate_aliases={"c0000": item}, reference_aliases={})
+    assert "DISTINCT-CANDIDATE-SECRET" not in context
+    assert "DISTINCT-SQL-SECRET" not in context
+    assert "c0000" in context and "findInvoice" in context

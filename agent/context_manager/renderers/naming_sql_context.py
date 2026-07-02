@@ -72,7 +72,6 @@ class NamingSqlContextRenderer:
             params.append({"name": str(param.get("param_name") or param.get("name") or "")[:40],
                            "type": str(param.get("data_type_name") or param.get("data_type") or "")[:30]})
         return {"alias": alias, "bo_name": item.bo_name[:80],
-            "naming_sql_id": item.naming_sql_id[:80],
             "naming_sql_name": str(item.naming_sql_name or "")[:80],
             "annotation": str(item.annotation or "")[:100], "params": params,
             "return_summary": str(item.return_type or "")[:120],

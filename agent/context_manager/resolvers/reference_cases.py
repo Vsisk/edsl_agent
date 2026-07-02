@@ -5,6 +5,8 @@ import json
 from pathlib import Path
 from typing import Any, Literal
 
+from pydantic import ValidationError
+
 from agent.context_manager.errors import ContextBuildError, INVALID_LLM_OUTPUT
 from agent.context_manager.models import (
     BuildContextRequest,
@@ -52,7 +54,19 @@ class ReferenceCaseResolver:
         assets: list[ContextAsset] = []
         seen_ids: set[str] = set()
         for record in records:
-            asset = _to_asset(record, self.asset_type, self.path, request)
+            asset: ContextAsset | None = None
+            try:
+                _validate_record(record)
+                asset = _to_asset(record, self.asset_type, self.path, request)
+                _to_candidate(asset, 1, self.asset_type)
+            except (ValidationError, TypeError, ValueError):
+                evidence.append(_evidence(
+                    self.path,
+                    "record_skipped",
+                    "Schema-invalid reference-case record",
+                    asset.asset_id if asset is not None else f"{self.asset_type}:{_case_id(record)}",
+                ))
+                continue
             if asset.asset_id in seen_ids:
                 evidence.append(_evidence(self.path, "record_skipped", "Duplicate case ID", asset.asset_id))
                 continue
@@ -149,10 +163,7 @@ def _site_matches(record: dict[str, Any], request: BuildContextRequest) -> bool:
 
 
 def _to_asset(record: dict[str, Any], asset_type: ReferenceAssetType, path: Path, request: BuildContextRequest) -> ContextAsset:
-    case_id = str(record.get("case_id") or record.get("id") or "").strip()
-    if not case_id:
-        encoded = json.dumps(record, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
-        case_id = hashlib.sha256(encoded).hexdigest()[:20]
+    case_id = _case_id(record)
     site_id = record.get("site_id")
     project_id = record.get("project_id")
     scope = "site" if asset_type in {"site_knowledge", "history_case"} else "global"
@@ -170,6 +181,14 @@ def _to_asset(record: dict[str, Any], asset_type: ReferenceAssetType, path: Path
     )
 
 
+def _case_id(record: dict[str, Any]) -> str:
+    raw = record.get("case_id") or record.get("id")
+    if isinstance(raw, (str, int, float)) and str(raw).strip():
+        return str(raw).strip()
+    encoded = json.dumps(record, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()[:20]
+
+
 def _semantic_text(record: dict[str, Any]) -> str:
     keys = (
         "description", "node_pattern", "node_patterns", "logic_area", "logic_area_id",
@@ -183,6 +202,27 @@ def _semantic_text(record: dict[str, Any]) -> str:
                 if text and text not in parts:
                     parts.append(text)
     return "; ".join(parts)[:16_000]
+
+
+def _validate_record(record: dict[str, Any]) -> None:
+    for key in ("case_id", "id", "site_id", "project_id", "description", "source", "version"):
+        if key in record and record[key] is not None and not isinstance(record[key], (str, int, float)):
+            raise ValueError(f"invalid {key}")
+    for key, names in (
+        ("selected_bo", ("bo_name", "name", "id")),
+        ("selected_sql", ("naming_sql_id", "sql_id", "id", "sql_name", "name")),
+        ("naming_sql", ("naming_sql_id", "sql_id", "id", "sql_name", "name")),
+    ):
+        if key in record and record[key] is not None and _named(record[key], *names) is None:
+            raise ValueError(f"invalid {key}")
+    for key in ("param_list",):
+        value = record.get(key)
+        if value is not None and (not isinstance(value, list) or any(not isinstance(item, dict) for item in value)):
+            raise ValueError(f"invalid {key}")
+    for key in ("param_bindings", "bindings"):
+        value = record.get(key)
+        if value is not None and (not isinstance(value, (list, dict)) or isinstance(value, list) and any(not isinstance(item, dict) for item in value)):
+            raise ValueError(f"invalid {key}")
 
 
 def _texts(value: Any) -> list[str]:

@@ -254,7 +254,7 @@ def test_reference_jsonl_skips_bad_records_and_builds_semantic_candidate(tmp_pat
         "param_hints": {"accountId": "$ctx$.account"}, "bindings": [{"param": "accountId", "source": "$ctx$.account"}],
         "source": "curated", "evidence": ["manually verified"],
     }
-    path.write_bytes(b'{bad}\n[]\n' + json.dumps(valid).encode("utf-8") + b'\n' + b'x' * 70000 + b'\n')
+    path.write_bytes(b'{bad}\n[]\n\xff\xfe\n' + json.dumps(valid).encode("utf-8") + b'\n' + b'x' * 70000 + b'\n')
     before = deepcopy(valid)
 
     class Retriever:
@@ -270,8 +270,43 @@ def test_reference_jsonl_skips_bad_records_and_builds_semantic_candidate(tmp_pat
     assert item.candidate.param_list == [{"name": "accountId"}]
     assert item.candidate.retrieval_metadata["bindings"] == valid["bindings"]
     assert item.evidence[0].evidence == "manually verified"
-    assert sum(event.action == "record_skipped" for event in block.evidence_trace) == 3
+    assert sum(event.action == "record_skipped" for event in block.evidence_trace) == 4
     assert valid == before
+
+
+def test_reference_schema_invalid_object_is_skipped_without_losing_valid_case(tmp_path):
+    path = tmp_path / "mixed.jsonl"
+    invalid = {"case_id": "bad", "description": "sensitive customer wording", "selected_bo": "BO", "selected_sql": "sql.bad", "param_list": ["not-an-object"]}
+    wrong_selected_type = {"case_id": "bad-shape", "selected_bo": ["BO"], "selected_sql": {"sql_name": "query"}}
+    valid = {"case_id": "good", "description": "valid", "selected_bo": "BO", "selected_sql": "sql.good", "param_list": [{"name": "accountId"}]}
+    path.write_text("\n".join(json.dumps(item) for item in (invalid, wrong_selected_type, valid)) + "\n", encoding="utf-8")
+
+    class Retriever:
+        def retrieve(self, query, assets, semantic_limit=10): return assets
+    class Reranker:
+        def rerank(self, query, assets, context): return SimpleNamespace(selected_assets=assets, evidence_trace=[])
+
+    block = OOTBContextResolver(path, Retriever(), Reranker()).resolve(request(), {})
+    assert [item.asset.content["case_id"] for item in block.candidates] == ["good"]
+    skipped = [item for item in block.evidence_trace if item.action == "record_skipped"]
+    assert [item.asset_id for item in skipped] == ["ootb_case:bad", "ootb_case:bad-shape"]
+    assert invalid["description"] not in skipped[0].evidence
+
+
+@pytest.mark.parametrize("kind", ["unknown", "duplicate"])
+def test_reference_retriever_enforces_canonical_boundary(tmp_path, kind):
+    path = tmp_path / "cases.jsonl"
+    path.write_text('{"case_id":"one","description":"first"}\n{"case_id":"two","description":"second"}\n', encoding="utf-8")
+
+    class Retriever:
+        def retrieve(self, query, assets, semantic_limit=10):
+            if kind == "unknown":
+                return [assets[0].model_copy(update={"asset_id": "ootb_case:invented"})]
+            return [assets[0], assets[0]]
+
+    with pytest.raises(ContextBuildError) as exc:
+        OOTBContextResolver(path, Retriever()).resolve(request(), {})
+    assert exc.value.code == INVALID_LLM_OUTPUT
 
 
 @pytest.mark.parametrize("kind", ["unknown", "duplicate", "malformed"])

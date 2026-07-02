@@ -17,7 +17,7 @@ Create these focused modules:
 - `agent/context_manager/models/request.py`: context request and chain enum.
 - `agent/context_manager/models/assets.py`: normalized asset, candidate, and evidence models.
 - `agent/context_manager/models/context.py`: resolver blocks and internal selection context.
-- `agent/context_manager/llm/clients.py`: replaceable LLM and embedding protocols plus OpenAI-compatible clients.
+- `agent/context_manager/retrieval/embedding_client.py`: replaceable embedding protocol and OpenAI-compatible adapter.
 - `agent/context_manager/retrieval/lexical.py`: exact-match supplementation only.
 - `agent/context_manager/retrieval/semantic.py`: cosine-based embedding recall.
 - `agent/context_manager/retrieval/hybrid.py`: stable candidate union without final scoring.
@@ -142,11 +142,10 @@ git add agent/context_manager agent_rules tests/test_context_models.py
 git commit -m "feat: add context manager contracts"
 ```
 
-## Task 2: Add Replaceable AI Clients and Hybrid Recall
+## Task 2: Add the Embedding Adapter and Hybrid Recall
 
 **Files:**
-- Create: `agent/context_manager/llm/clients.py`
-- Create: `agent/context_manager/llm/__init__.py`
+- Create: `agent/context_manager/retrieval/embedding_client.py`
 - Create: `agent/context_manager/retrieval/lexical.py`
 - Create: `agent/context_manager/retrieval/semantic.py`
 - Create: `agent/context_manager/retrieval/hybrid.py`
@@ -182,20 +181,16 @@ Run: `python -m pytest tests/test_context_retrieval.py -q`
 
 Expected: FAIL because retrieval modules do not exist.
 
-- [ ] **Step 3: Implement client protocols and configuration**
+- [ ] **Step 3: Implement only the missing embedding protocol and configuration**
 
-Add `embedding_model` to `OpenAISettings`, loaded from `OPENAI_EMBEDDING_MODEL`. Implement protocols:
+Reuse `agent.llm.LLMClient`, `generate_by_llm`, `PromptManager`, and JSON post-processing unchanged for all LLM calls. Add `embedding_model` to `OpenAISettings`, loaded from `OPENAI_EMBEDDING_MODEL`, and implement only the missing embedding protocol:
 
 ```python
-class LLMClientProtocol(Protocol):
-    def complete_json(self, system_prompt: str, user_prompt: str,
-                      response_schema: type[BaseModel] | None = None) -> dict: ...
-
 class EmbeddingClientProtocol(Protocol):
     def embed_texts(self, texts: list[str]) -> list[list[float]]: ...
 ```
 
-The production implementations lazily create `OpenAI`, reject unusable settings with `ContextBuildError("AI_CONFIGURATION_REQUIRED")`, use JSON response format for LLM calls, and call `client.embeddings.create(model=settings.embedding_model, input=texts)` for embeddings.
+The production embedding adapter lazily creates `OpenAI`, rejects unusable settings with `ContextBuildError("AI_CONFIGURATION_REQUIRED")`, and calls `client.embeddings.create(model=settings.embedding_model, input=texts)`. Reranker and organizer tests inject fakes compatible with the existing `LLMClient.complete_json(prompt)` method.
 
 - [ ] **Step 4: Implement retrieval without aggregate final scoring**
 
@@ -210,8 +205,8 @@ Expected: PASS.
 - [ ] **Step 6: Commit AI boundaries and recall**
 
 ```bash
-git add agent/context_manager/llm agent/context_manager/retrieval agent/llm/config.py tests/test_context_retrieval.py
-git commit -m "feat: add semantic and lexical context recall"
+git add agent/context_manager/retrieval agent/llm/config.py tests/test_context_retrieval.py
+git commit -m "feat: add embedding context recall"
 ```
 
 ## Task 3: Build Semantic Assets and Resource Reranking
@@ -263,7 +258,7 @@ class LLMRerankOutput(BaseModel):
     evidence_trace: list[ContextEvidenceItem] = Field(default_factory=list)
 ```
 
-Render candidates with IDs and semantic summaries, call `complete_json`, validate the model, reject duplicate or unknown IDs, and return selected assets in the exact LLM order. Convert transport errors to `LLM_RERANK_FAILED` and contract errors to `INVALID_LLM_OUTPUT`.
+Render candidates with IDs and semantic summaries through the existing `PromptManager`, call the injected existing `LLMClient.complete_json(prompt)`, validate the model, reject duplicate or unknown IDs, and return selected assets in the exact LLM order. Convert transport errors to `LLM_RERANK_FAILED` and contract errors to `INVALID_LLM_OUTPUT`.
 
 - [ ] **Step 5: Add the reranker prompt**
 

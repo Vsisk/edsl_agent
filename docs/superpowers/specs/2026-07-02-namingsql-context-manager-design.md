@@ -61,7 +61,6 @@ agent/context_manager/
   manager/
   resolvers/
   retrieval/
-  llm/
   renderers/
   mock_data/
 
@@ -269,22 +268,16 @@ LLM prompts emphasize that the model is selecting context and Top-K NamingSQL ca
 
 ## AI Client Boundaries
 
-The feature introduces replaceable client protocols with production OpenAI-compatible implementations:
+The feature reuses the existing `agent.llm.LLMClient`, `generate_by_llm`, `PromptManager`, OpenAI settings, and JSON post-processing. Context Manager code must not introduce a second LLM module or duplicate transport/configuration logic. Reranker and organizer accept the existing client through dependency injection, and their prompts live in the existing `prompt.json`.
+
+Only embeddings require a new replaceable client because the repository has no embedding implementation:
 
 ```python
-class LLMClient:
-    def complete_json(
-        self,
-        system_prompt: str,
-        user_prompt: str,
-        response_schema: type[BaseModel] | None = None,
-    ) -> dict: ...
-
 class EmbeddingClient:
     def embed_texts(self, texts: list[str]) -> list[list[float]]: ...
 ```
 
-Production configuration uses `OPENAI_BASE_URL`, `OPENAI_API_KEY`, `OPENAI_MODEL`, and `OPENAI_EMBEDDING_MODEL`. Business logic depends on the protocols, not the OpenAI SDK. Unit tests inject deterministic fakes.
+The embedding adapter reuses existing base URL, API key, timeout, and settings loading, adding only `OPENAI_EMBEDDING_MODEL`. Unit tests inject the existing style of fake LLM client and a deterministic fake embedding client.
 
 ## Failure Semantics
 

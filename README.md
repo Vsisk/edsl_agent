@@ -13,3 +13,5 @@ recall, LLM reranking, and LLM organization. Global rules are loaded from
 `agent_rules/`; reference fixtures are loaded from
 `agent/context_manager/mock_data/`. Tests use injected fake embedding and LLM
 clients and do not require network access.
+
+完整的架构、扩展与排错说明见 [Context Manager 维护指南](agent/context_manager/README.md)。

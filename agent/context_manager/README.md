@@ -262,6 +262,17 @@ python -m pytest tests/test_value_logic_generator.py tests/test_llm_planner.py t
 python -m pytest -q
 ```
 
+本地 BGE-M3 环境与权重：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/setup_local_bge_m3.ps1
+.venv\Scripts\python.exe scripts\download_bge_m3.py --model-dir D:\models\bge-m3
+.venv\Scripts\python.exe scripts\configure_local_bge_m3.py --env-file .env
+.venv\Scripts\python.exe scripts\verify_bge_m3.py --model-dir D:\models\bge-m3 --device cuda
+```
+
+下载脚本固定官方 `BAAI/bge-m3` revision；权重存放在仓库外，不进入 Git。
+
 单元测试通过依赖注入使用 fake embedding、fake LLM、fake resolver 和 capturing manager，不需要网络。Fake LLM 应返回与生产相同的严格 JSON 结构；fake embedding 应保持输入与向量一一对应。
 
 ## 常见失败与排查

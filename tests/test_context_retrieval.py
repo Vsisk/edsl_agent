@@ -129,7 +129,7 @@ def test_lexical_matches_stable_id_and_nested_useful_names_in_original_order():
 
 
 def test_embedding_client_uses_settings_order_and_empty_short_circuit():
-    settings = OpenAISettings(True, "key", "https://example.test", "base", "vl", 7, "embed")
+    settings = OpenAISettings(True, "key", "https://example.test", "base", "vl", 7, "embed", "openai")
     client = EmbeddingClient(settings)
     calls = []
     client._client = SimpleNamespace(
@@ -145,12 +145,12 @@ def test_embedding_client_uses_settings_order_and_empty_short_circuit():
 
 
 def test_embedding_client_configuration_and_provider_failures_are_sanitized():
-    unusable = OpenAISettings(False, "secret", None, "base", "vl", 3)
+    unusable = OpenAISettings(False, "secret", None, "base", "vl", 3, embedding_provider="openai")
     with pytest.raises(ContextBuildError) as config_error:
         EmbeddingClient(unusable).embed_texts(["x"])
     assert config_error.value.code == AI_CONFIGURATION_REQUIRED
 
-    usable = OpenAISettings(True, "secret", None, "base", "vl", 3)
+    usable = OpenAISettings(True, "secret", None, "base", "vl", 3, embedding_provider="openai")
     client = EmbeddingClient(usable)
     client._client = SimpleNamespace(
         embeddings=SimpleNamespace(create=lambda **kwargs: (_ for _ in ()).throw(RuntimeError("secret leaked")))
@@ -162,7 +162,7 @@ def test_embedding_client_configuration_and_provider_failures_are_sanitized():
 
 
 def test_embedding_client_rejects_duplicate_response_indexes():
-    settings = OpenAISettings(True, "key", None, "base", "vl", 3)
+    settings = OpenAISettings(True, "key", None, "base", "vl", 3, embedding_provider="openai")
     client = EmbeddingClient(settings)
     client._client = SimpleNamespace(
         embeddings=SimpleNamespace(
@@ -178,7 +178,29 @@ def test_embedding_client_rejects_duplicate_response_indexes():
 
 def test_openai_settings_constructor_compatibility_and_embedding_env(tmp_path):
     legacy = OpenAISettings(True, "key", None, "base", "vl", 30)
-    assert legacy.embedding_model
+    assert legacy.embedding_model == "bge-m3"
+    assert legacy.embedding_provider == "local_bge_m3"
+    assert legacy.local_embedding_model_path == r"D:\models\bge-m3"
+    assert legacy.local_embedding_device == "cuda"
+    assert legacy.local_embedding_batch_size == 8
+    assert legacy.local_embedding_max_length == 4096
+    assert legacy.local_embedding_normalize is True
     env = tmp_path / ".env"
-    env.write_text("OPENAI_EMBEDDING_MODEL=custom-embed\n", encoding="utf-8")
-    assert load_openai_settings(env).embedding_model == "custom-embed"
+    env.write_text(
+        "OPENAI_EMBEDDING_MODEL=custom-embed\n"
+        "EMBEDDING_PROVIDER=openai\n"
+        "LOCAL_EMBEDDING_MODEL_PATH=X:\\models\\custom\n"
+        "LOCAL_EMBEDDING_DEVICE=cpu\n"
+        "LOCAL_EMBEDDING_BATCH_SIZE=3\n"
+        "LOCAL_EMBEDDING_MAX_LENGTH=512\n"
+        "LOCAL_EMBEDDING_NORMALIZE=false\n",
+        encoding="utf-8",
+    )
+    settings = load_openai_settings(env)
+    assert settings.embedding_model == "custom-embed"
+    assert settings.embedding_provider == "openai"
+    assert settings.local_embedding_model_path == r"X:\models\custom"
+    assert settings.local_embedding_device == "cpu"
+    assert settings.local_embedding_batch_size == 3
+    assert settings.local_embedding_max_length == 512
+    assert settings.local_embedding_normalize is False

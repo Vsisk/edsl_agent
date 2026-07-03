@@ -1,4 +1,4 @@
-from typing import Protocol
+from typing import Any, Protocol
 
 from openai import OpenAI
 
@@ -15,13 +15,23 @@ class EmbeddingClientProtocol(Protocol):
 
 
 class EmbeddingClient:
-    def __init__(self, settings: OpenAISettings | None = None) -> None:
+    def __init__(self, settings: OpenAISettings | None = None, provider: Any = None) -> None:
         self.settings = settings or load_openai_settings()
         self._client: OpenAI | None = None
+        self._provider = provider
 
     def embed_texts(self, texts: list[str]) -> list[list[float]]:
         if not texts:
             return []
+        provider = self.settings.embedding_provider.strip().lower()
+        if self._provider is not None:
+            return self._provider.embed_texts(texts)
+        if provider == "local_bge_m3":
+            from agent.context_manager.retrieval.local_bge_m3 import LocalBGEM3Provider
+            self._provider = LocalBGEM3Provider(self.settings)
+            return self._provider.embed_texts(texts)
+        if provider != "openai":
+            raise ContextBuildError(AI_CONFIGURATION_REQUIRED)
         if not self.settings.is_usable or not self.settings.embedding_model:
             raise ContextBuildError(AI_CONFIGURATION_REQUIRED)
         try:

@@ -1,0 +1,9 @@
+sentence-transformers==5.1.2
+transformers==4.57.3
+huggingface-hub==0.36.0
+safetensors==0.7.0
+numpy==2.3.5
+openai==2.36.0
+pydantic==2.13.4
+jsonpath-ng==1.8.0
+pytest==9.0.3

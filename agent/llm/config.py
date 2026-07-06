@@ -13,7 +13,13 @@ class OpenAISettings:
     base_model: str
     vl_model: str
     timeout_seconds: float
-    embedding_model: str = "text-embedding-3-small"
+    embedding_model: str = "bge-m3"
+    embedding_provider: str = "local_bge_m3"
+    local_embedding_model_path: str = r"D:\models\bge-m3"
+    local_embedding_device: str = "cuda"
+    local_embedding_batch_size: int = 8
+    local_embedding_max_length: int = 4096
+    local_embedding_normalize: bool = True
 
     @property
     def is_usable(self) -> bool:
@@ -41,7 +47,13 @@ def load_openai_settings(env_path: str | Path | None = None) -> OpenAISettings:
         base_model=base_model,
         vl_model=values.get("OPENAI_VL_MODEL", base_model),
         timeout_seconds=_as_float(values.get("OPENAI_TIMEOUT_SECONDS"), default=30.0),
-        embedding_model=values.get("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small"),
+        embedding_model=values.get("OPENAI_EMBEDDING_MODEL", "bge-m3"),
+        embedding_provider=values.get("EMBEDDING_PROVIDER", "local_bge_m3"),
+        local_embedding_model_path=values.get("LOCAL_EMBEDDING_MODEL_PATH", r"D:\models\bge-m3"),
+        local_embedding_device=values.get("LOCAL_EMBEDDING_DEVICE", "cuda"),
+        local_embedding_batch_size=_as_positive_int(values.get("LOCAL_EMBEDDING_BATCH_SIZE"), 8),
+        local_embedding_max_length=_as_positive_int(values.get("LOCAL_EMBEDDING_MAX_LENGTH"), 4096),
+        local_embedding_normalize=_as_bool(values.get("LOCAL_EMBEDDING_NORMALIZE", "true")),
     )
 
 
@@ -70,3 +82,13 @@ def _as_float(value: str | None, default: float) -> float:
         return float(value)
     except ValueError:
         return default
+
+
+def _as_positive_int(value: str | None, default: int) -> int:
+    if value is None:
+        return default
+    try:
+        parsed = int(value)
+    except ValueError:
+        return default
+    return parsed if parsed > 0 else default

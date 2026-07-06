@@ -55,7 +55,7 @@ def test_lazy_load_cache_and_encode_options(tmp_path):
     model, loads = FakeModel(), []
     def loader(path, device, fp16):
         loads.append((path, device, fp16)); return model
-    provider = LocalBGEM3Provider(settings(model_dir), loader)
+    provider = LocalBGEM3Provider(settings(model_dir), loader, cuda_available=lambda: True)
     assert provider.embed_texts(["中", "en"]) == [[1.0, 0.0], [0.0, 1.0]]
     assert provider.embed_texts(["again"]) == [[1.0, 0.0]]
     assert len(loads) == 1 and loads[0][1:] == ("cuda", True)
@@ -70,7 +70,7 @@ def test_process_cache_reused_across_concurrent_providers(tmp_path):
     def loader(*args):
         with lock: count[0] += 1
         return model
-    providers = [LocalBGEM3Provider(settings(model_dir), loader) for _ in range(8)]
+    providers = [LocalBGEM3Provider(settings(model_dir), loader, cuda_available=lambda: True) for _ in range(8)]
     with ThreadPoolExecutor(max_workers=8) as pool:
         results = list(pool.map(lambda p: p.embed_texts(["x"]), providers))
     assert results == [[[1.0]]] * 8
@@ -83,6 +83,30 @@ def test_cpu_requests_fp32_loader_mode(tmp_path):
         lambda path, device, fp16: calls.append((device, fp16)) or FakeModel([[1.0]]))
     provider.embed_texts(["x"])
     assert calls == [("cpu", False)]
+
+
+def test_configured_cuda_falls_back_to_cpu_fp32_when_cuda_is_unavailable(tmp_path):
+    model_dir = tmp_path / "model"; model_dir.mkdir(); calls = []
+    provider = LocalBGEM3Provider(
+        settings(model_dir, local_embedding_device="cuda"),
+        lambda path, device, fp16: calls.append((device, fp16)) or FakeModel([[1.0]]),
+        cuda_available=lambda: False,
+    )
+    assert provider.embed_texts(["x"]) == [[1.0]]
+    assert provider.effective_device == "cpu"
+    assert calls == [("cpu", False)]
+
+
+def test_cuda_loader_failure_does_not_retry_cpu(tmp_path):
+    model_dir = tmp_path / "model"; model_dir.mkdir(); calls = []
+    def loader(path, device, fp16):
+        calls.append((device, fp16))
+        raise RuntimeError("cuda allocation failed")
+    provider = LocalBGEM3Provider(settings(model_dir), loader, cuda_available=lambda: True)
+    with pytest.raises(ContextBuildError) as error:
+        provider.embed_texts(["x"])
+    assert error.value.code == EMBEDDING_FAILED
+    assert calls == [("cuda", True)]
 
 
 @pytest.mark.parametrize("device", ["auto", "gpu", ""])
@@ -102,7 +126,8 @@ def test_missing_model_path_is_configuration_error(tmp_path):
 @pytest.mark.parametrize("rows", [[], [[1.0]], [[1.0], [1.0, 2.0]], [[math.nan], [1.0]], [[True], [1.0]]])
 def test_invalid_outputs_are_embedding_failures(tmp_path, rows):
     model_dir = tmp_path / "model"; model_dir.mkdir()
-    provider = LocalBGEM3Provider(settings(model_dir), lambda *a: FakeModel(rows))
+    provider = LocalBGEM3Provider(settings(model_dir), lambda *a: FakeModel(rows),
+        cuda_available=lambda: True)
     with pytest.raises(ContextBuildError) as error:
         provider.embed_texts(["a", "b"])
     assert error.value.code == EMBEDDING_FAILED
@@ -111,7 +136,8 @@ def test_invalid_outputs_are_embedding_failures(tmp_path, rows):
 def test_loader_errors_are_sanitized(tmp_path):
     model_dir = tmp_path / "model"; model_dir.mkdir()
     provider = LocalBGEM3Provider(settings(model_dir),
-        lambda *a: (_ for _ in ()).throw(RuntimeError("secret path")))
+        lambda *a: (_ for _ in ()).throw(RuntimeError("secret path")),
+        cuda_available=lambda: True)
     with pytest.raises(ContextBuildError) as error:
         provider.embed_texts(["x"])
     assert error.value.code == EMBEDDING_FAILED

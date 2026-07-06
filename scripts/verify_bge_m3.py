@@ -26,7 +26,8 @@ def main() -> None:
         local_embedding_batch_size=2, local_embedding_max_length=4096,
         local_embedding_normalize=True,
     )
-    vectors = LocalBGEM3Provider(settings).embed_texts([
+    provider = LocalBGEM3Provider(settings)
+    vectors = provider.embed_texts([
         "查询当前账期费用", "Retrieve charges for the current billing cycle",
     ])
     if len(vectors) != 2 or any(len(vector) != 1024 for vector in vectors):
@@ -34,7 +35,8 @@ def main() -> None:
     norms = [math.sqrt(sum(value * value for value in vector)) for vector in vectors]
     if not all(math.isfinite(value) and abs(value - 1.0) < 1e-3 for value in norms):
         raise SystemExit(f"Embeddings are not finite normalized vectors: {norms}")
-    print(f"device={args.device} shape=(2, 1024) norms={[round(value, 6) for value in norms]}")
+    print(f"requested_device={args.device} effective_device={provider.effective_device} "
+          f"shape=(2, 1024) norms={[round(value, 6) for value in norms]}")
 
 
 if __name__ == "__main__":

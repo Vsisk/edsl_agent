@@ -9,6 +9,7 @@ from agent.context_manager.errors import AI_CONFIGURATION_REQUIRED, EMBEDDING_FA
 from agent.llm.config import OpenAISettings
 
 ModelLoader = Callable[[Path, str, bool], Any]
+CudaAvailable = Callable[[], bool]
 
 
 class LocalBGEM3Provider:
@@ -17,9 +18,11 @@ class LocalBGEM3Provider:
     _models: dict[tuple[str, str], Any] = {}
     _model_lock = threading.RLock()
 
-    def __init__(self, settings: OpenAISettings, model_loader: ModelLoader | None = None) -> None:
+    def __init__(self, settings: OpenAISettings, model_loader: ModelLoader | None = None,
+                 cuda_available: CudaAvailable | None = None) -> None:
         self.settings = settings
         self._model_loader = model_loader or _load_sentence_transformer
+        self._cuda_available = cuda_available or _torch_cuda_available
 
     def embed_texts(self, texts: list[str]) -> list[list[float]]:
         if not texts:
@@ -45,10 +48,16 @@ class LocalBGEM3Provider:
         model_path = Path(self.settings.local_embedding_model_path).expanduser()
         if not model_path.is_dir():
             raise ContextBuildError(AI_CONFIGURATION_REQUIRED)
-        device = self.settings.local_embedding_device.strip().lower()
-        if device not in {"cuda", "cpu"}:
+        requested_device = self.settings.local_embedding_device.strip().lower()
+        if requested_device not in {"cuda", "cpu"}:
             raise ContextBuildError(AI_CONFIGURATION_REQUIRED)
+        device = "cuda" if requested_device == "cuda" and self._cuda_available() else "cpu"
         return model_path.resolve(), device
+
+    @property
+    def effective_device(self) -> str:
+        """Return the device after applying CUDA availability fallback."""
+        return self._validated_configuration()[1]
 
     def _get_model(self, model_path: Path, device: str) -> Any:
         key = (str(model_path).casefold(), device)
@@ -81,6 +90,14 @@ def _load_sentence_transformer(model_path: Path, device: str, use_fp16: bool) ->
     model = SentenceTransformer(str(model_path), device=device)
     model.half() if use_fp16 else model.float()
     return model
+
+
+def _torch_cuda_available() -> bool:
+    try:
+        import torch
+        return bool(torch.cuda.is_available())
+    except Exception:
+        return False
 
 
 def _validated_vectors(output: Any, expected_count: int) -> list[list[float]]:

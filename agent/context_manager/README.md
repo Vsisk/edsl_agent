@@ -190,6 +190,8 @@ LOCAL_EMBEDDING_NORMALIZE=true
 
 LLM 调用复用现有 `agent.llm.LLMClient`、`PromptManager` 和 `prompt.json`。默认 embedding provider 在主进程内懒加载本地 BGE-M3，不使用 `OPENAI_BASE_URL`；设置 `EMBEDDING_PROVIDER=openai` 可显式切回现有远程 adapter。
 
+当 `LOCAL_EMBEDDING_DEVICE=cuda` 但运行时检测不到 CUDA 时，provider 会自动使用 CPU + FP32 启动。该回退只覆盖“CUDA 不可用”；CUDA 权重加载、显存不足或推理失败仍返回 `EMBEDDING_FAILED`，不会静默重试 CPU。
+
 生产集成通常不需要手工组装依赖。`ValueLogicGenerator` 默认按当前资源快照创建 Selector：
 
 ```python

@@ -1,6 +1,11 @@
 import pytest
 
-from agent.expression_generation.type_system import TypeRef, normalize_return_type
+from agent.expression_generation.type_system import (
+    TypeDef,
+    TypeRef,
+    TypeRegistry,
+    normalize_return_type,
+)
 from agent.resource_manager.loader.registry_models import ReturnType
 
 
@@ -49,3 +54,17 @@ def test_normalize_return_type_accepts_existing_resource_model():
 def test_normalize_return_type_returns_unknown_for_missing_metadata():
     assert normalize_return_type(None) == TypeRef(kind="unknown")
 
+
+def test_type_registry_resolves_registered_bo_field():
+    owner_type = TypeRef(kind="bo", name="BB_BILL_CHARGE")
+    charge_amount_type = TypeRef(kind="basic", name="decimal")
+    registry = TypeRegistry()
+    registry.register_type(
+        TypeDef(
+            owner_type=owner_type,
+            fields={"CHARGE_AMT": charge_amount_type},
+        )
+    )
+
+    assert registry.resolve_field(owner_type, "CHARGE_AMT") == charge_amount_type
+    assert registry.resolve_field(owner_type, "MISSING") is None

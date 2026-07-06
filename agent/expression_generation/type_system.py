@@ -26,6 +26,25 @@ class TypeRef(BaseModel):
 TypeRef.model_rebuild()
 
 
+class TypeDef(BaseModel):
+    owner_type: TypeRef
+    fields: dict[str, TypeRef]
+
+
+class TypeRegistry:
+    def __init__(self) -> None:
+        self._types: dict[tuple[Any, ...], TypeDef] = {}
+
+    def register_type(self, type_def: TypeDef) -> None:
+        self._types[_type_key(type_def.owner_type)] = type_def
+
+    def resolve_field(self, owner_type: TypeRef, field_name: str) -> TypeRef | None:
+        type_def = self._types.get(_type_key(owner_type))
+        if type_def is None:
+            return None
+        return type_def.fields.get(field_name)
+
+
 def normalize_return_type(raw_return_type: Any) -> TypeRef:
     if raw_return_type is None:
         return TypeRef(kind="unknown")
@@ -57,3 +76,15 @@ def _read_value(raw: Any, field_name: str) -> Any:
         return raw.get(field_name)
     return getattr(raw, field_name, None)
 
+
+def _type_key(type_ref: TypeRef | None) -> tuple[Any, ...] | None:
+    if type_ref is None:
+        return None
+    return (
+        type_ref.kind,
+        type_ref.name,
+        _type_key(type_ref.element_type),
+        _type_key(type_ref.key_type),
+        _type_key(type_ref.value_type),
+        type_ref.nullable,
+    )

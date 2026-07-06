@@ -59,6 +59,8 @@ The local provider:
 
 - validates that the configured model directory exists;
 - selects CUDA only when available and explicitly requested;
+- when `cuda` is configured but `torch.cuda.is_available()` is false, resolves the
+  effective device to CPU and loads FP32 automatically;
 - loads the model lazily on the first non-empty request;
 - maintains one process-wide model instance per canonical `(model_path, device)` key;
 - uses FP16 on CUDA and FP32 on CPU;
@@ -68,6 +70,11 @@ The local provider:
 - returns an empty list for empty input without loading the model.
 
 The model cache must be lock-protected so concurrent first requests do not load duplicate GPU copies. Tests must be able to inject a fake model loader without importing or loading PyTorch weights.
+
+CUDA fallback is deliberately narrow. CUDA model-load failures, allocation errors,
+out-of-memory errors, and inference failures remain `EMBEDDING_FAILED`; they do not
+trigger a second CPU load. This keeps genuine GPU/driver faults visible instead of
+silently changing latency and capacity characteristics.
 
 ## Failure Behavior
 

@@ -1,0 +1,273 @@
+from __future__ import annotations
+
+from typing import Any
+
+from pydantic import BaseModel, ConfigDict, Field, SkipValidation
+
+from agent.environment.environment import FilteredEnvironment
+from agent.expression_generation.type_system import (
+    MethodRegistry,
+    ResolvedMethod,
+    TypeDef,
+    TypeRef,
+    TypeRegistry,
+    normalize_return_type,
+)
+from agent.models import NodeDef
+from agent.naming_sql_selector.models import NamingSqlSelectResponse
+from agent.resource_manager.loader.registry_models import BoRegistry
+from agent.resource_manager.loader.resource_loader import LoadedResource
+
+
+class TypedAccessView(BaseModel):
+    access: str
+    return_type: str
+    methods: list[str] = Field(default_factory=list)
+
+
+class TypedRootValue(BaseModel):
+    expr: str
+    source_type: str
+    return_type: str
+    methods: list[str] = Field(default_factory=list)
+    fields: list[TypedAccessView] = Field(default_factory=list)
+
+
+class TypedVarTemplate(BaseModel):
+    var_name: str
+    definition_expr: str
+    return_type: str
+    available_fields: list[TypedAccessView] = Field(default_factory=list)
+
+
+class TypedMethodView(BaseModel):
+    owner_type: str
+    methods: list[str] = Field(default_factory=list)
+
+
+class TypedExpressionPattern(BaseModel):
+    name: str
+    expression: str
+
+
+class TypedExpressionContext(BaseModel):
+    root_values: list[TypedRootValue] = Field(default_factory=list)
+    var_templates: list[TypedVarTemplate] = Field(default_factory=list)
+    method_catalog: list[TypedMethodView] = Field(default_factory=list)
+    expression_patterns: list[TypedExpressionPattern] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+
+class TypedExpressionContextBuildInput(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    query: str
+    node: NodeDef
+    filtered_env: SkipValidation[FilteredEnvironment]
+    loaded_resource: SkipValidation[LoadedResource]
+    type_registry: TypeRegistry
+    method_registry: MethodRegistry
+    max_items: int = Field(default=80, ge=1)
+
+
+TypedExpressionContextBuildInput.model_rebuild(
+    _types_namespace={"NamingSqlSelectResponse": NamingSqlSelectResponse}
+)
+
+
+class TypedExpressionContextBuilder:
+    def build(self, build_input: TypedExpressionContextBuildInput) -> TypedExpressionContext:
+        self._input = build_input
+        self._warnings: list[str] = []
+        self._method_catalog: dict[str, list[str]] = {}
+        self._register_selected_bos()
+
+        roots: list[TypedRootValue] = []
+        for resource in build_input.filtered_env.selected_global_contexts:
+            self._append_context_root(roots, resource, "context")
+        for resource in build_input.filtered_env.visible_local_context:
+            self._append_context_root(roots, resource, "local_context")
+        for resource in build_input.filtered_env.selected_functions:
+            self._append_function_root(roots, resource)
+
+        var_templates = self._build_naming_sql_templates()
+        return TypedExpressionContext(
+            root_values=roots,
+            var_templates=var_templates,
+            method_catalog=[
+                TypedMethodView(owner_type=owner, methods=methods)
+                for owner, methods in self._method_catalog.items()
+            ],
+            expression_patterns=self._build_patterns(var_templates),
+            warnings=self._warnings,
+        )
+
+    def _register_selected_bos(self) -> None:
+        bos: dict[str, BoRegistry] = {
+            bo.bo_name: self._resolve_bo(bo.bo_name) or bo
+            for bo in self._input.filtered_env.selected_bos
+        }
+        selection = self._input.filtered_env.naming_sql_selection
+        if selection is not None:
+            for candidate in selection.candidates:
+                bo = self._resolve_bo(candidate.bo_name)
+                if bo is not None:
+                    bos[bo.bo_name] = bo
+        for bo in bos.values():
+            fields = {
+                prop.field_name: normalize_return_type(prop)
+                for prop in bo.property_list
+            }
+            fields = {name: type_ref for name, type_ref in fields.items() if type_ref.kind != "unknown"}
+            self._input.type_registry.register_type(
+                TypeDef(
+                    owner_type=TypeRef(kind="bo", name=bo.bo_name),
+                    fields=fields,
+                )
+            )
+
+    def _append_context_root(self, roots: list[TypedRootValue], resource: Any, source_type: str) -> None:
+        authoritative = self._resolve_context(resource.context_name) or resource
+        type_ref = normalize_return_type(getattr(authoritative, "return_type", None))
+        if type_ref.kind == "unknown":
+            self._warnings.append(f"missing return_type for context {resource.context_name}")
+            return
+        roots.append(self._root(resource.context_name, source_type, type_ref))
+
+    def _append_function_root(self, roots: list[TypedRootValue], resource: Any) -> None:
+        authoritative = self._resolve_function(resource) or resource
+        type_ref = normalize_return_type(getattr(authoritative, "return_type", None))
+        name = ".".join(
+            part for part in (authoritative.func_class, authoritative.func_name) if part
+        )
+        if type_ref.kind == "unknown":
+            self._warnings.append(f"missing return_type for function {name}")
+            return
+        roots.append(self._root(name, "function", type_ref))
+
+    def _root(self, expr: str, source_type: str, type_ref: TypeRef) -> TypedRootValue:
+        methods = self._methods(type_ref)
+        return TypedRootValue(
+            expr=expr,
+            source_type=source_type,
+            return_type=render_type(type_ref),
+            methods=methods,
+            fields=self._expand_fields(expr, type_ref, set()),
+        )
+
+    def _expand_fields(
+        self,
+        prefix: str,
+        owner_type: TypeRef,
+        path_types: set[tuple[Any, ...]],
+    ) -> list[TypedAccessView]:
+        if owner_type.kind not in {"bo", "logic", "extattr"}:
+            return []
+        key = type_identity(owner_type)
+        if key in path_types:
+            return []
+        nested_path = {*path_types, key}
+        result: list[TypedAccessView] = []
+        for field_name, field_type in self._input.type_registry.resolve_fields(owner_type).items():
+            access = f"{prefix}.{field_name}"
+            result.append(
+                TypedAccessView(
+                    access=access,
+                    return_type=render_type(field_type),
+                    methods=self._methods(field_type),
+                )
+            )
+            result.extend(self._expand_fields(access, field_type, nested_path))
+        return result
+
+    def _methods(self, owner_type: TypeRef) -> list[str]:
+        signatures = [render_method(method) for method in self._input.method_registry.methods_for(owner_type)]
+        if signatures:
+            owner = render_type(owner_type)
+            catalog = self._method_catalog.setdefault(owner, [])
+            for signature in signatures:
+                if signature not in catalog:
+                    catalog.append(signature)
+        return signatures
+
+    def _build_naming_sql_templates(self) -> list[TypedVarTemplate]:
+        selection = self._input.filtered_env.naming_sql_selection
+        if selection is None:
+            return []
+        templates: list[TypedVarTemplate] = []
+        for candidate in selection.candidates:
+            bo = self._resolve_bo(candidate.bo_name)
+            type_ref = normalize_return_type(candidate.return_type)
+            if bo is None or type_ref.kind == "unknown":
+                self._warnings.append(
+                    f"missing return_type for naming_sql {candidate.naming_sql_id}"
+                )
+                continue
+            definition_name = candidate.naming_sql_name or candidate.naming_sql_id
+            templates.append(
+                TypedVarTemplate(
+                    var_name="it",
+                    definition_expr=f"fetch_one({definition_name})",
+                    return_type=render_type(type_ref),
+                    available_fields=self._expand_fields("it", type_ref, set()),
+                )
+            )
+        return templates
+
+    def _build_patterns(
+        self,
+        templates: list[TypedVarTemplate],
+    ) -> list[TypedExpressionPattern]:
+        return [
+            TypedExpressionPattern(
+                name="naming_sql_fetch_one",
+                expression=template.definition_expr,
+            )
+            for template in templates
+        ]
+
+    def _resolve_context(self, context_name: str) -> Any | None:
+        return self._input.loaded_resource.context_registry.get(context_name)
+
+    def _resolve_bo(self, bo_name: str) -> BoRegistry | None:
+        return self._input.loaded_resource.bo_registry.get(bo_name)
+
+    def _resolve_function(self, resource: Any) -> Any | None:
+        for candidate in self._input.loaded_resource.function_registry.values():
+            if (
+                candidate.resource_id == resource.resource_id
+                or (
+                    candidate.func_class == resource.func_class
+                    and candidate.func_name == resource.func_name
+                )
+            ):
+                return candidate
+        return None
+
+
+def render_type(type_ref: TypeRef) -> str:
+    if type_ref.kind in {"basic", "bo", "logic", "extattr"}:
+        return f"{type_ref.kind}.{type_ref.name}"
+    if type_ref.kind == "list" and type_ref.element_type is not None:
+        return f"List<{render_type(type_ref.element_type)}>"
+    if type_ref.kind == "map" and type_ref.key_type is not None and type_ref.value_type is not None:
+        return f"Map<{render_type(type_ref.key_type)},{render_type(type_ref.value_type)}>"
+    return type_ref.kind
+
+
+def render_method(method: ResolvedMethod) -> str:
+    args = []
+    for index, arg_type in enumerate(method.arg_types):
+        name = method.arg_names[index] if index < len(method.arg_names) else f"arg{index + 1}"
+        args.append(f"{render_type(arg_type)} {name}")
+    return f"{method.name}({', '.join(args)}): {render_type(method.return_type)}"
+
+
+def type_identity(type_ref: TypeRef) -> tuple[Any, ...]:
+    return (
+        type_ref.kind,
+        type_ref.name,
+        type_identity(type_ref.element_type) if type_ref.element_type else None,
+        type_identity(type_ref.key_type) if type_ref.key_type else None,
+        type_identity(type_ref.value_type) if type_ref.value_type else None,
+    )

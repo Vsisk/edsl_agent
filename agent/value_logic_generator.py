@@ -11,6 +11,15 @@ from agent.environment.resource_filter import LLMResourceFilter, ResourceFilterT
 from agent.expression_generation.ast.builder import build_ast
 from agent.expression_generation.ast.generator import generate_expression
 from agent.expression_generation.ast.validator import validate_ast
+from agent.expression_generation.type_system import (
+    MethodRegistry,
+    TypeRegistry,
+    create_builtin_method_registry,
+)
+from agent.expression_generation.typed_context import (
+    TypedExpressionContextBuildInput,
+    TypedExpressionContextBuilder,
+)
 from agent.models import NodeDef, ValueLogicRequest, ValueLogicResult, ValueLogicSource
 from agent.naming_sql_selector import (
     NamingSqlSelectRequest,
@@ -65,6 +74,9 @@ class ValueLogicGenerator:
         resource_filter_target_generator: Any | None = None,
         enable_legacy_filter_fallback: bool = False,
         naming_sql_selector_factory: Callable[[LoadedResource], NamingSqlSelector] | None = None,
+        typed_expression_context_builder: Any | None = None,
+        type_registry: TypeRegistry | None = None,
+        method_registry: MethodRegistry | None = None,
     ):
         self.resource_loader = resource_loader or default_resource_loader
         self.llm_resource_filter = llm_resource_filter or LLMResourceFilter()
@@ -74,6 +86,11 @@ class ValueLogicGenerator:
         self.resource_filter_target_generator = resource_filter_target_generator or ResourceFilterTargetGenerator()
         self.enable_legacy_filter_fallback = enable_legacy_filter_fallback
         self.naming_sql_selector_factory = naming_sql_selector_factory or _default_naming_sql_selector_factory
+        self.typed_expression_context_builder = (
+            typed_expression_context_builder or TypedExpressionContextBuilder()
+        )
+        self.type_registry = type_registry or TypeRegistry()
+        self.method_registry = method_registry or create_builtin_method_registry()
 
     def generate(self, request: ValueLogicRequest) -> ValueLogicResult:
         resources = ResourceContext(
@@ -240,10 +257,21 @@ class ValueLogicGenerator:
                 raise ValueError("NAMING_SQL_SELECTION_FAILED")
             naming_sql_selection = selector_result.model_copy(deep=True)
             filtered_env.naming_sql_selection = naming_sql_selection.model_copy(deep=True)
+        typed_context = self.typed_expression_context_builder.build(
+            TypedExpressionContextBuildInput(
+                query=expression_spec.nl,
+                node=node_info,
+                filtered_env=filtered_env,
+                loaded_resource=ctx.resources.loaded,
+                type_registry=self.type_registry,
+                method_registry=self.method_registry,
+            )
+        )
         plan = self.llm_planner.plan(
             node_info=node_info,
             user_query=request.query,
             filtered_env=filtered_env,
+            typed_context=typed_context,
         )
         if naming_sql_selection is not None:
             validate_naming_sql_plan(plan, naming_sql_selection)

@@ -4,6 +4,14 @@ import json
 from pydantic import ValidationError
 
 from agent.environment.environment import FilteredEnvironment
+from agent.expression_generation.typed_context import (
+    TypedAccessView,
+    TypedExpressionContext,
+    TypedExpressionPattern,
+    TypedMethodView,
+    TypedRootValue,
+    TypedVarTemplate,
+)
 from agent.llm.prompt_manager import prompt_manager
 from agent.models import NodeDef
 from agent.planner.llm_planner import (
@@ -46,14 +54,15 @@ class LLMPlannerTest(unittest.TestCase):
             "planner": {
                 "zh": (
                     "planner {{user_requirement}} {{node_info_json}} RESOURCES:"
-                    "{{resources_json}} SCHEMA:{{plan_schema_json}}"
+                    "{{resources_json}} SCHEMA:{{plan_schema_json}} "
+                    "TYPED:{{typed_context_json}}"
                 )
             },
             "planner_repair": {
                 "zh": (
                     "repair {{user_requirement}} {{node_info_json}} "
                     "{{resources_json}} {{plan_schema_json}} "
-                    "{{invalid_plan_json}} {{error_message}}"
+                    "{{invalid_plan_json}} {{error_message}} {{typed_context_json}}"
                 )
             },
         }
@@ -86,6 +95,61 @@ class LLMPlannerTest(unittest.TestCase):
         self.assertIsInstance(plan, Plan)
         self.assertIsInstance(plan.nodes[0], ReturnExprPlanNode)
         self.assertIn("$ctx$.prepareId", client.calls[0]["prompt"])
+
+    def test_plan_prompt_includes_typed_expression_context_without_changing_plan(self):
+        client = FakeClient(
+            ['{"nodes":[{"type":"return","value":{"type":"literal","value":"ok"}}]}']
+        )
+        typed_context = TypedExpressionContext(
+            root_values=[
+                TypedRootValue(
+                    expr="$ctx$.address",
+                    source_type="context",
+                    return_type="logic.Address",
+                    fields=[
+                        TypedAccessView(
+                            access="$ctx$.address.addr1",
+                            return_type="basic.String",
+                            methods=["length(): basic.int"],
+                        )
+                    ],
+                )
+            ],
+            var_templates=[
+                TypedVarTemplate(
+                    var_name="it",
+                    definition_expr="fetch_one(E_QUERY_CHARGE)",
+                    return_type="bo.BB_BILL_CHARGE",
+                )
+            ],
+            method_catalog=[
+                TypedMethodView(
+                    owner_type="basic.String",
+                    methods=["length(): basic.int"],
+                )
+            ],
+            expression_patterns=[
+                TypedExpressionPattern(
+                    name="naming_sql_fetch_one",
+                    expression="fetch_one(E_QUERY_CHARGE)",
+                )
+            ],
+        )
+
+        plan = LLMPlanner(client=client).plan(
+            node_info=_node_info(),
+            user_query="address",
+            filtered_env=FilteredEnvironment(),
+            typed_context=typed_context,
+        )
+
+        prompt = client.calls[0]["prompt"]
+        self.assertIsInstance(plan, Plan)
+        self.assertIn('"Root Values"', prompt)
+        self.assertIn('"Suggested Vars"', prompt)
+        self.assertIn('"Available Methods by Type"', prompt)
+        self.assertIn('"Expression Patterns"', prompt)
+        self.assertIn("$ctx$.address.addr1", prompt)
 
     def test_plan_exposes_function_resource_name_as_class_qualified_call_name(self):
         client = FakeClient(

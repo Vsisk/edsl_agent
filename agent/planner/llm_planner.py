@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any
 from pydantic import ValidationError
 
 from agent.environment.environment import FilteredEnvironment
+from agent.expression_generation.typed_context import TypedExpressionContext
 from agent.llm.generate_by_llm import generate_by_llm
 from agent.llm.llm_client import LLMClient
 from agent.models import NodeDef
@@ -28,6 +29,7 @@ MAX_SELECTION_EVIDENCE_ITEMS = 20
 MAX_SELECTION_EVIDENCE_SOURCE = 128
 MAX_SELECTION_EVIDENCE_ACTION = 128
 MAX_SELECTION_EVIDENCE_TEXT = 512
+MAX_TYPED_CONTEXT_JSON_CHARS = 60_000
 
 
 class LLMPlanner:
@@ -44,11 +46,13 @@ class LLMPlanner:
         node_info: NodeDef,
         user_query: str,
         filtered_env: FilteredEnvironment,
+        typed_context: TypedExpressionContext | None = None,
     ) -> Plan:
         if not self.is_usable:
             raise RuntimeError("LLM planner is not usable")
 
         resources_json = _summarize_filtered_environment_json(filtered_env)
+        typed_context_json = _summarize_typed_context_json(typed_context)
         node_info_json = _dump_json(_summarize_node(node_info))
         plan_schema_json = _dump_json(PLAN_SCHEMA)
 
@@ -61,6 +65,7 @@ class LLMPlanner:
                 user_requirement=user_query,
                 node_info_json=node_info_json,
                 resources_json=resources_json,
+                typed_context_json=typed_context_json,
                 plan_schema_json=plan_schema_json,
             )
             plan = Plan.model_validate(response)
@@ -73,6 +78,7 @@ class LLMPlanner:
                 node_info=node_info,
                 user_query=user_query,
                 resources_json=resources_json,
+                typed_context_json=typed_context_json,
                 node_info_json=node_info_json,
                 plan_schema_json=plan_schema_json,
                 invalid_plan_json=invalid_plan_json,
@@ -86,6 +92,7 @@ class LLMPlanner:
         node_info: NodeDef,
         user_query: str,
         resources_json: str,
+        typed_context_json: str,
         node_info_json: str,
         plan_schema_json: str,
         invalid_plan_json: str,
@@ -100,6 +107,7 @@ class LLMPlanner:
             user_requirement=user_query,
             node_info_json=node_info_json,
             resources_json=resources_json,
+            typed_context_json=typed_context_json,
             plan_schema_json=plan_schema_json,
             invalid_plan_json=invalid_plan_json,
             error_message=error_message,
@@ -151,6 +159,43 @@ def _summarize_filtered_environment(filtered_env: FilteredEnvironment) -> dict[s
 
 def _summarize_filtered_environment_json(filtered_env: FilteredEnvironment) -> str:
     return _dump_json(_summarize_filtered_environment(filtered_env))
+
+
+def _summarize_typed_context_json(
+    typed_context: TypedExpressionContext | None,
+) -> str:
+    context = typed_context or TypedExpressionContext()
+    value = {
+        "Root Values": context.root_values,
+        "Suggested Vars": context.var_templates,
+        "Available Methods by Type": context.method_catalog,
+        "Expression Patterns": context.expression_patterns,
+        "Warnings": context.warnings,
+    }
+    rendered = _dump_json(_bounded_typed_value(value))
+    if len(rendered) > MAX_TYPED_CONTEXT_JSON_CHARS:
+        raise ValueError("TYPED_EXPRESSION_CONTEXT_TOO_LARGE")
+    return rendered
+
+
+def _bounded_typed_value(value: Any, depth: int = 0) -> Any:
+    if depth >= 8:
+        return None
+    if hasattr(value, "model_dump"):
+        value = value.model_dump(mode="python")
+    if isinstance(value, str):
+        return _summary_text(value)
+    if isinstance(value, dict):
+        return {
+            _summary_text(key): _bounded_typed_value(item, depth + 1)
+            for key, item in list(value.items())[:MAX_SUMMARY_ITEMS]
+        }
+    if isinstance(value, list):
+        return [
+            _bounded_typed_value(item, depth + 1)
+            for item in value[:MAX_SUMMARY_ITEMS]
+        ]
+    return value if isinstance(value, (int, float, bool)) or value is None else _summary_text(value)
 
 
 def _summarize_naming_sql_selection(selection: Any) -> dict[str, Any]:

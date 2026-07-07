@@ -130,6 +130,43 @@ def test_builder_uses_it_for_naming_sql_owning_bo_fields():
     assert charge_amount.methods == ["long2str(): basic.String"]
 
 
+def test_builder_binds_naming_sql_condition_from_owning_bo_field():
+    bo = charge_bo()
+    context_value = ContextRegistry(
+        resource_id="ctx.charge_amount",
+        context_name="$ctx$.chargeAmt",
+        return_type=ReturnType(data_type="basic", data_type_name="long"),
+        property_type="system",
+        annotation="charge amount",
+    )
+    candidate = NamingSqlCandidate(
+        candidate_id="candidate.bound",
+        bo_name=bo.bo_name,
+        naming_sql_id="E_QUERY_CHARGE",
+        naming_sql_name="E_QUERY_CHARGE",
+        param_list=[{"param_name": "CHARGE_AMT", "data_type_name": "long"}],
+        return_type={"data_type": "bo", "data_type_name": bo.bo_name, "is_list": False},
+        source="resource_registry",
+        rank=0,
+    )
+    selection = NamingSqlSelectResponse(success=True, candidates=[candidate])
+
+    result = TypedExpressionContextBuilder().build(
+        build_input(
+            filtered_env=FilteredEnvironment(
+                selected_global_contexts=[context_value],
+                selected_bos=[bo],
+                naming_sql_selection=selection,
+            ),
+            loaded=loaded_resource(contexts=[context_value], bos=[bo]),
+        )
+    )
+
+    assert result.var_templates[0].definition_expr == (
+        "fetch_one(E_QUERY_CHARGE, pair(it.CHARGE_AMT, $ctx$.chargeAmt))"
+    )
+
+
 def test_builder_warns_and_skips_context_without_return_type():
     context = ContextRegistry.model_construct(
         resource_id="ctx.invalid",

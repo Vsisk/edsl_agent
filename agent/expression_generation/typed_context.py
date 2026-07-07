@@ -241,15 +241,60 @@ class TypedExpressionContextBuilder:
                 )
                 continue
             definition_name = candidate.naming_sql_name or candidate.naming_sql_id
+            definition_expr = self._naming_sql_definition(candidate, bo, definition_name)
             templates.append(
                 TypedVarTemplate(
                     var_name="it",
-                    definition_expr=f"fetch_one({definition_name})",
+                    definition_expr=definition_expr,
                     return_type=render_type(type_ref),
                     available_fields=self._expand_fields("it", type_ref, set()),
                 )
             )
         return templates
+
+    def _naming_sql_definition(
+        self,
+        candidate: Any,
+        bo: BoRegistry,
+        definition_name: str,
+    ) -> str:
+        pairs: list[str] = []
+        bo_fields = {
+            _normalized_name(prop.field_name): prop.field_name
+            for prop in bo.property_list
+        }
+        context_paths = [
+            resource.context_name
+            for resource in [
+                *self._input.filtered_env.selected_global_contexts,
+                *self._input.filtered_env.visible_local_context,
+            ]
+        ]
+        contexts_by_name = {
+            _normalized_name(path.rsplit(".", 1)[-1]): path
+            for path in context_paths
+        }
+        for parameter in candidate.param_list:
+            if not isinstance(parameter, dict):
+                continue
+            param_name = str(parameter.get("param_name") or parameter.get("name") or "")
+            normalized = _normalized_name(param_name)
+            bo_field = bo_fields.get(normalized)
+            if bo_field is None:
+                self._warnings.append(
+                    f"unbound naming_sql BO field {candidate.naming_sql_id}.{param_name}"
+                )
+                continue
+            context_path = contexts_by_name.get(normalized)
+            if context_path is None:
+                self._warnings.append(
+                    f"unbound naming_sql context {candidate.naming_sql_id}.{param_name}"
+                )
+                continue
+            pairs.append(f"pair(it.{bo_field}, {context_path})")
+        if not pairs:
+            return f"fetch_one({definition_name})"
+        return f"fetch_one({definition_name}, {', '.join(pairs)})"
 
     def _build_patterns(
         self,
@@ -360,3 +405,7 @@ def type_identity(type_ref: TypeRef) -> tuple[Any, ...]:
         type_identity(type_ref.key_type) if type_ref.key_type else None,
         type_identity(type_ref.value_type) if type_ref.value_type else None,
     )
+
+
+def _normalized_name(value: str) -> str:
+    return "".join(char.lower() for char in value if char.isalnum())

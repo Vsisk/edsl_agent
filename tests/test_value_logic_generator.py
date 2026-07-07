@@ -2,6 +2,7 @@ import pytest
 
 from agent.context_manager.models import NamingSqlCandidate
 from agent.context_manager.errors import NO_NAMING_SQL_CANDIDATES
+from agent.expression_generation.typed_context import TypedExpressionContext
 from agent.models import ValueLogicRequest
 from agent.naming_sql_selector import NamingSqlSelectResponse
 from agent.planner.models import Plan
@@ -123,6 +124,33 @@ def test_success_reaches_planner_with_all_top_k_and_without_narrowing_loaded_res
     env = planner.calls[0]["filtered_env"]
     assert [item.naming_sql_name for item in env.naming_sql_selection.candidates] == ["FindCustomer", "FindCustomerRecent"]
     assert len(loaded_seen[0].bo_registry["BB_BAK_TRANS"].naming_sql_list) == 1
+
+
+def test_generator_builds_typed_context_after_filtering_and_passes_it_to_planner():
+    planner = Planner(fetch=False)
+    typed_context = TypedExpressionContext(warnings=["captured"])
+
+    class CapturingBuilder:
+        def __init__(self): self.inputs = []
+        def build(self, build_input):
+            self.inputs.append(build_input)
+            return typed_context
+
+    builder = CapturingBuilder()
+    gen = ValueLogicGenerator(
+        resource_loader=ResourceLoader(),
+        llm_planner=planner,
+        expression_spec_generator=Specs(),
+        resource_filter_target_generator=Targets(),
+        typed_expression_context_builder=builder,
+    )
+
+    gen.generate(request(False))
+
+    assert len(builder.inputs) == 1
+    assert builder.inputs[0].filtered_env is planner.calls[0]["filtered_env"]
+    assert builder.inputs[0].loaded_resource.bo_registry is not None
+    assert planner.calls[0]["typed_context"] is typed_context
 
 
 @pytest.mark.parametrize("signal", [

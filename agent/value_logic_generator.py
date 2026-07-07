@@ -8,7 +8,7 @@ from typing import Any
 
 from agent.environment.environment import build_filtered_environment, filter_resources
 from agent.environment.resource_filter import LLMResourceFilter, ResourceFilterTargetGenerator
-from agent.expression_generation.ast.builder import build_ast, build_simple_ast
+from agent.expression_generation.ast.builder import build_ast
 from agent.expression_generation.ast.generator import generate_expression
 from agent.expression_generation.ast.validator import validate_ast
 from agent.expression_generation.type_system import (
@@ -21,7 +21,7 @@ from agent.expression_generation.typed_context import (
     TypedExpressionContextBuilder,
 )
 from agent.expression_generation.expression_type_validation import SimpleExpressionPlan
-from agent.expression_generation.edsl_renderer import EDSLRenderer
+from agent.expression_generation.edsl_expression_parser import EDSLExpressionParser
 from agent.expression_generation.simple_plan_validator import SimplePlanRuntime, SimplePlanValidator
 from agent.models import NodeDef, ValueLogicRequest, ValueLogicResult, ValueLogicSource
 from agent.naming_sql_selector import (
@@ -97,7 +97,6 @@ class ValueLogicGenerator:
         self.type_registry = type_registry or TypeRegistry()
         self.method_registry = method_registry or create_builtin_method_registry()
         self.simple_plan_validator = SimplePlanValidator()
-        self.edsl_renderer = EDSLRenderer()
 
     def generate(self, request: ValueLogicRequest) -> ValueLogicResult:
         resources = ResourceContext(
@@ -300,7 +299,12 @@ class ValueLogicGenerator:
                     validation_errors=[item.model_dump(mode="json") for item in validation_result.errors],
                     debug_info=debug_info,
                 )
-            expression = self.edsl_renderer.render_simple_plan(build_simple_ast(plan))
+            parsed_plan = EDSLExpressionParser(typed_context).parse_plan(plan)
+            if naming_sql_selection is not None:
+                validate_naming_sql_plan(parsed_plan, naming_sql_selection)
+            ast = build_ast(parsed_plan)
+            validate_ast(ast)
+            expression = generate_expression(ast)
         else:
             if naming_sql_selection is not None:
                 validate_naming_sql_plan(plan, naming_sql_selection)

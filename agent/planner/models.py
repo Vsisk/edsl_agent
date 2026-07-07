@@ -24,10 +24,25 @@ class VariableRefExprPlanNode(_ExprPlanBaseModel):
     name: str
 
 
+class FieldAccessExprPlanNode(_ExprPlanBaseModel):
+    type: Literal["field_access"]
+    receiver: ExprPlanNode
+    field: str
+
+
+class MethodCallExprPlanNode(_ExprPlanBaseModel):
+    type: Literal["method_call"]
+    receiver: ExprPlanNode
+    name: str
+    args: list[ExprPlanNode] = Field(default_factory=list)
+    lambda_expr: ExprPlanNode | None = None
+
+
 class DefExprPlanNode(_ExprPlanBaseModel):
     type: Literal["def"]
     name: str
     value: ExprPlanNode
+    render_style: Literal["legacy", "simple"] = "legacy"
 
 
 class CompareExprPlanNode(_ExprPlanBaseModel):
@@ -95,6 +110,8 @@ ExprPlanNode: TypeAlias = Annotated[
     ContextPathExprPlanNode
     | LiteralExprPlanNode
     | VariableRefExprPlanNode
+    | FieldAccessExprPlanNode
+    | MethodCallExprPlanNode
     | DefExprPlanNode
     | CompareExprPlanNode
     | LogicalExprPlanNode
@@ -113,6 +130,8 @@ _EXPR_PLAN_TYPES = {
 }
 
 DefExprPlanNode.model_rebuild(_types_namespace=_EXPR_PLAN_TYPES)
+FieldAccessExprPlanNode.model_rebuild(_types_namespace=_EXPR_PLAN_TYPES)
+MethodCallExprPlanNode.model_rebuild(_types_namespace=_EXPR_PLAN_TYPES)
 CompareExprPlanNode.model_rebuild(_types_namespace=_EXPR_PLAN_TYPES)
 LogicalExprPlanNode.model_rebuild(_types_namespace=_EXPR_PLAN_TYPES)
 CallExprPlanNode.model_rebuild(_types_namespace=_EXPR_PLAN_TYPES)

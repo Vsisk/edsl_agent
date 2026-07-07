@@ -16,6 +16,8 @@ from agent.expression_generation.ast.nodes import (
     SelectNode,
     SelectOneNode,
     VariableRefNode,
+    FieldAccessNode,
+    MethodCallNode,
 )
 
 
@@ -29,7 +31,16 @@ def generate_expression(node: ASTNode) -> str:
     if isinstance(node, VariableRefNode):
         return node.name
     if isinstance(node, DefNode):
+        if node.render_style == "simple":
+            return f"def {node.name}: {generate_expression(node.value)};"
         return f"def {node.name} = {generate_expression(node.value)}"
+    if isinstance(node, FieldAccessNode):
+        return f"{generate_expression(node.receiver)}.{node.field}"
+    if isinstance(node, MethodCallNode):
+        receiver = generate_expression(node.receiver)
+        if node.lambda_expr is not None:
+            return f"{receiver}.{node.name}{{{generate_expression(node.lambda_expr)}}}"
+        return f"{receiver}.{node.name}({', '.join(generate_expression(arg) for arg in node.args)})"
     if isinstance(node, CompareNode):
         return f"{generate_expression(node.left)} {node.op} {generate_expression(node.right)}"
     if isinstance(node, LogicalNode):

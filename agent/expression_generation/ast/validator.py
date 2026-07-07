@@ -11,6 +11,8 @@ from agent.expression_generation.ast.nodes import (
     SelectNode,
     SelectOneNode,
     VariableRefNode,
+    FieldAccessNode,
+    MethodCallNode,
 )
 
 
@@ -27,6 +29,20 @@ def _validate_node(node) -> None:
     if isinstance(node, VariableRefNode):
         if not node.name.strip():
             raise ValueError("variable ref name must not be empty")
+        return
+    if isinstance(node, FieldAccessNode):
+        if not node.field.strip():
+            raise ValueError("field name must not be empty")
+        _validate_node(node.receiver)
+        return
+    if isinstance(node, MethodCallNode):
+        if not node.name.strip():
+            raise ValueError("method name must not be empty")
+        _validate_node(node.receiver)
+        for arg in node.args:
+            _validate_node(arg)
+        if node.lambda_expr is not None:
+            _validate_node(node.lambda_expr)
         return
     if isinstance(node, DefNode):
         if not node.name.strip():

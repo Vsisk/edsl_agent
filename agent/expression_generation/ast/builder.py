@@ -19,6 +19,8 @@ from agent.expression_generation.ast.nodes import (
     SelectNode,
     SelectOneNode,
     VariableRefNode,
+    FieldAccessNode,
+    MethodCallNode,
 )
 from agent.planner.models import (
     CompareExprPlanNode,
@@ -35,6 +37,8 @@ from agent.planner.models import (
     SelectExprPlanNode,
     SelectOneExprPlanNode,
     VariableRefExprPlanNode,
+    FieldAccessExprPlanNode,
+    MethodCallExprPlanNode,
 )
 
 
@@ -76,8 +80,14 @@ def _build_node(plan_node: ExprPlanNode) -> ExprNode:
         return LiteralNode(type="literal", value=plan_node.value)
     if isinstance(plan_node, VariableRefExprPlanNode):
         return VariableRefNode(type="variable_ref", name=plan_node.name)
+    if isinstance(plan_node, FieldAccessExprPlanNode):
+        return FieldAccessNode(type="field_access", receiver=_build_node(plan_node.receiver), field=plan_node.field)
+    if isinstance(plan_node, MethodCallExprPlanNode):
+        return MethodCallNode(type="method_call", receiver=_build_node(plan_node.receiver), name=plan_node.name,
+                              args=[_build_node(arg) for arg in plan_node.args],
+                              lambda_expr=_build_node(plan_node.lambda_expr) if plan_node.lambda_expr else None)
     if isinstance(plan_node, DefExprPlanNode):
-        return DefNode(type="def", name=plan_node.name, value=_build_node(plan_node.value))
+        return DefNode(type="def", name=plan_node.name, value=_build_node(plan_node.value), render_style=plan_node.render_style)
     if isinstance(plan_node, CompareExprPlanNode):
         return CompareNode(
             type="compare",

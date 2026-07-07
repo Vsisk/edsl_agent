@@ -34,6 +34,20 @@ class VariableRefNode(ASTNode):
     name: str
 
 
+class FieldAccessNode(ASTNode):
+    type: Literal["field_access"]
+    receiver: ExprNode
+    field: str
+
+
+class MethodCallNode(ASTNode):
+    type: Literal["method_call"]
+    receiver: ExprNode
+    name: str
+    args: list[ExprNode] = Field(default_factory=list)
+    lambda_expr: ExprNode | None = None
+
+
 class DefNode(ASTNode):
     model_config = ConfigDict(
         extra="forbid",
@@ -43,6 +57,7 @@ class DefNode(ASTNode):
     type: Literal["def"]
     name: str
     value: ExprNode
+    render_style: Literal["legacy", "simple"] = "legacy"
 
 
 class CompareNode(ASTNode):
@@ -188,6 +203,8 @@ ExprNode: TypeAlias = Annotated[
     ContextPathNode
     | LiteralNode
     | VariableRefNode
+    | FieldAccessNode
+    | MethodCallNode
     | DefNode
     | CompareNode
     | LogicalNode
@@ -211,6 +228,8 @@ class ProgramNode(ASTNode):
 _AST_TYPES = {"ExprNode": ExprNode}
 
 DefNode.model_rebuild(_types_namespace=_AST_TYPES)
+FieldAccessNode.model_rebuild(_types_namespace=_AST_TYPES)
+MethodCallNode.model_rebuild(_types_namespace=_AST_TYPES)
 CompareNode.model_rebuild(_types_namespace=_AST_TYPES)
 LogicalNode.model_rebuild(_types_namespace=_AST_TYPES)
 CallNode.model_rebuild(_types_namespace=_AST_TYPES)

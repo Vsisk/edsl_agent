@@ -26,7 +26,6 @@ The expression-generation path becomes:
 - `loaded_resource: LoadedResource`
 - `type_registry: TypeRegistry`
 - `method_registry: MethodRegistry`
-- `max_depth: int = 4`
 - `max_items: int = 80`
 
 `TypedExpressionContext` contains:
@@ -57,7 +56,7 @@ For `List<T>`, the field/root receives the matching List methods. The builder ex
 
 For `Map<X,T>`, the field/root receives matching Map methods. When `T` is an object type, expansion continues through `get(...)` into `T` fields.
 
-Expansion stops when `max_depth` is reached, a recursive type cycle is detected on the current traversal path, or the global output budget is exhausted. `max_items` counts emitted roots, variable templates, access views, method catalog entries, and expression patterns. The builder never exceeds the limit.
+Expansion has no depth limit. It continues through every object, list, and map layer until each reachable branch terminates at a `basic`, `void`, or `unknown` type. A recursive type cycle on the current traversal path is cut with a deterministic warning, and the global output budget remains a final safety bound. `max_items` counts emitted roots, variable templates, access views, method catalog entries, and expression patterns. The builder never exceeds the limit.
 
 ## Ranking and Determinism
 
@@ -104,9 +103,8 @@ Tests follow red-green-refactor and cover:
 1. `$ctx$.address: logic.Address` expands `addr1: basic.String` with String methods.
 2. A selected NamingSQL owned by `BB_BILL_CHARGE` produces an `it` template whose `it.CHARGE_AMT` field exposes `long2str()`.
 3. `List<bo.BB_BILL_CHARGE>` exposes `first`, `find{expr}`, `findAll{expr}`, and `size`, plus `first().CHARGE_AMT`.
-4. `max_depth` and the global `max_items` budget deterministically truncate output.
+4. Nested types expand until basic leaves, recursive cycles are cut safely, and the global `max_items` budget deterministically truncates output.
 5. The planner prompt receives and renders all four typed-context blocks while returning the unchanged `Plan` model.
 6. Missing return-type metadata produces warnings without fabricating typed entries.
 
 Focused tests verify the builder and planner boundary. Existing ASTBuilder, validator, and renderer tests must remain untouched.
-

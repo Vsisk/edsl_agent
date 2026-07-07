@@ -47,7 +47,8 @@ def test_context_method_end_to_end_with_debug():
     expr = 'if($ctx$.address.addr1.length() > 0, $ctx$.address.addr1, "")'
     result, _ = run(SimpleExpressionPlan(return_expr=expr), context, registry, True)
     assert result.expression == expr
-    assert set(result.debug_info) == {"typed_context", "simple_plan", "type_validation_result"}
+    assert set(result.debug_info) == {"typed_context", "simple_plan", "parsed_plan", "ast_validation_result"}
+    assert result.debug_info["ast_validation_result"] == {"is_valid": True, "errors": []}
 
 
 @pytest.mark.parametrize(("name", "fetch", "return_type", "return_expr", "expected"), [
@@ -62,9 +63,34 @@ def test_query_variable_and_list_find_end_to_end(name, fetch, return_type, retur
     assert result.expression == expected
 
 
-def test_invalid_method_returns_structured_error_without_rendering():
+def test_ast_validation_failure_returns_structured_error(monkeypatch):
     context = TypedExpressionContext(root_values=[TypedRootValue(expr="$ctx$.name", source_type="context", return_type="basic.String")])
-    result, generator = run(SimpleExpressionPlan(return_expr="$ctx$.name.addDays(1)"), context)
+    def fail_validation(_ast): raise ValueError("invalid ast")
+    monkeypatch.setattr("agent.value_logic_generator.validate_ast", fail_validation)
+    result, generator = run(SimpleExpressionPlan(return_expr="$ctx$.name"), context, debug=True)
     assert result.logic_type == "validation_failed"
-    assert result.validation_errors[0]["error_type"] == "METHOD_NOT_FOUND"
+    assert result.validation_errors[0]["error_type"] == "AST_VALIDATION_FAILED"
     assert result.expression is None
+    assert result.debug_info["ast_validation_result"]["is_valid"] is False
+
+
+def test_value_generation_does_not_call_pre_parse_type_validator():
+    context = TypedExpressionContext(root_values=[TypedRootValue(expr="$ctx$.name", source_type="context", return_type="basic.String")])
+    result, generator = run(SimpleExpressionPlan(return_expr="$ctx$.name"), context)
+    class ForbiddenValidator:
+        def validate_simple_plan(self, *args): raise AssertionError("pre-parse validator called")
+    generator.simple_plan_validator = ForbiddenValidator()
+    result = generator.generate(request())
+    assert result.logic_type == "expression"
+
+
+def test_parse_failure_returns_structured_error():
+    context = TypedExpressionContext(root_values=[])
+    plan = SimpleExpressionPlan(
+        definitions=[{"name": "charge", "expr": "fetch_one(E_QUERY_CHARGE, broken)"}],
+        return_expr="charge",
+    )
+    result, _ = run(plan, context, debug=True)
+    assert result.logic_type == "validation_failed"
+    assert result.validation_errors[0]["error_type"] == "PARSE_FAILED"
+    assert result.debug_info["parsed_plan"] is None

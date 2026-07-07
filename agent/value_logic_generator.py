@@ -22,7 +22,6 @@ from agent.expression_generation.typed_context import (
 )
 from agent.expression_generation.expression_type_validation import SimpleExpressionPlan
 from agent.expression_generation.edsl_expression_parser import EDSLExpressionParser
-from agent.expression_generation.simple_plan_validator import SimplePlanRuntime, SimplePlanValidator
 from agent.models import NodeDef, ValueLogicRequest, ValueLogicResult, ValueLogicSource
 from agent.naming_sql_selector import (
     NamingSqlSelectRequest,
@@ -96,7 +95,6 @@ class ValueLogicGenerator:
         )
         self.type_registry = type_registry or TypeRegistry()
         self.method_registry = method_registry or create_builtin_method_registry()
-        self.simple_plan_validator = SimplePlanValidator()
 
     def generate(self, request: ValueLogicRequest) -> ValueLogicResult:
         resources = ResourceContext(
@@ -281,29 +279,27 @@ class ValueLogicGenerator:
         )
         debug_info = None
         if isinstance(plan, SimpleExpressionPlan):
-            validation_result = self.simple_plan_validator.validate_simple_plan(
-                plan, typed_context, SimplePlanRuntime(
-                    type_registry=self.type_registry, method_registry=self.method_registry,
-                )
-            )
+            try:
+                parsed_plan = EDSLExpressionParser(typed_context).parse_plan(plan)
+            except (ValueError, TypeError) as exc:
+                return self._simple_plan_failure(request, typed_context, plan, "PARSE_FAILED", exc)
+            if naming_sql_selection is not None:
+                validate_naming_sql_plan(parsed_plan, naming_sql_selection)
+            try:
+                ast = build_ast(parsed_plan)
+            except (ValueError, TypeError) as exc:
+                return self._simple_plan_failure(request, typed_context, plan, "AST_BUILD_FAILED", exc, parsed_plan)
+            try:
+                validate_ast(ast)
+            except (ValueError, TypeError) as exc:
+                return self._simple_plan_failure(request, typed_context, plan, "AST_VALIDATION_FAILED", exc, parsed_plan)
             if request.debug:
                 debug_info = {
                     "typed_context": typed_context.model_dump(mode="json"),
                     "simple_plan": plan.model_dump(mode="json"),
-                    "type_validation_result": validation_result.model_dump(mode="json"),
+                    "parsed_plan": parsed_plan.model_dump(mode="json"),
+                    "ast_validation_result": {"is_valid": True, "errors": []},
                 }
-            if not validation_result.is_valid:
-                return ValueLogicResult(
-                    node_id=self._node_id(request.node), logic_type="validation_failed",
-                    expression=None, source=ValueLogicSource(source_type="plan"),
-                    validation_errors=[item.model_dump(mode="json") for item in validation_result.errors],
-                    debug_info=debug_info,
-                )
-            parsed_plan = EDSLExpressionParser(typed_context).parse_plan(plan)
-            if naming_sql_selection is not None:
-                validate_naming_sql_plan(parsed_plan, naming_sql_selection)
-            ast = build_ast(parsed_plan)
-            validate_ast(ast)
             expression = generate_expression(ast)
         else:
             if naming_sql_selection is not None:
@@ -318,6 +314,22 @@ class ValueLogicGenerator:
             expression=expression,
             source=ValueLogicSource(source_type="plan"),
             debug_info=debug_info,
+        )
+
+    def _simple_plan_failure(self, request, typed_context, plan, error_type, error, parsed_plan=None):
+        message = " ".join(str(error).split())[:2000]
+        debug_info = None
+        if request.debug:
+            debug_info = {
+                "typed_context": typed_context.model_dump(mode="json"),
+                "simple_plan": plan.model_dump(mode="json"),
+                "parsed_plan": parsed_plan.model_dump(mode="json") if parsed_plan is not None else None,
+                "ast_validation_result": {"is_valid": False, "errors": [{"error_type": error_type, "message": message}]},
+            }
+        return ValueLogicResult(
+            node_id=self._node_id(request.node), logic_type="validation_failed", expression=None,
+            source=ValueLogicSource(source_type="plan"),
+            validation_errors=[{"error_type": error_type, "message": message}], debug_info=debug_info,
         )
 
     def _requested_bo_name(self, request: ValueLogicRequest) -> str | None:

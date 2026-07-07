@@ -27,6 +27,8 @@ class PromptManager:
 
     def render(self, prompt_key: str, lang: str = "zh", **variables: str) -> str:
         template = self._get_template(prompt_key, lang)
+        if prompt_key in {"planner", "planner_repair"}:
+            variables.setdefault("typed_context_json", "{}")
         missing = sorted(set(PLACEHOLDER_PATTERN.findall(template)) - set(variables))
         if missing:
             raise ValueError(f"Missing prompt variables for {prompt_key}: {', '.join(missing)}")

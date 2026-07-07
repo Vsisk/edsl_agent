@@ -202,4 +202,3 @@ Expected: no failures beyond the previously recorded 17 missing-sample-data base
 Run: `git diff --name-only 80aa8ab..HEAD` and `git diff --check 80aa8ab..HEAD`.
 
 Expected: no AST builder, validator, renderer, or planner model file is changed, and no whitespace errors are reported.
-

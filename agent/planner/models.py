@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Annotated, Literal, TypeAlias
+from copy import deepcopy
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
@@ -143,3 +144,23 @@ Plan.model_rebuild(_types_namespace=_EXPR_PLAN_TYPES)
 
 EXPR_PLAN_NODE_SCHEMA = TypeAdapter(ExprPlanNode).json_schema()
 PLAN_SCHEMA = Plan.model_json_schema()
+
+
+def _legacy_schema_without_member_nodes(value):
+    excluded = {"#/$defs/FieldAccessExprPlanNode", "#/$defs/MethodCallExprPlanNode"}
+    if isinstance(value, list):
+        return [
+            _legacy_schema_without_member_nodes(item)
+            for item in value
+            if not (isinstance(item, dict) and item.get("$ref") in excluded)
+        ]
+    if isinstance(value, dict):
+        return {
+            key: _legacy_schema_without_member_nodes(item)
+            for key, item in value.items()
+            if not (key in {"FieldAccessExprPlanNode", "MethodCallExprPlanNode"} and "$defs" not in value)
+        }
+    return value
+
+
+LEGACY_PLAN_SCHEMA = _legacy_schema_without_member_nodes(deepcopy(PLAN_SCHEMA))

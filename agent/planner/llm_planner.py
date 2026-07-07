@@ -10,7 +10,7 @@ from agent.expression_generation.typed_context import TypedExpressionContext
 from agent.llm.generate_by_llm import generate_by_llm
 from agent.llm.llm_client import LLMClient
 from agent.models import NodeDef
-from agent.planner.models import PLAN_SCHEMA, Plan
+from agent.planner.models import LEGACY_PLAN_SCHEMA, Plan
 from agent.naming_sql_selector.plan_validator import validate_naming_sql_plan
 
 if TYPE_CHECKING:
@@ -54,7 +54,7 @@ class LLMPlanner:
         resources_json = _summarize_filtered_environment_json(filtered_env)
         typed_context_json = _summarize_typed_context_json(typed_context)
         node_info_json = _dump_json(_summarize_node(node_info))
-        plan_schema_json = _dump_json(PLAN_SCHEMA)
+        plan_schema_json = _dump_json(LEGACY_PLAN_SCHEMA)
 
         try:
             response = generate_by_llm(

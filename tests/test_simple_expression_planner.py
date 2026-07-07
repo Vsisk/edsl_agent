@@ -16,3 +16,4 @@ def test_simple_planner_returns_plan_and_includes_typed_context():
     )
     assert isinstance(result, SimpleExpressionPlan)
     assert "$ctx$.name" in client.calls[0]["prompt"]
+    assert "target_return_type" not in client.calls[0]["prompt"]

@@ -23,9 +23,9 @@ class SimpleDefinition(BaseModel):
 
 
 class SimpleExpressionPlan(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     definitions: list[SimpleDefinition] = Field(default_factory=list)
     return_expr: str
-    target_return_type: TypeRef | None = None
 
 
 class TypeValidationError(BaseModel):
@@ -219,8 +219,6 @@ class MethodChainValidator:
             if type_ref is not None:
                 scope.bind(definition.name, type_ref); definition_types[definition.name] = type_ref
         return_type = resolver.resolve(plan.return_expr, scope)
-        if return_type is not None and plan.target_return_type is not None and return_type != plan.target_return_type:
-            errors.append(TypeValidationError(error_type="TARGET_RETURN_TYPE_MISMATCH", expr=plan.return_expr, expected_type=plan.target_return_type, actual_type=return_type, message="return type does not match target"))
         return ExpressionValidationResult(return_type=return_type, errors=errors, definition_types=definition_types)
 
 

@@ -1,4 +1,5 @@
 import pytest
+from pydantic import ValidationError
 
 from agent.expression_generation.expression_type_validation import (
     ExpressionValidationInput,
@@ -36,8 +37,16 @@ def validator() -> MethodChainValidator:
     ))
 
 
-def plan(expr: str, definitions=None, target=None) -> SimpleExpressionPlan:
-    return SimpleExpressionPlan(definitions=definitions or [], return_expr=expr, target_return_type=target)
+def plan(expr: str, definitions=None) -> SimpleExpressionPlan:
+    return SimpleExpressionPlan(definitions=definitions or [], return_expr=expr)
+
+
+def test_simple_plan_rejects_target_return_type_from_planner():
+    with pytest.raises(ValidationError):
+        SimpleExpressionPlan.model_validate({
+            "definitions": [], "return_expr": '"x"',
+            "target_return_type": {"kind": "basic", "name": "String"},
+        })
 
 
 @pytest.mark.parametrize(("expr", "expected"), [
@@ -81,13 +90,6 @@ def test_reports_if_branch_type_mismatch():
     expr = 'if($ctx$.address.addr1.length() > 0, $ctx$.address.addr1, 0)'
     result = validator().validate(plan(expr))
     assert result.errors[-1].error_type == "IF_BRANCH_TYPE_MISMATCH"
-
-
-def test_reports_target_return_type_mismatch():
-    result = validator().validate(plan('"x"', target=LONG))
-    assert result.errors[-1].error_type == "TARGET_RETURN_TYPE_MISMATCH"
-    assert result.errors[-1].expected_type == LONG
-    assert result.errors[-1].actual_type == STRING
 
 
 @pytest.mark.parametrize(("expr", "error_type"), [

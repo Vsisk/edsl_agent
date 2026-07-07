@@ -2,7 +2,7 @@ from collections.abc import Mapping
 from enum import Enum
 from typing import Any, Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class TypeRef(BaseModel):
@@ -44,6 +44,12 @@ class TypeRegistry:
             return None
         return type_def.fields.get(field_name)
 
+    def resolve_fields(self, owner_type: TypeRef) -> dict[str, TypeRef]:
+        type_def = self._types.get(_type_key(owner_type))
+        if type_def is None:
+            return {}
+        return dict(type_def.fields)
+
 
 class TypePattern(BaseModel):
     kind: Literal[
@@ -71,7 +77,15 @@ class MethodSig(BaseModel):
     owner_type: TypePattern
     name: str
     arg_types: list[TypePattern]
+    arg_names: list[str] = Field(default_factory=list)
     return_type: TypePattern
+
+
+class ResolvedMethod(BaseModel):
+    name: str
+    arg_types: list[TypeRef]
+    arg_names: list[str]
+    return_type: TypeRef
 
 
 class MethodRegistry:
@@ -80,6 +94,26 @@ class MethodRegistry:
 
     def register_method(self, method_sig: MethodSig) -> None:
         self._methods.append(method_sig)
+
+    def methods_for(self, owner_type: TypeRef) -> list[ResolvedMethod]:
+        resolved: list[ResolvedMethod] = []
+        for method in self._methods:
+            bindings: dict[str, TypeRef] = {}
+            if not _match_pattern(method.owner_type, owner_type, bindings):
+                continue
+            arg_types = [_resolve_pattern(pattern, bindings) for pattern in method.arg_types]
+            return_type = _resolve_pattern(method.return_type, bindings)
+            if return_type is None or any(arg_type is None for arg_type in arg_types):
+                continue
+            resolved.append(
+                ResolvedMethod(
+                    name=method.name,
+                    arg_types=[arg_type for arg_type in arg_types if arg_type is not None],
+                    arg_names=list(method.arg_names),
+                    return_type=return_type,
+                )
+            )
+        return resolved
 
     def match(
         self,
@@ -127,30 +161,35 @@ def register_builtin_methods(registry: MethodRegistry) -> None:
             owner_type=string,
             name="substr",
             arg_types=[integer, integer],
+            arg_names=["start", "length"],
             return_type=string,
         ),
         MethodSig(
             owner_type=string,
             name="dateValue",
             arg_types=[string],
+            arg_names=["format"],
             return_type=date,
         ),
         MethodSig(
             owner_type=string,
             name="replace",
             arg_types=[string, string],
+            arg_names=["oldSubstring", "newSubstring"],
             return_type=string,
         ),
         MethodSig(
             owner_type=date,
             name="addDays",
             arg_types=[integer],
+            arg_names=["days"],
             return_type=date,
         ),
         MethodSig(
             owner_type=date,
             name="toString",
             arg_types=[string],
+            arg_names=["dateFormat"],
             return_type=string,
         ),
         MethodSig(owner_type=integer, name="int2str", arg_types=[], return_type=string),
@@ -173,6 +212,7 @@ def register_builtin_methods(registry: MethodRegistry) -> None:
             owner_type=map_of_string_to_t,
             name="get",
             arg_types=[string],
+            arg_names=["k"],
             return_type=type_var,
         ),
     ]

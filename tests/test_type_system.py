@@ -134,3 +134,37 @@ def test_method_registry_returns_none_for_non_matching_signature():
 
     assert registry.match(STRING, "dateValue", [INT]) is None
     assert registry.match(STRING, "missing", []) is None
+
+
+def test_type_registry_lists_registered_fields_without_exposing_internal_mapping():
+    owner = TypeRef(kind="bo", name="BB_BILL_CHARGE")
+    registry = TypeRegistry()
+    registry.register_type(TypeDef(owner_type=owner, fields={"CHARGE_AMT": LONG}))
+
+    fields = registry.resolve_fields(owner)
+    fields["OTHER"] = STRING
+
+    assert fields == {"CHARGE_AMT": LONG, "OTHER": STRING}
+    assert registry.resolve_fields(owner) == {"CHARGE_AMT": LONG}
+
+
+def test_method_registry_lists_only_methods_for_concrete_owner():
+    registry = create_builtin_method_registry()
+
+    list_methods = registry.methods_for(list_of(CHARGE))
+    string_methods = registry.methods_for(STRING)
+
+    assert [method.name for method in list_methods] == [
+        "first",
+        "size",
+        "find{expr}",
+        "findAll{expr}",
+    ]
+    assert list_methods[0].return_type == CHARGE
+    assert [method.name for method in string_methods] == [
+        "length",
+        "substr",
+        "dateValue",
+        "replace",
+    ]
+    assert string_methods[1].arg_names == ["start", "length"]

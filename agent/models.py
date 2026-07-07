@@ -22,6 +22,7 @@ class ValueLogicRequest(BaseModel):
     is_ab: bool = False
     edsl_tree: dict[str, Any] | None = None
     structured_spec: dict[str, Any] = Field(default_factory=dict)
+    debug: bool = False
 
 
 class ValueLogicSource(BaseModel):
@@ -34,6 +35,8 @@ class ValueLogicSource(BaseModel):
 
 class ValueLogicResult(BaseModel):
     node_id: str | None = None
-    logic_type: Literal["expression", "bo_field_mapping", "summary"]
+    logic_type: Literal["expression", "bo_field_mapping", "summary", "validation_failed"]
     expression: str | None = None
     source: ValueLogicSource
+    validation_errors: list[dict[str, Any]] = Field(default_factory=list)
+    debug_info: dict[str, Any] | None = None

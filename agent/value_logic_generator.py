@@ -8,7 +8,7 @@ from typing import Any
 
 from agent.environment.environment import build_filtered_environment, filter_resources
 from agent.environment.resource_filter import LLMResourceFilter, ResourceFilterTargetGenerator
-from agent.expression_generation.ast.builder import build_ast
+from agent.expression_generation.ast.builder import build_ast, build_simple_ast
 from agent.expression_generation.ast.generator import generate_expression
 from agent.expression_generation.ast.validator import validate_ast
 from agent.expression_generation.type_system import (
@@ -20,6 +20,9 @@ from agent.expression_generation.typed_context import (
     TypedExpressionContextBuildInput,
     TypedExpressionContextBuilder,
 )
+from agent.expression_generation.expression_type_validation import SimpleExpressionPlan
+from agent.expression_generation.edsl_renderer import EDSLRenderer
+from agent.expression_generation.simple_plan_validator import SimplePlanRuntime, SimplePlanValidator
 from agent.models import NodeDef, ValueLogicRequest, ValueLogicResult, ValueLogicSource
 from agent.naming_sql_selector import (
     NamingSqlSelectRequest,
@@ -30,6 +33,8 @@ from agent.naming_sql_selector.selector import KNOWN_CONTEXT_ERROR_CODES
 from agent.context_manager import ContextManager
 from agent.planner.difficulty_router import LLMDifficultyRouter, ResourceRoute
 from agent.planner.llm_planner import LLMPlanner
+from agent.planner.models import Plan
+from agent.planner.simple_expression_planner import SimpleExpressionPlanner
 from agent.resource_manager.loader.resource_loader import LoadedResource, ResourceLoader, resource_loader as default_resource_loader
 
 
@@ -81,7 +86,7 @@ class ValueLogicGenerator:
         self.resource_loader = resource_loader or default_resource_loader
         self.llm_resource_filter = llm_resource_filter or LLMResourceFilter()
         self.llm_difficulty_router = llm_difficulty_router or LLMDifficultyRouter()
-        self.llm_planner = llm_planner or LLMPlanner()
+        self.llm_planner = llm_planner or SimpleExpressionPlanner()
         self.expression_spec_generator = expression_spec_generator or ExpressionSpecGenerator()
         self.resource_filter_target_generator = resource_filter_target_generator or ResourceFilterTargetGenerator()
         self.enable_legacy_filter_fallback = enable_legacy_filter_fallback
@@ -91,6 +96,8 @@ class ValueLogicGenerator:
         )
         self.type_registry = type_registry or TypeRegistry()
         self.method_registry = method_registry or create_builtin_method_registry()
+        self.simple_plan_validator = SimplePlanValidator()
+        self.edsl_renderer = EDSLRenderer()
 
     def generate(self, request: ValueLogicRequest) -> ValueLogicResult:
         resources = ResourceContext(
@@ -273,17 +280,40 @@ class ValueLogicGenerator:
             filtered_env=filtered_env,
             typed_context=typed_context,
         )
-        if naming_sql_selection is not None:
-            validate_naming_sql_plan(plan, naming_sql_selection)
-        ast = build_ast(plan)
-        validate_ast(ast)
-        expression = generate_expression(ast)
+        debug_info = None
+        if isinstance(plan, SimpleExpressionPlan):
+            validation_result = self.simple_plan_validator.validate_simple_plan(
+                plan, typed_context, SimplePlanRuntime(
+                    type_registry=self.type_registry, method_registry=self.method_registry,
+                )
+            )
+            if request.debug:
+                debug_info = {
+                    "typed_context": typed_context.model_dump(mode="json"),
+                    "simple_plan": plan.model_dump(mode="json"),
+                    "type_validation_result": validation_result.model_dump(mode="json"),
+                }
+            if not validation_result.is_valid:
+                return ValueLogicResult(
+                    node_id=self._node_id(request.node), logic_type="validation_failed",
+                    expression=None, source=ValueLogicSource(source_type="plan"),
+                    validation_errors=[item.model_dump(mode="json") for item in validation_result.errors],
+                    debug_info=debug_info,
+                )
+            expression = self.edsl_renderer.render_simple_plan(build_simple_ast(plan))
+        else:
+            if naming_sql_selection is not None:
+                validate_naming_sql_plan(plan, naming_sql_selection)
+            ast = build_ast(plan)
+            validate_ast(ast)
+            expression = generate_expression(ast)
 
         return ValueLogicResult(
             node_id=self._node_id(request.node),
             logic_type="expression",
             expression=expression,
-            source=ValueLogicSource(source_type="plan")
+            source=ValueLogicSource(source_type="plan"),
+            debug_info=debug_info,
         )
 
     def _requested_bo_name(self, request: ValueLogicRequest) -> str | None:

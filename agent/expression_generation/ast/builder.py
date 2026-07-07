@@ -1,6 +1,7 @@
 from typing import Any
 
-from pydantic import TypeAdapter
+from pydantic import BaseModel, Field, TypeAdapter
+from agent.expression_generation.expression_type_validation import SimpleExpressionPlan
 
 from agent.expression_generation.ast.nodes import (
     CallNode,
@@ -43,6 +44,29 @@ def build_ast(plan: Plan | dict[str, Any]) -> ProgramNode:
         type="program",
         body=[_build_node(plan_node) for plan_node in plan_model.nodes],
     )
+
+
+class SimpleDefinitionAst(BaseModel):
+    name: str
+    expr: str
+
+
+class SimpleExpressionProgramAst(BaseModel):
+    definitions: list[SimpleDefinitionAst] = Field(default_factory=list)
+    return_expr: str
+
+
+def build_simple_ast(plan: SimpleExpressionPlan) -> SimpleExpressionProgramAst:
+    if not plan.return_expr.strip():
+        raise ValueError("return expression must not be blank")
+    definitions = []
+    for definition in plan.definitions:
+        if not definition.name.isidentifier():
+            raise ValueError("invalid definition name")
+        if not definition.expr.strip():
+            raise ValueError("definition expression must not be blank")
+        definitions.append(SimpleDefinitionAst(name=definition.name, expr=definition.expr))
+    return SimpleExpressionProgramAst(definitions=definitions, return_expr=plan.return_expr)
 
 
 def _build_node(plan_node: ExprPlanNode) -> ExprNode:

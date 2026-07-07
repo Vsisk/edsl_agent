@@ -168,3 +168,9 @@ def test_method_registry_lists_only_methods_for_concrete_owner():
         "replace",
     ]
     assert string_methods[1].arg_names == ["start", "length"]
+
+
+def test_normalize_return_type_preserves_already_normalized_type_ref():
+    normalized = map_of(STRING, CHARGE)
+
+    assert normalize_return_type(normalized) == normalized

@@ -221,6 +221,8 @@ def register_builtin_methods(registry: MethodRegistry) -> None:
 
 
 def normalize_return_type(raw_return_type: Any) -> TypeRef:
+    if isinstance(raw_return_type, TypeRef):
+        return raw_return_type.model_copy(deep=True)
     if raw_return_type is None:
         return TypeRef(kind="unknown")
 

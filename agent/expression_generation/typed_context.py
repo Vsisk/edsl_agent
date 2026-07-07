@@ -80,6 +80,7 @@ class TypedExpressionContextBuilder:
         self._input = build_input
         self._warnings: list[str] = []
         self._method_catalog: dict[str, list[str]] = {}
+        self._field_annotations: dict[tuple[tuple[Any, ...], str], str] = {}
         self._register_selected_bos()
 
         roots: list[TypedRootValue] = []
@@ -91,7 +92,7 @@ class TypedExpressionContextBuilder:
             self._append_function_root(roots, resource)
 
         var_templates = self._build_naming_sql_templates()
-        return TypedExpressionContext(
+        context = TypedExpressionContext(
             root_values=roots,
             var_templates=var_templates,
             method_catalog=[
@@ -101,6 +102,7 @@ class TypedExpressionContextBuilder:
             expression_patterns=self._build_patterns(var_templates),
             warnings=self._warnings,
         )
+        return self._apply_item_budget(context)
 
     def _register_selected_bos(self) -> None:
         bos: dict[str, BoRegistry] = {
@@ -114,14 +116,19 @@ class TypedExpressionContextBuilder:
                 if bo is not None:
                     bos[bo.bo_name] = bo
         for bo in bos.values():
+            owner_type = TypeRef(kind="bo", name=bo.bo_name)
             fields = {
                 prop.field_name: normalize_return_type(prop)
                 for prop in bo.property_list
             }
             fields = {name: type_ref for name, type_ref in fields.items() if type_ref.kind != "unknown"}
+            for prop in bo.property_list:
+                self._field_annotations[(type_identity(owner_type), prop.field_name)] = (
+                    prop.description or ""
+                )
             self._input.type_registry.register_type(
                 TypeDef(
-                    owner_type=TypeRef(kind="bo", name=bo.bo_name),
+                    owner_type=owner_type,
                     fields=fields,
                 )
             )
@@ -161,14 +168,28 @@ class TypedExpressionContextBuilder:
         owner_type: TypeRef,
         path_types: set[tuple[Any, ...]],
     ) -> list[TypedAccessView]:
+        if owner_type.kind == "list" and owner_type.element_type is not None:
+            return self._expand_fields(f"{prefix}.first()", owner_type.element_type, path_types)
+        if owner_type.kind == "map" and owner_type.value_type is not None:
+            return self._expand_fields(f"{prefix}.get(...)" , owner_type.value_type, path_types)
         if owner_type.kind not in {"bo", "logic", "extattr"}:
             return []
         key = type_identity(owner_type)
         if key in path_types:
+            warning = f"recursive type cycle at {prefix}: {render_type(owner_type)}"
+            if warning not in self._warnings:
+                self._warnings.append(warning)
             return []
         nested_path = {*path_types, key}
         result: list[TypedAccessView] = []
-        for field_name, field_type in self._input.type_registry.resolve_fields(owner_type).items():
+        fields = list(self._input.type_registry.resolve_fields(owner_type).items())
+        fields.sort(
+            key=lambda item: (
+                -self._field_relevance(owner_type, item[0]),
+                item[0],
+            )
+        )
+        for field_name, field_type in fields:
             access = f"{prefix}.{field_name}"
             result.append(
                 TypedAccessView(
@@ -179,6 +200,22 @@ class TypedExpressionContextBuilder:
             )
             result.extend(self._expand_fields(access, field_type, nested_path))
         return result
+
+    def _field_relevance(self, owner_type: TypeRef, field_name: str) -> int:
+        normalized = field_name.lower()
+        query = self._input.query.lower()
+        node_name = self._input.node.node_name.lower()
+        annotation = self._field_annotations.get(
+            (type_identity(owner_type), field_name), ""
+        ).lower()
+        annotation_matches = sum(
+            1 for token in query.split() if token and token in annotation
+        )
+        return (
+            (4 if normalized in query else 0)
+            + (2 if normalized == node_name else 0)
+            + annotation_matches
+        )
 
     def _methods(self, owner_type: TypeRef) -> list[str]:
         signatures = [render_method(method) for method in self._input.method_registry.methods_for(owner_type)]
@@ -243,6 +280,58 @@ class TypedExpressionContextBuilder:
             ):
                 return candidate
         return None
+
+    def _apply_item_budget(self, context: TypedExpressionContext) -> TypedExpressionContext:
+        remaining = self._input.max_items
+        roots: list[TypedRootValue] = []
+        for root in context.root_values:
+            if remaining <= 0:
+                break
+            remaining -= 1
+            field_count = min(len(root.fields), remaining)
+            roots.append(root.model_copy(update={"fields": root.fields[:field_count]}))
+            remaining -= field_count
+
+        templates: list[TypedVarTemplate] = []
+        for template in context.var_templates:
+            if remaining <= 0:
+                break
+            remaining -= 1
+            field_count = min(len(template.available_fields), remaining)
+            templates.append(
+                template.model_copy(
+                    update={"available_fields": template.available_fields[:field_count]}
+                )
+            )
+            remaining -= field_count
+
+        emitted_types = {
+            item.return_type
+            for root in roots
+            for item in [root, *root.fields]
+        }
+        emitted_types.update(
+            item.return_type
+            for template in templates
+            for item in [template, *template.available_fields]
+        )
+        catalog: list[TypedMethodView] = []
+        for method_view in context.method_catalog:
+            if remaining <= 0:
+                break
+            if method_view.owner_type not in emitted_types:
+                continue
+            catalog.append(method_view)
+            remaining -= 1
+
+        patterns = context.expression_patterns[:remaining]
+        return TypedExpressionContext(
+            root_values=roots,
+            var_templates=templates,
+            method_catalog=catalog,
+            expression_patterns=patterns,
+            warnings=context.warnings,
+        )
 
 
 def render_type(type_ref: TypeRef) -> str:

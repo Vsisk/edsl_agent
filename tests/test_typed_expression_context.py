@@ -150,3 +150,219 @@ def test_builder_warns_and_skips_context_without_return_type():
     assert result.root_values == []
     assert result.warnings == ["missing return_type for context $ctx$.invalid"]
 
+
+def test_builder_expands_list_methods_and_first_object_fields():
+    bo = charge_bo()
+    charges = ContextRegistry(
+        resource_id="ctx.charges",
+        context_name="$ctx$.charges",
+        return_type=ReturnType(data_type="bo", data_type_name=bo.bo_name, is_list=True),
+        property_type="system",
+        annotation="charges",
+    )
+    result = TypedExpressionContextBuilder().build(
+        build_input(
+            filtered_env=FilteredEnvironment(
+                selected_global_contexts=[charges],
+                selected_bos=[bo],
+            ),
+            loaded=loaded_resource(contexts=[charges], bos=[bo]),
+        )
+    )
+
+    root = result.root_values[0]
+    assert [method.split("(", 1)[0] for method in root.methods] == [
+        "first",
+        "size",
+        "find{expr}",
+        "findAll{expr}",
+    ]
+    assert any(
+        field.access == "$ctx$.charges.first().CHARGE_AMT"
+        and field.return_type == "basic.long"
+        for field in root.fields
+    )
+
+
+def test_builder_expands_beyond_four_object_layers_until_basic():
+    registry = TypeRegistry()
+    for index in range(1, 6):
+        registry.register_type(
+            TypeDef(
+                owner_type=TypeRef(kind="logic", name=f"Level{index}"),
+                fields={
+                    f"level{index + 1}": TypeRef(kind="logic", name=f"Level{index + 1}")
+                },
+            )
+        )
+    registry.register_type(
+        TypeDef(
+            owner_type=TypeRef(kind="logic", name="Level6"),
+            fields={"value": TypeRef(kind="basic", name="String")},
+        )
+    )
+    root_context = ContextRegistry(
+        resource_id="ctx.deep",
+        context_name="$ctx$.deep",
+        return_type=ReturnType(data_type="logic", data_type_name="Level1"),
+        property_type="system",
+        annotation="deep",
+    )
+
+    result = TypedExpressionContextBuilder().build(
+        build_input(
+            filtered_env=FilteredEnvironment(selected_global_contexts=[root_context]),
+            loaded=loaded_resource(contexts=[root_context]),
+            type_registry=registry,
+        )
+    )
+
+    assert result.root_values[0].fields[-1].access.endswith(
+        ".level2.level3.level4.level5.level6.value"
+    )
+    assert result.root_values[0].fields[-1].return_type == "basic.String"
+
+
+def test_builder_cuts_recursive_type_cycle_with_warning():
+    registry = TypeRegistry()
+    registry.register_type(
+        TypeDef(
+            owner_type=TypeRef(kind="logic", name="Node"),
+            fields={"child": TypeRef(kind="logic", name="Node")},
+        )
+    )
+    root_context = ContextRegistry(
+        resource_id="ctx.node",
+        context_name="$ctx$.node",
+        return_type=ReturnType(data_type="logic", data_type_name="Node"),
+        property_type="system",
+        annotation="node",
+    )
+
+    result = TypedExpressionContextBuilder().build(
+        build_input(
+            filtered_env=FilteredEnvironment(selected_global_contexts=[root_context]),
+            loaded=loaded_resource(contexts=[root_context]),
+            type_registry=registry,
+        )
+    )
+
+    assert [field.access for field in result.root_values[0].fields] == ["$ctx$.node.child"]
+    assert result.warnings == ["recursive type cycle at $ctx$.node.child: logic.Node"]
+
+
+def test_builder_applies_global_item_budget_and_prioritizes_query_field():
+    registry = TypeRegistry()
+    registry.register_type(
+        TypeDef(
+            owner_type=TypeRef(kind="logic", name="ChargeView"),
+            fields={
+                "OTHER": TypeRef(kind="basic", name="String"),
+                "CHARGE_AMT": TypeRef(kind="basic", name="long"),
+            },
+        )
+    )
+    root_context = ContextRegistry(
+        resource_id="ctx.charge",
+        context_name="$ctx$.charge",
+        return_type=ReturnType(data_type="logic", data_type_name="ChargeView"),
+        property_type="system",
+        annotation="charge",
+    )
+    result = TypedExpressionContextBuilder().build(
+        build_input(
+            filtered_env=FilteredEnvironment(selected_global_contexts=[root_context]),
+            loaded=loaded_resource(contexts=[root_context]),
+            type_registry=registry,
+            max_items=2,
+        )
+    )
+
+    item_count = (
+        len(result.root_values)
+        + sum(len(root.fields) for root in result.root_values)
+        + len(result.var_templates)
+        + sum(len(template.available_fields) for template in result.var_templates)
+        + len(result.method_catalog)
+        + len(result.expression_patterns)
+    )
+    assert item_count <= 2
+    assert [field.access for field in result.root_values[0].fields] == [
+        "$ctx$.charge.CHARGE_AMT"
+    ]
+
+
+def test_builder_expands_map_get_value_fields():
+    bo = charge_bo()
+    map_type = TypeRef(
+        kind="map",
+        key_type=TypeRef(kind="basic", name="String"),
+        value_type=TypeRef(kind="bo", name=bo.bo_name),
+    )
+    charge_map = ContextRegistry.model_construct(
+        resource_id="ctx.charge_map",
+        context_name="$ctx$.chargeMap",
+        return_type=map_type,
+        property_type="system",
+        annotation="charge map",
+        tag=[],
+    )
+    result = TypedExpressionContextBuilder().build(
+        build_input(
+            filtered_env=FilteredEnvironment(
+                selected_global_contexts=[charge_map],
+                selected_bos=[bo],
+            ),
+            loaded=loaded_resource(contexts=[charge_map], bos=[bo]),
+        )
+    )
+
+    root = result.root_values[0]
+    assert root.methods == ["get(basic.String k): bo.BB_BILL_CHARGE"]
+    assert any(
+        field.access == "$ctx$.chargeMap.get(...).CHARGE_AMT"
+        for field in root.fields
+    )
+
+
+def test_builder_prioritizes_bo_field_annotation_match_under_budget():
+    bo = BoRegistry(
+        resource_id="bo.annotation",
+        bo_name="ANNOTATED_BO",
+        bo_desc="annotated",
+        property_list=[
+            PropertyTerm(
+                field_name="A_FIELD",
+                description="unrelated",
+                data_type=DataTypeEnum.basic,
+                data_type_name="String",
+            ),
+            PropertyTerm(
+                field_name="Z_FIELD",
+                description="preferred semantic amount",
+                data_type=DataTypeEnum.basic,
+                data_type_name="long",
+            ),
+        ],
+    )
+    rows = ContextRegistry(
+        resource_id="ctx.annotated",
+        context_name="$ctx$.annotated",
+        return_type=ReturnType(data_type="bo", data_type_name=bo.bo_name, is_list=True),
+        property_type="system",
+        annotation="rows",
+    )
+    request = build_input(
+        filtered_env=FilteredEnvironment(
+            selected_global_contexts=[rows],
+            selected_bos=[bo],
+        ),
+        loaded=loaded_resource(contexts=[rows], bos=[bo]),
+        max_items=2,
+    ).model_copy(update={"query": "preferred semantic amount", "node": NodeDef(node_id="n", node_path="$.n", node_name="NONE")})
+
+    result = TypedExpressionContextBuilder().build(request)
+
+    assert [field.access for field in result.root_values[0].fields] == [
+        "$ctx$.annotated.first().Z_FIELD"
+    ]

@@ -94,3 +94,27 @@ def test_parse_failure_returns_structured_error():
     assert result.logic_type == "validation_failed"
     assert result.validation_errors[0]["error_type"] == "PARSE_FAILED"
     assert result.debug_info["parsed_plan"] is None
+
+
+def test_native_function_call_round_trips_through_ast():
+    context = TypedExpressionContext(root_values=[
+        TypedRootValue(expr="$ctx$.name", source_type="context", return_type="basic.String"),
+        TypedRootValue(expr="Text.mask", source_type="function", return_type="basic.String"),
+    ])
+    expr = 'Text.mask($ctx$.name, "x").length()'
+
+    result, _ = run(SimpleExpressionPlan(return_expr=expr), context)
+
+    assert result.expression == expr
+
+
+def test_unclosed_native_function_call_returns_parse_failed():
+    context = TypedExpressionContext(root_values=[
+        TypedRootValue(expr="Text.mask", source_type="function", return_type="basic.String"),
+    ])
+
+    result, _ = run(SimpleExpressionPlan(return_expr='Text.mask("x"'), context, debug=True)
+
+    assert result.logic_type == "validation_failed"
+    assert result.validation_errors[0]["error_type"] == "PARSE_FAILED"
+    assert result.debug_info["parsed_plan"] is None

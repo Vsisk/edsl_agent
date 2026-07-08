@@ -11,7 +11,16 @@ from agent.planner.models import Plan
 
 class EDSLExpressionParser:
     def __init__(self, typed_context: TypedExpressionContext):
-        self.roots = sorted((item.expr for item in typed_context.root_values), key=len, reverse=True)
+        self.function_roots = sorted(
+            (item.expr for item in typed_context.root_values if item.source_type == "function"),
+            key=len,
+            reverse=True,
+        )
+        self.roots = sorted(
+            (item.expr for item in typed_context.root_values if item.source_type != "function"),
+            key=len,
+            reverse=True,
+        )
         self.variables: set[str] = {"it"}
 
     def parse_plan(self, simple_plan: SimpleExpressionPlan) -> Plan:
@@ -44,6 +53,9 @@ class EDSLExpressionParser:
             if op in {"==", "!=", ">", ">=", "<", "<="}:
                 return {"type": "compare", "op": op, "left": self.parse_expression(left), "right": self.parse_expression(right)}
             return {"type": "call", "name": op, "args": [self.parse_expression(left), self.parse_expression(right)]}
+        native_call = self._parse_native_call(expr)
+        if native_call is not None:
+            return native_call
         fetch = re.match(r"^(fetch_one|fetch)\((.*)\)$", expr)
         if fetch:
             args = split_top_level_commas(fetch.group(2))
@@ -72,6 +84,63 @@ class EDSLExpressionParser:
                 current = {"type": "context_path", "path": root.name}
             else:
                 current = {"type": "variable_ref", "name": root.name}
+        return self._append_chain(current, tokens)
+
+    def _parse_native_call(self, expr: str) -> dict | None:
+        qualified_name = next(
+            (name for name in self.function_roots if expr.startswith(name + "(")),
+            None,
+        )
+        if qualified_name is None:
+            return None
+        open_paren = len(qualified_name)
+        close_paren = self._find_matching_paren(expr, open_paren)
+        if close_paren is None:
+            raise ValueError(f"unclosed native function call: {qualified_name}")
+        raw_args = expr[open_paren + 1:close_paren]
+        current = {
+            "type": "call",
+            "name": qualified_name,
+            "args": [
+                self.parse_expression(arg)
+                for arg in split_top_level_commas(raw_args)
+                if arg.strip()
+            ],
+        }
+        suffix = expr[close_paren + 1:].strip()
+        if not suffix:
+            return current
+        if not suffix.startswith("."):
+            raise ValueError(f"invalid native function call suffix: {suffix}")
+        tokens = MethodChainParser().parse("root" + suffix)[1:]
+        return self._append_chain(current, tokens)
+
+    @staticmethod
+    def _find_matching_paren(expr: str, open_paren: int) -> int | None:
+        depth = 0
+        quote = False
+        escaped = False
+        for index in range(open_paren, len(expr)):
+            char = expr[index]
+            if quote:
+                if escaped:
+                    escaped = False
+                elif char == "\\":
+                    escaped = True
+                elif char == '"':
+                    quote = False
+                continue
+            if char == '"':
+                quote = True
+            elif char == "(":
+                depth += 1
+            elif char == ")":
+                depth -= 1
+                if depth == 0:
+                    return index
+        return None
+
+    def _append_chain(self, current: dict, tokens) -> dict:
         for token in tokens:
             if token.token_type == "field":
                 current = {"type": "field_access", "receiver": current, "field": token.name}

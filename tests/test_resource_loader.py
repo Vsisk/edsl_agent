@@ -18,6 +18,9 @@ from agent.resource_manager.loader.function_loader import (
     load_function_registry_by_json,
     load_function_registry_from_json,
 )
+from agent.resource_manager.loader.structured_type_loader import (
+    load_structured_type_defs_from_json,
+)
 from agent.resource_manager.loader.local_context_loader import load_visible_local_context_registry
 from agent.resource_manager.loader.resource_loader import ResourceLoader
 from agent.resource_manager.models import NamingSqlDefTerm, ParamTerm, PropertyTerm
@@ -355,6 +358,91 @@ class ResourceLoaderTest(unittest.TestCase):
         self.assertIn("$ctx$.order.buyer.name", registry_by_name)
         self.assertEqual(registry_by_name["$ctx$.order.buyer.name"].resource_id, "ctx.0000")
 
+    def test_load_context_registry_keeps_expandable_context_without_inline_children(self):
+        payload = {
+            "global_context": {
+                "property_name": "$ctx$",
+                "sub_properties": [
+                    {
+                        "property_name": "a",
+                        "property_type": "custom",
+                        "return_type": {
+                            "data_type": "logic",
+                            "data_type_name": "Container",
+                            "is_list": False,
+                        },
+                        "children": [
+                            {
+                                "property_name": "b",
+                                "annotation": "external extattr reference",
+                                "return_type": {
+                                    "data_type": "extattr",
+                                    "data_type_name": "Aextattr",
+                                    "is_list": False,
+                                },
+                            }
+                        ],
+                    }
+                ],
+            }
+        }
+
+        registry = load_context_registry_from_json(payload)
+
+        self.assertEqual(len(registry), 1)
+        self.assertEqual(registry[0].context_name, "$ctx$.a.b")
+        self.assertEqual(registry[0].return_type.data_type, "extattr")
+        self.assertEqual(registry[0].return_type.data_type_name, "Aextattr")
+
+    def test_load_structured_type_defs_reads_logic_and_extattr_properties(self):
+        payload = {
+            "logic": {
+                "logic_list": [
+                    {
+                        "type_name": "UserLogic",
+                        "annotation": "用户信息",
+                        "sub_properties": [
+                            {
+                                "property_name": "special",
+                                "property_annotation": "特殊信息",
+                                "data_type": {
+                                    "data_type": "extattr",
+                                    "data_type_name": "Aextattr",
+                                    "is_list": False,
+                                },
+                            }
+                        ],
+                    }
+                ]
+            },
+            "extattr": {
+                "extattr_list": [
+                    {
+                        "type_name": "Aextattr",
+                        "sub_properties": [
+                            {
+                                "property_name": "a_extattr_id",
+                                "property_annotation": "扩展属性ID",
+                                "data_type": {
+                                    "data_type": "basic",
+                                    "data_type_name": "String",
+                                    "is_list": False,
+                                },
+                            }
+                        ],
+                    }
+                ]
+            },
+        }
+
+        type_defs = load_structured_type_defs_from_json(payload)
+
+        self.assertEqual([type_def.owner_type.kind for type_def in type_defs], ["logic", "extattr"])
+        self.assertEqual(type_defs[0].owner_type.name, "UserLogic")
+        self.assertEqual(type_defs[0].fields["special"].kind, "extattr")
+        self.assertEqual(type_defs[1].owner_type.name, "Aextattr")
+        self.assertEqual(type_defs[1].fields["a_extattr_id"].kind, "basic")
+
     def test_load_context_registry_from_json_reads_default_sample_data(self):
         data_path = (
             Path(__file__).resolve().parents[1]
@@ -485,6 +573,50 @@ class ResourceLoaderTest(unittest.TestCase):
                 json.dumps(sample_function_payload()),
                 encoding="utf-8",
             )
+            (data_dir / "logic_def.json").write_text(
+                json.dumps(
+                    {
+                        "logic_list": [
+                            {
+                                "type_name": "UserLogic",
+                                "sub_properties": [
+                                    {
+                                        "property_name": "special",
+                                        "data_type": {
+                                            "data_type": "basic",
+                                            "data_type_name": "String",
+                                            "is_list": False,
+                                        },
+                                    }
+                                ],
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (data_dir / "exttr_def.json").write_text(
+                json.dumps(
+                    {
+                        "extattr_list": [
+                            {
+                                "type_name": "Aextattr",
+                                "sub_properties": [
+                                    {
+                                        "property_name": "a_extattr_id",
+                                        "data_type": {
+                                            "data_type": "basic",
+                                            "data_type_name": "String",
+                                            "is_list": False,
+                                        },
+                                    }
+                                ],
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
 
             loader = ResourceLoader(data_dir=data_dir)
             loaded = loader.load_resource("site1", "project1", {"root": []})
@@ -496,6 +628,7 @@ class ResourceLoaderTest(unittest.TestCase):
         self.assertEqual(loaded.domain_registry.bo_domains, ["BB_BAK_TRANS", "CUSTOM_ACCOUNT"])
         self.assertEqual(loaded.domain_registry.func_domains, ["DacsDataTrans", "deOrg"])
         self.assertEqual(loaded.domain_registry.namingsql_domains, ["BB_BAK_TRANS"])
+        self.assertEqual([type_def.owner_type.name for type_def in loaded.type_defs], ["UserLogic", "Aextattr"])
         self.assertFalse(hasattr(loaded, "naming_sql_profiles"))
         self.assertEqual(
             loaded.bo_registry["BB_BAK_TRANS"].naming_sql_list[0].sql_name,

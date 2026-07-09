@@ -81,6 +81,7 @@ class TypedExpressionContextBuilder:
         self._warnings: list[str] = []
         self._method_catalog: dict[str, list[str]] = {}
         self._field_annotations: dict[tuple[tuple[Any, ...], str], str] = {}
+        self._register_loaded_type_defs()
         self._register_selected_bos()
 
         roots: list[TypedRootValue] = []
@@ -103,6 +104,10 @@ class TypedExpressionContextBuilder:
             warnings=self._warnings,
         )
         return self._apply_item_budget(context)
+
+    def _register_loaded_type_defs(self) -> None:
+        for type_def in getattr(self._input.loaded_resource, "type_defs", []) or []:
+            self._input.type_registry.register_type(type_def)
 
     def _register_selected_bos(self) -> None:
         bos: dict[str, BoRegistry] = {

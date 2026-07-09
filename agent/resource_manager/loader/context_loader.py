@@ -59,7 +59,7 @@ def _collect_context_registry(
     if data_type_name:
         current_tag_parts.append(str(data_type_name))
 
-    if return_type and not _is_expandable(data_type):
+    if return_type and (not _is_expandable(data_type) or not children):
         tag_parts_for_leaf = [property_name, property_type, annotation, *tag_parts]
         if data_type_name:
             tag_parts_for_leaf.append(str(data_type_name))

@@ -10,9 +10,10 @@ from agent.environment.environment import build_filtered_environment, filter_res
 from agent.environment.resource_filter import LLMResourceFilter, ResourceFilterTargetGenerator
 from agent.expression_generation.ast.builder import build_ast
 from agent.expression_generation.ast.generator import generate_expression
-from agent.expression_generation.ast.validator import validate_ast
+from agent.expression_generation.ast.validator import AstValidationContext, validate_ast
 from agent.expression_generation.type_system import (
     MethodRegistry,
+    TypeRef,
     TypeRegistry,
     create_builtin_method_registry,
 )
@@ -290,7 +291,14 @@ class ValueLogicGenerator:
             except (ValueError, TypeError) as exc:
                 return self._simple_plan_failure(request, typed_context, plan, "AST_BUILD_FAILED", exc, parsed_plan)
             try:
-                validate_ast(ast)
+                validate_ast(
+                    ast,
+                    self._build_ast_validation_context(
+                        loaded_resource=ctx.resources.loaded,
+                        filtered_env=filtered_env,
+                        typed_context=typed_context,
+                    ),
+                )
             except (ValueError, TypeError) as exc:
                 return self._simple_plan_failure(request, typed_context, plan, "AST_VALIDATION_FAILED", exc, parsed_plan)
             if request.debug:
@@ -330,6 +338,34 @@ class ValueLogicGenerator:
             node_id=self._node_id(request.node), logic_type="validation_failed", expression=None,
             source=ValueLogicSource(source_type="plan"),
             validation_errors=[{"error_type": error_type, "message": message}], debug_info=debug_info,
+        )
+
+    def _build_ast_validation_context(
+        self,
+        *,
+        loaded_resource: LoadedResource,
+        filtered_env,
+        typed_context=None,
+    ) -> AstValidationContext:
+        context_registry = dict(loaded_resource.context_registry)
+        context_registry.update(
+            {
+                context.context_name: context
+                for context in getattr(filtered_env, "visible_local_context", []) or []
+            }
+        )
+        context_types = {}
+        if typed_context is not None:
+            context_types = {
+                root.expr: _parse_rendered_type(root.return_type)
+                for root in typed_context.root_values
+                if root.source_type != "function"
+            }
+        return AstValidationContext(
+            context_registry=context_registry,
+            context_types=context_types,
+            type_registry=self.type_registry,
+            method_registry=self.method_registry,
         )
 
     def _requested_bo_name(self, request: ValueLogicRequest) -> str | None:
@@ -573,6 +609,28 @@ def _resource_count_summary(loaded_resource: LoadedResource) -> dict[str, int]:
 def _default_naming_sql_selector_factory(loaded_resource: LoadedResource) -> NamingSqlSelector:
     """Build request-scoped selector dependencies around the current resource snapshot."""
     return NamingSqlSelector(ContextManager(loaded_resource))
+
+
+def _parse_rendered_type(value: str) -> TypeRef:
+    text = str(value or "").strip()
+    if text.startswith("List<") and text.endswith(">"):
+        return TypeRef(kind="list", element_type=_parse_rendered_type(text[5:-1]))
+    if text.startswith("Map<") and text.endswith(">"):
+        inner = text[4:-1]
+        key, separator, val = inner.partition(",")
+        if separator:
+            return TypeRef(
+                kind="map",
+                key_type=_parse_rendered_type(key),
+                value_type=_parse_rendered_type(val),
+            )
+    if "." in text:
+        kind, name = text.split(".", 1)
+        if kind in {"basic", "bo", "logic", "extattr"} and name:
+            return TypeRef(kind=kind, name=name)
+    if text in {"void", "unknown"}:
+        return TypeRef(kind=text)
+    return TypeRef(kind="unknown")
 
 
 def _string_list(value: Any) -> list[str]:

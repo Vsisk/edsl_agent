@@ -103,6 +103,38 @@ def test_builder_expands_context_object_to_basic_field_with_methods():
     assert "dateValue(basic.String format): basic.Date" in addr1.methods
 
 
+def test_builder_expands_context_logic_and_extattr_data_type_defs():
+    extattr_context = ContextRegistry(
+        resource_id="ctx.a.b",
+        context_name="$ctx$.a.b",
+        return_type=ReturnType(data_type="extattr", data_type_name="Aextattr", is_list=False),
+        property_type="custom",
+        annotation="external extattr reference",
+    )
+    loaded = loaded_resource(contexts=[extattr_context])
+    loaded.type_defs.extend(
+        [
+            TypeDef(
+                owner_type=TypeRef(kind="extattr", name="Aextattr"),
+                fields={"a_extattr_id": TypeRef(kind="basic", name="String")},
+            )
+        ]
+    )
+
+    context = TypedExpressionContextBuilder().build(
+        build_input(
+            filtered_env=FilteredEnvironment(selected_global_contexts=[extattr_context]),
+            loaded=loaded,
+        )
+    )
+
+    root = context.root_values[0]
+    assert root.expr == "$ctx$.a.b"
+    ext_id = next(field for field in root.fields if field.access == "$ctx$.a.b.a_extattr_id")
+    assert ext_id.return_type == "basic.String"
+    assert "length(): basic.int" in ext_id.methods
+
+
 def test_builder_uses_it_for_naming_sql_owning_bo_fields():
     bo = charge_bo()
     candidate = NamingSqlCandidate(

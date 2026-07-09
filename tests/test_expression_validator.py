@@ -5,13 +5,22 @@ from agent.expression_generation.ast.nodes import (
     CallNode,
     CompareNode,
     ContextPathNode,
+    FieldAccessNode,
     FetchNode,
     FunctionParamNode,
     LiteralNode,
     ProgramNode,
+    ReturnNode,
     SelectNode,
 )
-from agent.expression_generation.ast.validator import validate_ast
+from agent.expression_generation.ast.validator import AstValidationContext, validate_ast
+from agent.expression_generation.type_system import (
+    TypeDef,
+    TypeRef,
+    TypeRegistry,
+    create_builtin_method_registry,
+)
+from agent.resource_manager.loader.registry_models import ContextRegistry, ReturnType
 
 
 class ExpressionValidatorTest(unittest.TestCase):
@@ -117,6 +126,95 @@ class ExpressionValidatorTest(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "exists"):
             validate_ast(ast)
+
+    def test_context_path_chain_resolves_fields_from_registered_types(self):
+        type_registry = TypeRegistry()
+        type_registry.register_type(
+            TypeDef(
+                owner_type=TypeRef(kind="logic", name="AType"),
+                fields={"b": TypeRef(kind="logic", name="BType")},
+            )
+        )
+        type_registry.register_type(
+            TypeDef(
+                owner_type=TypeRef(kind="logic", name="BType"),
+                fields={"c": TypeRef(kind="extattr", name="CAttr")},
+            )
+        )
+        type_registry.register_type(
+            TypeDef(
+                owner_type=TypeRef(kind="extattr", name="CAttr"),
+                fields={"d": TypeRef(kind="basic", name="String")},
+            )
+        )
+        context_registry = {
+            "$ctx$.a": ContextRegistry(
+                resource_id="ctx.a",
+                context_name="$ctx$.a",
+                return_type=ReturnType(data_type="logic", data_type_name="AType", is_list=False),
+                property_type="custom",
+                annotation="a",
+            )
+        }
+        ast = ProgramNode(
+            type="program",
+            body=[
+                ReturnNode(
+                    type="return",
+                    value=ContextPathNode(type="context_path", path="$ctx$.a.b.c.d"),
+                )
+            ],
+        )
+
+        validate_ast(
+            ast,
+            AstValidationContext(
+                context_registry=context_registry,
+                type_registry=type_registry,
+                method_registry=create_builtin_method_registry(),
+            ),
+        )
+
+    def test_context_path_chain_rejects_missing_nested_field(self):
+        type_registry = TypeRegistry()
+        type_registry.register_type(
+            TypeDef(
+                owner_type=TypeRef(kind="logic", name="AType"),
+                fields={"b": TypeRef(kind="logic", name="BType")},
+            )
+        )
+        context_registry = {
+            "$ctx$.a": ContextRegistry(
+                resource_id="ctx.a",
+                context_name="$ctx$.a",
+                return_type=ReturnType(data_type="logic", data_type_name="AType", is_list=False),
+                property_type="custom",
+                annotation="a",
+            )
+        }
+        ast = ProgramNode(
+            type="program",
+            body=[
+                ReturnNode(
+                    type="return",
+                    value=FieldAccessNode(
+                        type="field_access",
+                        receiver=ContextPathNode(type="context_path", path="$ctx$.a.b"),
+                        field="missing",
+                    ),
+                )
+            ],
+        )
+
+        with self.assertRaisesRegex(ValueError, "field not found.*missing"):
+            validate_ast(
+                ast,
+                AstValidationContext(
+                    context_registry=context_registry,
+                    type_registry=type_registry,
+                    method_registry=create_builtin_method_registry(),
+                ),
+            )
 
 
 if __name__ == "__main__":

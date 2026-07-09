@@ -1,7 +1,8 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import json
 from pathlib import Path
 from typing import Dict, Any
+from agent.expression_generation.type_system import TypeDef
 from agent.resource_manager.loader.bo_loader import load_bo_registry_by_json
 from agent.resource_manager.loader.context_loader import load_context_registry_by_json
 from agent.resource_manager.loader.function_loader import load_function_registry_by_json
@@ -13,6 +14,7 @@ from agent.resource_manager.loader.registry_models import (
     FunctionRegistry,
     LocalContextRegistry,
 )
+from agent.resource_manager.loader.structured_type_loader import load_structured_type_defs_from_json
 
 
 @dataclass(slots=True)
@@ -22,6 +24,7 @@ class LoadedResource:
     function_registry: Dict[str, FunctionRegistry]
     edsl_tree: Dict[str, Any]
     domain_registry: DomainRegistry
+    type_defs: list[TypeDef] = field(default_factory=list)
 
     def get_visible_local_context_registry(self, node_path: str) -> Dict[str, LocalContextRegistry]:
         return {
@@ -36,12 +39,16 @@ class ResourceLoader:
     CONTEXT_FILE = "context_definition.json"
     BO_FILE = "bo_def_ootb.json"
     FUNCTION_FILE = "edsl_func.json"
+    LOGIC_FILE = "logic_def.json"
+    EXTATTR_FILE = "exttr_def.json"
+    EXTATTR_ALT_FILE = "extattr_def.json"
 
     def __init__(self, data_dir: str | Path | None = None):
         self.data_dir = Path(data_dir) if data_dir is not None else self.DEFAULT_DATA_DIR
         self.context_registry_cache: Dict[str, Dict[str, ContextRegistry]] = {}
         self.bo_registry_cache: Dict[str, Dict[str, BoRegistry]] = {}
         self.function_registry_cache: Dict[str, Dict[str, FunctionRegistry]] = {}
+        self.type_defs_cache: Dict[str, list[TypeDef]] = {}
     
     def load_resource(self, site_id: str, project_id: str, edsl_tree: Dict[str, Any]) -> LoadedResource:
         payload = self.get_resource_data(site_id, project_id)
@@ -53,6 +60,13 @@ class ResourceLoader:
             self.bo_registry_cache[source_key] = load_bo_registry_by_json(payload.get("bo") or {})
         if not self.function_registry_cache.get(source_key):
             self.function_registry_cache[source_key] = load_function_registry_by_json(payload.get("function") or {})
+        if source_key not in self.type_defs_cache:
+            self.type_defs_cache[source_key] = load_structured_type_defs_from_json(
+                {
+                    "logic": payload.get("logic") or {},
+                    "extattr": payload.get("extattr") or {},
+                }
+            )
 
         return LoadedResource(
             context_registry=self.context_registry_cache[source_key],
@@ -64,13 +78,19 @@ class ResourceLoader:
                 bo_registry=self.bo_registry_cache[source_key],
                 function_registry=self.function_registry_cache[source_key],
             ),
+            type_defs=self.type_defs_cache[source_key],
         )
 
     def get_resource_data(self, site_id: str, project_id: str) -> Dict[str, Any]:
+        extattr_payload = self._read_json_file(self.EXTATTR_FILE)
+        if not extattr_payload:
+            extattr_payload = self._read_json_file(self.EXTATTR_ALT_FILE)
         return {
             "context": self._read_json_file(self.CONTEXT_FILE),
             "bo": self._read_json_file(self.BO_FILE),
             "function": self._read_json_file(self.FUNCTION_FILE),
+            "logic": self._read_json_file(self.LOGIC_FILE),
+            "extattr": extattr_payload,
         }
 
     def _read_json_file(self, file_name: str) -> Dict[str, Any]:

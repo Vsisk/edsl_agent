@@ -1,5 +1,7 @@
 # NamingSQL Context Manager
 
+统一的本地上下文入口及 Phase 1 资源说明见 [ContextPackManager 指南](agent/context_pack/README.md)。
+
 Configure the OpenAI-compatible embedding and language-model clients with
 `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `OPENAI_BASE_MODEL`, and
 `OPENAI_EMBEDDING_MODEL` (default: `bge-m3`). Set the

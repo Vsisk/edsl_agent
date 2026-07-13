@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any
 from pydantic import ValidationError
 
 from agent.environment.environment import FilteredEnvironment
+from agent.context_pack import ContextPack, ContextPackPromptRenderer
 from agent.expression_generation.typed_context import TypedExpressionContext
 from agent.llm.generate_by_llm import generate_by_llm
 from agent.llm.llm_client import LLMClient
@@ -47,11 +48,16 @@ class LLMPlanner:
         user_query: str,
         filtered_env: FilteredEnvironment,
         typed_context: TypedExpressionContext | None = None,
+        context_pack: ContextPack | None = None,
     ) -> Plan:
         if not self.is_usable:
             raise RuntimeError("LLM planner is not usable")
 
-        resources_json = _summarize_filtered_environment_json(filtered_env)
+        resources = _summarize_filtered_environment(filtered_env)
+        resources["context_pack"] = (
+            json.loads(ContextPackPromptRenderer().render_json(context_pack)) if context_pack else {}
+        )
+        resources_json = _dump_json(resources)
         typed_context_json = _summarize_typed_context_json(typed_context)
         node_info_json = _dump_json(_summarize_node(node_info))
         plan_schema_json = _dump_json(LEGACY_PLAN_SCHEMA)

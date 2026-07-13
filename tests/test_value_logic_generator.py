@@ -103,11 +103,14 @@ class CapturingPacks:
 def test_context_pack_is_built_once_before_spec_and_fixed_resources_are_always_used():
     events, packs = [], CapturingPacks()
     route = ContextRoute(False)
-    generator(lambda loaded: (_ for _ in ()).throw(AssertionError()), Planner(fetch=False),
+    planner = Planner(fetch=False)
+    generator(lambda loaded: (_ for _ in ()).throw(AssertionError()), planner,
               packs, route, Specs(events)).generate(request(False))
     assert len(packs.calls) == 1
     assert packs.calls[0][0].resource_names == ["dev_skill", "ootb_edsl"]
     assert events == [("spec", packs.pack)]
+    assert packs.pack is not None
+    assert planner.calls[0]["context_pack"] is packs.pack
 
 
 def test_context_route_fallback_builds_all_resources():

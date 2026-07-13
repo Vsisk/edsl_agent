@@ -328,6 +328,7 @@ class ValueLogicGenerator:
             user_query=request.query,
             filtered_env=filtered_env,
             typed_context=typed_context,
+            context_pack=ctx.context_pack,
         )
         debug_info = None
         if isinstance(plan, SimpleExpressionPlan):

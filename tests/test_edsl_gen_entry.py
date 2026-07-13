@@ -11,13 +11,14 @@ class FakePlanner:
     def __init__(self):
         self.calls = []
 
-    def plan(self, *, node_info, user_query, filtered_env, typed_context):
+    def plan(self, *, node_info, user_query, filtered_env, typed_context, context_pack):
         self.calls.append(
             {
                 "node_info": node_info,
                 "user_query": user_query,
                 "filtered_env": filtered_env,
                 "typed_context": typed_context,
+                "context_pack": context_pack,
             }
         )
         return Plan.model_validate(
@@ -102,7 +103,7 @@ class EDSLGenEntryTest(unittest.TestCase):
 
 
 class FailingPlanner:
-    def plan(self, *, node_info, user_query, filtered_env, typed_context):
+    def plan(self, *, node_info, user_query, filtered_env, typed_context, context_pack):
         raise RuntimeError("planner exploded")
 
 

@@ -2,6 +2,10 @@
 
 `ContextPackManager` 是统一的本地上下文入口。调用方只提交当前操作节点、查询和显式资源白名单；管理器返回结构化 `ContextPack`，不直接生成 prompt。
 
+`ValueLogicGenerator` 在每次请求开始时只构建一次 ContextPack。轻量 LLM 路由只判断是否需要 `current_tree`；`dev_skill` 与 `ootb_edsl` 固定召回。路由不可用或输出非法时启用全部三类资源，并记录 `CONTEXT_RESOURCE_ROUTE_FALLBACK`。
+
+同一 pack 保存在 `GenerationContext` 中，显式传给 spec、NamingSQL Selector、typed-context builder 和 planner。Planner 使用 `ContextPackPromptRenderer` 的有界投影，不读取完整树或未召回资源。
+
 ## 公开调用
 
 ```python

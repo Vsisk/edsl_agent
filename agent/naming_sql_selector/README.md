@@ -2,6 +2,8 @@
 
 `NamingSqlSelector` 是 ContextPack 召回之后的受约束决策层。请求必须携带已经构建好的 `ContextPack`；候选只能来自同一请求的权威 `LoadedResource`。
 
+在 ValueLogic 调用链中，该 pack 已于 spec 生成前完成构建；Selector 必须消费 `GenerationContext` 中的同一对象，不得自行重新召回。
+
 ```python
 selector = NamingSqlSelector(loaded_resource)
 response = selector.select(NamingSqlSelectRequest(

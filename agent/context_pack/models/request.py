@@ -8,7 +8,6 @@ class ResourceName(str, Enum):
     DEV_SKILL = "dev_skill"
     OOTB_EDSL = "ootb_edsl"
     CURRENT_TREE = "current_tree"
-    NAMINGSQL = "namingsql"
 
 
 class ContextPackRequest(BaseModel):

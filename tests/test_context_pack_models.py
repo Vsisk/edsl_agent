@@ -45,6 +45,15 @@ def test_request_rejects_invalid_payload(payload):
         ContextPackRequest(**payload)
 
 
+def test_request_rejects_namingsql_as_a_context_resource():
+    with pytest.raises(ValidationError):
+        ContextPackRequest(
+            node={"node_id": "n"},
+            query="find customer",
+            resource_names=["namingsql"],
+        )
+
+
 def make_item(item_id="item-1"):
     return ContextItem(
         item_id=item_id,

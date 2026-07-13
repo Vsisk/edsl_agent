@@ -2,7 +2,7 @@ from dataclasses import dataclass
 
 import pytest
 
-from agent.context_pack.errors import RESOURCE_NOT_REGISTERED, ContextProviderError
+from agent.context_pack.errors import ContextProviderError
 from agent.context_pack.manager import ContextPackManager
 from agent.context_pack.models import ContextPackRequest, ContextSection, ResourceName
 from agent.context_pack.project_context import ProjectContext
@@ -61,15 +61,6 @@ def test_registry_uses_canonical_order_not_request_order():
 def test_registry_rejects_duplicate_provider_names():
     with pytest.raises(ValueError, match="duplicate provider"):
         SourceRegistry([CapturingProvider(ResourceName.DEV_SKILL), CapturingProvider(ResourceName.DEV_SKILL)])
-
-
-def test_missing_requested_provider_has_stable_error():
-    manager = ContextPackManager(SourceRegistry([]), CapturingBuilder())
-
-    with pytest.raises(ContextProviderError) as error:
-        manager.build(request(["namingsql"]), ProjectContext())
-
-    assert error.value.code == RESOURCE_NOT_REGISTERED
 
 
 def test_expected_provider_error_becomes_sanitized_error_section():

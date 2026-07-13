@@ -30,11 +30,11 @@ pack = manager.build(
 
 默认 `agent/resource_manager/data/edsl_tree.json` 是当前树测试数据，不是 OOTB。生产调用必须通过 `ProjectContext.ootb_tree` 单独注入完整 OOTB 树。
 
-`namingsql` 已保留为资源名，但 Phase 1 尚未注册对应 Provider；请求它会返回 `RESOURCE_NOT_REGISTERED`，直到后续迁移完成。
+NamingSQL 不属于 ContextPack 资源。它是 ContextPack 召回之后的受约束决策：`NamingSqlSelector` 综合 pack 中的当前树事实、开发规范和 OOTB 参考，并且只能从权威 `LoadedResource` 中选择 canonical NamingSQL。
 
 ## 输出与权威级别
 
-`ContextPack.sections` 采用稳定顺序：`current_tree -> namingsql -> dev_skill -> ootb_edsl`。只输出本次实际申请且已注册的 sections。
+`ContextPack.sections` 采用稳定顺序：`current_tree -> dev_skill -> ootb_edsl`。只输出本次实际申请且已注册的 sections。
 
 - 当前树 item 是 `authoritative`；
 - 开发 skill item 是 `normative`；

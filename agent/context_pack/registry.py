@@ -25,7 +25,6 @@ class ContextProviderProtocol(Protocol):
 
 CANONICAL_RESOURCE_ORDER = (
     ResourceName.CURRENT_TREE,
-    ResourceName.NAMINGSQL,
     ResourceName.DEV_SKILL,
     ResourceName.OOTB_EDSL,
 )

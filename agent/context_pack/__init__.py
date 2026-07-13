@@ -7,6 +7,7 @@ from .project_context import ProjectContext
 from .providers import CurrentTreeProvider, DevSkillProvider, OotbEdslProvider
 from .registry import SourceRegistry
 from .search import LocalResourceSearchTool
+from .resource_router import ContextResourceRoute, FastContextResourceRouter
 
 
 def create_context_pack_manager(*, embedding_client=None, profiles=None) -> ContextPackManager:
@@ -23,6 +24,8 @@ __all__ = [
     "ContextPack",
     "ContextPackManager",
     "ContextPackRequest",
+    "ContextResourceRoute",
+    "FastContextResourceRouter",
     "ProjectContext",
     "ResourceName",
     "create_context_pack_manager",

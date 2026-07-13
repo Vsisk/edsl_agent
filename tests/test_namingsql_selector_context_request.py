@@ -18,7 +18,9 @@ from agent.naming_sql_selector import (
     NamingSqlSelectRequest,
     NamingSqlSelectResponse,
     NamingSqlSelector,
+    SelectionMode,
 )
+from agent.context_pack.models import ContextPack
 
 
 class CapturingManager:
@@ -37,6 +39,8 @@ class CapturingManager:
 def _request(**updates):
     values = dict(site_id="site", project_id="project", query="find fees",
                   node={"id": "n"}, json_path="$.nodes[0]",
+                  context_pack=ContextPack(status="complete", request_summary={"query": "find fees"},
+                                           current_node={"id": "n"}),
                   target_bo_name="Fee", parent_bo_hint="Account",
                   target_logic_area_id_list=["la-1"], top_k=7, debug=False)
     values.update(updates)
@@ -132,6 +136,25 @@ def test_response_invariants(values):
         NamingSqlSelectResponse(**values)
 
 
+def test_request_requires_context_pack():
+    values = _request().model_dump()
+    values.pop("context_pack")
+    with pytest.raises(ValidationError):
+        NamingSqlSelectRequest(**values)
+
+
+def test_success_requires_selection_mode_and_failed_response_forbids_it():
+    candidate = _context().resource_candidates.candidates[0]
+    with pytest.raises(ValidationError):
+        NamingSqlSelectResponse(success=True, candidates=[candidate])
+    with pytest.raises(ValidationError):
+        NamingSqlSelectResponse(
+            success=False,
+            failure_reason="FAILED",
+            selection_mode="deterministic_fallback",
+        )
+
+
 def test_request_is_strict_and_top_k_is_bounded():
     with pytest.raises(ValidationError):
         _request(extra_field=True)
@@ -166,6 +189,7 @@ def test_response_rejects_coercion():
 def test_response_rejects_nested_domain_coercion(field, value):
     values = {
         "success": True,
+        "selection_mode": SelectionMode.LLM,
         "candidates": _context().resource_candidates.candidates,
         field: value,
     }
@@ -193,6 +217,7 @@ def test_response_revalidates_mutated_domain_instances_strictly(field):
     with pytest.raises(ValidationError):
         NamingSqlSelectResponse(
             success=True,
+            selection_mode=SelectionMode.LLM,
             candidates=[candidate],
             context_requirements_hint=[hint],
             selection_constraints=constraint,
@@ -208,6 +233,7 @@ def test_response_copies_valid_domain_instances():
 
     response = NamingSqlSelectResponse(
         success=True,
+        selection_mode=SelectionMode.LLM,
         candidates=[candidate],
         context_requirements_hint=[hint],
         selection_constraints=constraint,

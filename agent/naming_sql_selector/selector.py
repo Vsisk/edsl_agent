@@ -17,7 +17,7 @@ from agent.context_manager.errors import (
 )
 from agent.context_manager.models import BuildContextRequest
 
-from .models import NamingSqlSelectRequest, NamingSqlSelectResponse
+from .models import NamingSqlSelectRequest, NamingSqlSelectResponse, SelectionMode
 
 
 KNOWN_CONTEXT_ERROR_CODES = frozenset({
@@ -61,6 +61,7 @@ class NamingSqlSelector:
 
         return NamingSqlSelectResponse(
             success=True,
+            selection_mode=SelectionMode.LLM,
             candidates=deepcopy(context.resource_candidates.candidates),
             context_requirements_hint=deepcopy(context.requirement_hints),
             selection_constraints=deepcopy(context.constraints),

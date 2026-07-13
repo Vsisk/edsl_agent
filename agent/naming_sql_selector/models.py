@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from enum import Enum
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -10,6 +11,12 @@ from agent.context_manager.models import (
     NamingSqlCandidate,
     NamingSqlSelectionConstraints,
 )
+from agent.context_pack.models import ContextPack
+
+
+class SelectionMode(str, Enum):
+    LLM = "llm"
+    DETERMINISTIC_FALLBACK = "deterministic_fallback"
 
 
 def _strict_copy(model_type: type[BaseModel], value: Any) -> BaseModel:
@@ -25,6 +32,7 @@ class NamingSqlSelectRequest(BaseModel):
     query: str
     node: dict[str, Any]
     json_path: str
+    context_pack: ContextPack
     target_bo_name: str | None = None
     parent_bo_hint: str | None = None
     target_logic_area_id_list: list[str] = Field(default_factory=list)
@@ -36,6 +44,8 @@ class NamingSqlSelectResponse(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
     success: bool
+    selection_mode: SelectionMode | None = None
+    warnings: list[str] = Field(default_factory=list)
     candidates: list[NamingSqlCandidate] = Field(default_factory=list)
     context_requirements_hint: list[ContextRequirementHint] = Field(default_factory=list)
     selection_constraints: NamingSqlSelectionConstraints | None = None
@@ -78,6 +88,8 @@ class NamingSqlSelectResponse(BaseModel):
                 raise ValueError("successful selection requires at least one candidate")
             if self.failure_reason is not None:
                 raise ValueError("successful selection cannot have a failure reason")
+            if self.selection_mode is None:
+                raise ValueError("successful selection requires a selection mode")
         else:
             if self.candidates:
                 raise ValueError("failed selection cannot have candidates")
@@ -85,4 +97,6 @@ class NamingSqlSelectResponse(BaseModel):
                 raise ValueError("failed selection requires a failure reason")
             if self.prompt_view is not None:
                 raise ValueError("failed selection cannot expose prompt internals")
+            if self.selection_mode is not None:
+                raise ValueError("failed selection cannot have a selection mode")
         return self

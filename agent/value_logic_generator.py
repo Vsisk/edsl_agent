@@ -30,7 +30,7 @@ from agent.naming_sql_selector import (
     validate_naming_sql_plan,
 )
 from agent.naming_sql_selector.selector import KNOWN_CONTEXT_ERROR_CODES
-from agent.context_manager import ContextManager
+from agent.context_pack import ContextPackRequest, ProjectContext, create_context_pack_manager
 from agent.planner.difficulty_router import LLMDifficultyRouter, ResourceRoute
 from agent.planner.llm_planner import LLMPlanner
 from agent.planner.models import Plan
@@ -79,6 +79,7 @@ class ValueLogicGenerator:
         resource_filter_target_generator: Any | None = None,
         enable_legacy_filter_fallback: bool = False,
         naming_sql_selector_factory: Callable[[LoadedResource], NamingSqlSelector] | None = None,
+        context_pack_manager: Any | None = None,
         typed_expression_context_builder: Any | None = None,
         type_registry: TypeRegistry | None = None,
         method_registry: MethodRegistry | None = None,
@@ -91,6 +92,7 @@ class ValueLogicGenerator:
         self.resource_filter_target_generator = resource_filter_target_generator or ResourceFilterTargetGenerator()
         self.enable_legacy_filter_fallback = enable_legacy_filter_fallback
         self.naming_sql_selector_factory = naming_sql_selector_factory or _default_naming_sql_selector_factory
+        self.context_pack_manager = context_pack_manager or create_context_pack_manager()
         self.typed_expression_context_builder = (
             typed_expression_context_builder or TypedExpressionContextBuilder()
         )
@@ -243,12 +245,24 @@ class ValueLogicGenerator:
         if requires_naming_sql(
             request.structured_spec, request.query, expression_spec.nl, request.node, request.parent_node
         ):
+            context_pack = self.context_pack_manager.build(
+                ContextPackRequest(
+                    node=request.node,
+                    query=request.query or expression_spec.nl,
+                    resource_names=["current_tree"],
+                ),
+                ProjectContext(
+                    current_tree=request.edsl_tree,
+                    loaded_resource=ctx.resources.loaded,
+                ),
+            )
             selection_request = NamingSqlSelectRequest(
                 site_id=request.site_id,
                 project_id=request.project_id,
                 query=request.query or expression_spec.nl,
                 node=request.node,
                 json_path=request.node_path,
+                context_pack=context_pack,
                 target_bo_name=self._requested_bo_name(request),
                 parent_bo_hint=self._extract_parent_sql_bo_name(request.parent_node),
                 target_logic_area_id_list=_string_list(request.node.get("reference_logic_area_id_list")),
@@ -608,7 +622,7 @@ def _resource_count_summary(loaded_resource: LoadedResource) -> dict[str, int]:
 
 def _default_naming_sql_selector_factory(loaded_resource: LoadedResource) -> NamingSqlSelector:
     """Build request-scoped selector dependencies around the current resource snapshot."""
-    return NamingSqlSelector(ContextManager(loaded_resource))
+    return NamingSqlSelector(loaded_resource)
 
 
 def _parse_rendered_type(value: str) -> TypeRef:

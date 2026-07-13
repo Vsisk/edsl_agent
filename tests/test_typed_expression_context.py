@@ -11,7 +11,7 @@ from agent.expression_generation.typed_context import (
     TypedExpressionContextBuilder,
 )
 from agent.models import NodeDef
-from agent.naming_sql_selector.models import NamingSqlSelectResponse
+from agent.naming_sql_selector.models import NamingSqlSelectResponse, SelectionMode
 from agent.resource_manager.loader.registry_models import (
     BoRegistry,
     ContextRegistry,
@@ -146,7 +146,8 @@ def test_builder_uses_it_for_naming_sql_owning_bo_fields():
         source="resource_registry",
         rank=0,
     )
-    selection = NamingSqlSelectResponse(success=True, candidates=[candidate])
+    selection = NamingSqlSelectResponse(success=True, selection_mode=SelectionMode.DETERMINISTIC_FALLBACK,
+                                        candidates=[candidate])
     context = TypedExpressionContextBuilder().build(
         build_input(
             filtered_env=FilteredEnvironment(selected_bos=[bo], naming_sql_selection=selection),
@@ -181,7 +182,8 @@ def test_builder_binds_naming_sql_condition_from_owning_bo_field():
         source="resource_registry",
         rank=0,
     )
-    selection = NamingSqlSelectResponse(success=True, candidates=[candidate])
+    selection = NamingSqlSelectResponse(success=True, selection_mode=SelectionMode.DETERMINISTIC_FALLBACK,
+                                        candidates=[candidate])
 
     result = TypedExpressionContextBuilder().build(
         build_input(

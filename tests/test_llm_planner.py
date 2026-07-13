@@ -21,7 +21,7 @@ from agent.planner.llm_planner import (
 )
 from agent.planner.models import Plan, ReturnExprPlanNode
 from agent.context_manager.models import ContextEvidenceItem, NamingSqlCandidate
-from agent.naming_sql_selector import NamingSqlSelectResponse
+from agent.naming_sql_selector import NamingSqlSelectResponse, SelectionMode
 
 
 class FakeSettings:
@@ -311,7 +311,7 @@ def _node_info() -> NodeDef:
     )
 
 def _selection():
-    return NamingSqlSelectResponse(success=True, candidates=[
+    return NamingSqlSelectResponse(success=True, selection_mode=SelectionMode.DETERMINISTIC_FALLBACK, candidates=[
         NamingSqlCandidate(candidate_id="internal-candidate-1", bo_name="Customer", naming_sql_id="ns.1",
             naming_sql_name="FindCustomer", param_list=[{"param_name": "id", "data_type_name": "String"}],
             source="resource_registry", rank=1),

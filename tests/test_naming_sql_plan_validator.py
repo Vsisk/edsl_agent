@@ -1,12 +1,13 @@
 import pytest
 
 from agent.context_manager.models import NamingSqlCandidate, NamingSqlSelectionConstraints
-from agent.naming_sql_selector import NamingSqlSelectResponse, validate_naming_sql_plan
+from agent.naming_sql_selector import NamingSqlSelectResponse, SelectionMode, validate_naming_sql_plan
 from agent.planner.models import Plan
 
 
 def response(*candidates, constraints=None):
-    return NamingSqlSelectResponse(success=True, candidates=list(candidates), selection_constraints=constraints)
+    return NamingSqlSelectResponse(success=True, selection_mode=SelectionMode.DETERMINISTIC_FALLBACK,
+                                   candidates=list(candidates), selection_constraints=constraints)
 
 
 def candidate(cid, name, params=("id",), rank=1):

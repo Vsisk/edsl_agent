@@ -2,9 +2,10 @@ import pytest
 
 from agent.context_manager.models import NamingSqlCandidate
 from agent.context_manager.errors import NO_NAMING_SQL_CANDIDATES
+from agent.context_pack.models import ContextPack
 from agent.expression_generation.typed_context import TypedExpressionContext
 from agent.models import ValueLogicRequest
-from agent.naming_sql_selector import NamingSqlSelectResponse
+from agent.naming_sql_selector import NamingSqlSelectResponse, SelectionMode
 from agent.planner.models import Plan
 from agent.resource_manager.loader.resource_loader import ResourceLoader
 from agent.value_logic_generator import ExpressionSpec, ValueLogicGenerator, requires_naming_sql
@@ -62,7 +63,8 @@ def candidate(cid, name, rank):
 
 
 def success():
-    return NamingSqlSelectResponse(success=True, candidates=[candidate("a", "FindCustomer", 1),
+    return NamingSqlSelectResponse(success=True, selection_mode=SelectionMode.DETERMINISTIC_FALLBACK,
+        candidates=[candidate("a", "FindCustomer", 1),
         candidate("b", "FindCustomerRecent", 2)])
 
 
@@ -73,10 +75,10 @@ def request(route=True):
         structured_spec={"requires_naming_sql": route, "bo_name": "BB_BAK_TRANS"}, edsl_tree=sample_edsl_tree_payload())
 
 
-def generator(factory, planner):
+def generator(factory, planner, context_pack_manager=None):
     return ValueLogicGenerator(resource_loader=ResourceLoader(), llm_planner=planner,
         naming_sql_selector_factory=factory, expression_spec_generator=Specs(),
-        resource_filter_target_generator=Targets())
+        resource_filter_target_generator=Targets(), context_pack_manager=context_pack_manager)
 
 
 def test_non_naming_sql_route_does_not_construct_factory_and_regresses_ordinary_path():
@@ -87,11 +89,22 @@ def test_non_naming_sql_route_does_not_construct_factory_and_regresses_ordinary_
 
 
 def test_route_factory_receives_current_loaded_resource_and_request_fields():
-    planner, seen = Planner(), []
+    planner, seen, events = Planner(), [], []
     selector = Selector(success())
-    def factory(loaded): seen.append(loaded); return selector
-    generator(factory, planner).generate(request())
+    class Packs:
+        def __init__(self): self.pack = None
+        def build(self, pack_request, project_context):
+            events.append(("pack", pack_request, project_context))
+            self.pack = ContextPack(status="complete", request_summary={"query": pack_request.query},
+                                    current_node=pack_request.node)
+            return self.pack
+    def factory(loaded): events.append(("selector",)); seen.append(loaded); return selector
+    packs = Packs()
+    generator(factory, planner, packs).generate(request())
     call = selector.calls[0]
+    assert [event[0] for event in events] == ["pack", "selector"]
+    assert call.context_pack is packs.pack
+    assert events[0][2].loaded_resource is seen[0]
     assert seen and call.site_id == "site1" and call.project_id == "project1" and call.json_path == "$.x"
     assert call.target_bo_name == "BB_BAK_TRANS" and call.parent_bo_hint == "ParentBO"
     assert call.target_logic_area_id_list == ["area.1"] and call.top_k == 5

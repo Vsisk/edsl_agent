@@ -17,7 +17,10 @@ class Targets:
 
 
 class Specs:
-    def generate(self, *, request, node_info): return ExpressionSpec(nl=request.query)
+    def __init__(self, events=None): self.events = events
+    def generate(self, *, request, node_info, context_pack=None):
+        if self.events is not None: self.events.append(("spec", context_pack))
+        return ExpressionSpec(nl=request.query)
 
 
 class Planner:
@@ -75,10 +78,47 @@ def request(route=True):
         structured_spec={"requires_naming_sql": route, "bo_name": "BB_BAK_TRANS"}, edsl_tree=sample_edsl_tree_payload())
 
 
-def generator(factory, planner, context_pack_manager=None):
+def generator(factory, planner, context_pack_manager=None, context_resource_router=None, specs=None):
     return ValueLogicGenerator(resource_loader=ResourceLoader(), llm_planner=planner,
-        naming_sql_selector_factory=factory, expression_spec_generator=Specs(),
-        resource_filter_target_generator=Targets(), context_pack_manager=context_pack_manager)
+        naming_sql_selector_factory=factory, expression_spec_generator=specs or Specs(),
+        resource_filter_target_generator=Targets(), context_pack_manager=context_pack_manager,
+        context_resource_router=context_resource_router)
+
+
+class ContextRoute:
+    def __init__(self, use_current_tree, fallback=False):
+        self.use_current_tree, self.fallback, self.calls = use_current_tree, fallback, []
+    def route(self, **kwargs): self.calls.append(kwargs); return self
+
+
+class CapturingPacks:
+    def __init__(self): self.calls, self.pack = [], None
+    def build(self, pack_request, project_context):
+        self.calls.append((pack_request, project_context))
+        self.pack = ContextPack(status="complete", request_summary={"query": pack_request.query},
+                                current_node=pack_request.node)
+        return self.pack
+
+
+def test_context_pack_is_built_once_before_spec_and_fixed_resources_are_always_used():
+    events, packs = [], CapturingPacks()
+    route = ContextRoute(False)
+    generator(lambda loaded: (_ for _ in ()).throw(AssertionError()), Planner(fetch=False),
+              packs, route, Specs(events)).generate(request(False))
+    assert len(packs.calls) == 1
+    assert packs.calls[0][0].resource_names == ["dev_skill", "ootb_edsl"]
+    assert events == [("spec", packs.pack)]
+
+
+def test_context_route_fallback_builds_all_resources():
+    packs = CapturingPacks()
+    selector = Selector(success())
+    generator(lambda loaded: selector, Planner(), packs,
+              ContextRoute(True, fallback=True)).generate(request())
+    assert [item.value for item in packs.calls[0][0].resource_names] == [
+        "dev_skill", "ootb_edsl", "current_tree"
+    ]
+    assert selector.calls[0].context_pack.warnings[0].code == "CONTEXT_RESOURCE_ROUTE_FALLBACK"
 
 
 def test_non_naming_sql_route_does_not_construct_factory_and_regresses_ordinary_path():
@@ -100,7 +140,7 @@ def test_route_factory_receives_current_loaded_resource_and_request_fields():
             return self.pack
     def factory(loaded): events.append(("selector",)); seen.append(loaded); return selector
     packs = Packs()
-    generator(factory, planner, packs).generate(request())
+    generator(factory, planner, packs, ContextRoute(False)).generate(request())
     call = selector.calls[0]
     assert [event[0] for event in events] == ["pack", "selector"]
     assert call.context_pack is packs.pack
@@ -163,6 +203,7 @@ def test_generator_builds_typed_context_after_filtering_and_passes_it_to_planner
     assert len(builder.inputs) == 1
     assert builder.inputs[0].filtered_env is planner.calls[0]["filtered_env"]
     assert builder.inputs[0].loaded_resource.bo_registry is not None
+    assert builder.inputs[0].context_pack is not None
     assert planner.calls[0]["typed_context"] is typed_context
 
 

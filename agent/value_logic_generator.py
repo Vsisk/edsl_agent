@@ -30,7 +30,11 @@ from agent.naming_sql_selector import (
     validate_naming_sql_plan,
 )
 from agent.naming_sql_selector.selector import KNOWN_CONTEXT_ERROR_CODES
-from agent.context_pack import ContextPackRequest, ProjectContext, create_context_pack_manager
+from agent.context_pack import (
+    ContextPack, ContextPackRequest, FastContextResourceRouter, ProjectContext,
+    create_context_pack_manager,
+)
+from agent.context_pack.models import ContextTraceItem, ContextWarning
 from agent.planner.difficulty_router import LLMDifficultyRouter, ResourceRoute
 from agent.planner.llm_planner import LLMPlanner
 from agent.planner.models import Plan
@@ -50,7 +54,8 @@ class ExpressionSpec:
 
 
 class ExpressionSpecGenerator:
-    def generate(self, *, request: ValueLogicRequest, node_info: NodeDef) -> ExpressionSpec:
+    def generate(self, *, request: ValueLogicRequest, node_info: NodeDef,
+                 context_pack: ContextPack | None = None) -> ExpressionSpec:
         return ExpressionSpec(nl=str(request.query or "").strip())
 
 
@@ -65,6 +70,7 @@ class GenerationContext:
     node: dict[str, Any]
     parent_node: dict[str, Any] | None
     query: str
+    context_pack: ContextPack
 
 
 class ValueLogicGenerator:
@@ -80,6 +86,9 @@ class ValueLogicGenerator:
         enable_legacy_filter_fallback: bool = False,
         naming_sql_selector_factory: Callable[[LoadedResource], NamingSqlSelector] | None = None,
         context_pack_manager: Any | None = None,
+        context_resource_router: Any | None = None,
+        dev_skill_path: Any | None = None,
+        ootb_tree: dict[str, Any] | None = None,
         typed_expression_context_builder: Any | None = None,
         type_registry: TypeRegistry | None = None,
         method_registry: MethodRegistry | None = None,
@@ -93,6 +102,9 @@ class ValueLogicGenerator:
         self.enable_legacy_filter_fallback = enable_legacy_filter_fallback
         self.naming_sql_selector_factory = naming_sql_selector_factory or _default_naming_sql_selector_factory
         self.context_pack_manager = context_pack_manager or create_context_pack_manager()
+        self.context_resource_router = context_resource_router or FastContextResourceRouter()
+        self.dev_skill_path = dev_skill_path
+        self.ootb_tree = ootb_tree
         self.typed_expression_context_builder = (
             typed_expression_context_builder or TypedExpressionContextBuilder()
         )
@@ -107,11 +119,45 @@ class ValueLogicGenerator:
                 request.edsl_tree,
             )
         )
+        route = self.context_resource_router.route(
+            query=request.query,
+            node=request.node,
+            parent_node=request.parent_node,
+        )
+        resource_names = ["dev_skill", "ootb_edsl"]
+        if route.use_current_tree:
+            resource_names.append("current_tree")
+        context_pack = self.context_pack_manager.build(
+            ContextPackRequest(
+                node=request.node,
+                query=request.query,
+                resource_names=resource_names,
+            ),
+            ProjectContext(
+                current_tree=request.edsl_tree,
+                ootb_tree=self.ootb_tree,
+                dev_skill_path=self.dev_skill_path,
+                loaded_resource=resources.loaded,
+            ),
+        )
+        if route.fallback:
+            context_pack = context_pack.model_copy(update={
+                "warnings": [*context_pack.warnings, ContextWarning(
+                    code="CONTEXT_RESOURCE_ROUTE_FALLBACK",
+                    message="all context resources enabled",
+                )],
+                "trace": [*context_pack.trace, ContextTraceItem(
+                    source="context_resource_router",
+                    action="fallback",
+                    detail="all context resources enabled",
+                )],
+            }, deep=True)
         ctx = GenerationContext(
             resources=resources,
             node=request.node,
             parent_node=request.parent_node,
             query=request.query,
+            context_pack=context_pack,
         )
 
         if not request.is_ab:
@@ -220,6 +266,7 @@ class ValueLogicGenerator:
         expression_spec = self.expression_spec_generator.generate(
             request=request,
             node_info=node_info,
+            context_pack=ctx.context_pack,
         )
         targets = self.resource_filter_target_generator.generate(
             query=expression_spec.nl,
@@ -245,24 +292,13 @@ class ValueLogicGenerator:
         if requires_naming_sql(
             request.structured_spec, request.query, expression_spec.nl, request.node, request.parent_node
         ):
-            context_pack = self.context_pack_manager.build(
-                ContextPackRequest(
-                    node=request.node,
-                    query=request.query or expression_spec.nl,
-                    resource_names=["current_tree"],
-                ),
-                ProjectContext(
-                    current_tree=request.edsl_tree,
-                    loaded_resource=ctx.resources.loaded,
-                ),
-            )
             selection_request = NamingSqlSelectRequest(
                 site_id=request.site_id,
                 project_id=request.project_id,
                 query=request.query or expression_spec.nl,
                 node=request.node,
                 json_path=request.node_path,
-                context_pack=context_pack,
+                context_pack=ctx.context_pack,
                 target_bo_name=self._requested_bo_name(request),
                 parent_bo_hint=self._extract_parent_sql_bo_name(request.parent_node),
                 target_logic_area_id_list=_string_list(request.node.get("reference_logic_area_id_list")),
@@ -282,6 +318,7 @@ class ValueLogicGenerator:
                 node=node_info,
                 filtered_env=filtered_env,
                 loaded_resource=ctx.resources.loaded,
+                context_pack=ctx.context_pack,
                 type_registry=self.type_registry,
                 method_registry=self.method_registry,
             )

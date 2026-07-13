@@ -5,6 +5,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field, SkipValidation
 
 from agent.environment.environment import FilteredEnvironment
+from agent.context_pack.models import ContextPack
 from agent.expression_generation.type_system import (
     MethodRegistry,
     ResolvedMethod,
@@ -65,6 +66,7 @@ class TypedExpressionContextBuildInput(BaseModel):
     node: NodeDef
     filtered_env: SkipValidation[FilteredEnvironment]
     loaded_resource: SkipValidation[LoadedResource]
+    context_pack: SkipValidation[ContextPack]
     type_registry: TypeRegistry
     method_registry: MethodRegistry
     max_items: int = Field(default=80, ge=1)

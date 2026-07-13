@@ -1,4 +1,5 @@
 from agent.context_manager.models import NamingSqlCandidate
+from agent.context_pack.models import ContextPack
 from agent.environment.environment import FilteredEnvironment
 from agent.expression_generation.type_system import (
     TypeDef,
@@ -51,6 +52,8 @@ def build_input(
         node=NodeDef(node_id="n1", node_path="$.n1", node_name="CHARGE_AMT"),
         filtered_env=filtered_env,
         loaded_resource=loaded,
+        context_pack=ContextPack(status="complete", request_summary={"query": "use address"},
+                                 current_node={"node_id": "n1"}),
         type_registry=type_registry or TypeRegistry(),
         method_registry=create_builtin_method_registry(),
         max_items=max_items,

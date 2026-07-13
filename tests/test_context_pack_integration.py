@@ -1,11 +1,11 @@
 import pytest
+from pydantic import ValidationError
 
 from agent.context_pack import (
     ContextPackRequest,
     ProjectContext,
     create_context_pack_manager,
 )
-from agent.context_pack.errors import RESOURCE_NOT_REGISTERED, ContextProviderError
 
 
 SKILL = """# 开发取值规范
@@ -92,7 +92,6 @@ def test_missing_ootb_returns_partial_pack_with_skill_results(tmp_path):
     assert pack.sections[1].status.value == "unavailable"
 
 
-def test_phase_one_factory_rejects_namingsql_until_migration():
-    with pytest.raises(ContextProviderError) as error:
-        create_context_pack_manager().build(request(["namingsql"]), ProjectContext())
-    assert error.value.code == RESOURCE_NOT_REGISTERED
+def test_context_pack_request_rejects_downstream_namingsql_decision():
+    with pytest.raises(ValidationError):
+        request(["namingsql"])

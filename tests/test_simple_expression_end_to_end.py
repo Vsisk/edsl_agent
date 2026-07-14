@@ -47,6 +47,11 @@ def test_context_method_end_to_end_with_debug():
     expr = 'if($ctx$.address.addr1.length() > 0, $ctx$.address.addr1, "")'
     result, _ = run(SimpleExpressionPlan(return_expr=expr), context, registry, True)
     assert result.expression == expr
+    assert result.return_type.model_dump() == {
+        "is_list": False,
+        "data_type": "basic",
+        "data_type_name": "String",
+    }
     assert set(result.debug_info) == {"typed_context", "simple_plan", "parsed_plan", "ast_validation_result", "return_type"}
     assert result.debug_info["ast_validation_result"]["is_valid"] is True
     assert result.debug_info["ast_validation_result"]["return_type"]["kind"] == "basic"
@@ -129,8 +134,48 @@ def test_debug_return_type_for_query_variable_method_chain():
     )
 
     assert result.expression == "def charge: fetch_one(E_QUERY_CHARGE);\ncharge.CHARGE_AMT.long2str()"
+    assert result.return_type.model_dump() == {
+        "is_list": False,
+        "data_type": "basic",
+        "data_type_name": "String",
+    }
     assert result.debug_info["return_type"]["kind"] == "basic"
     assert result.debug_info["return_type"]["name"] == "String"
+
+
+def test_value_result_return_type_for_list_return_expression():
+    charge = TypeRef(kind="bo", name="BB_BILL_CHARGE")
+    registry = TypeRegistry(); registry.register_type(TypeDef(owner_type=charge, fields={"CHARGE_AMT": TypeRef(kind="basic", name="long")}))
+    context = TypedExpressionContext(var_templates=[
+        TypedVarTemplate(var_name="it", definition_expr="fetch(E_QUERY_CHARGE)", return_type="List<bo.BB_BILL_CHARGE>")
+    ])
+
+    result, _ = run(
+        SimpleExpressionPlan(
+            definitions=[SimpleDefinition(name="charges", expr="fetch(E_QUERY_CHARGE)")],
+            return_expr="charges.findAll{it.CHARGE_AMT > 0}",
+        ),
+        context,
+        registry,
+    )
+
+    assert result.return_type.model_dump() == {
+        "is_list": True,
+        "data_type": "bo",
+        "data_type_name": "BB_BILL_CHARGE",
+    }
+
+
+def test_value_result_return_type_defaults_to_basic_string_when_static_inference_unknown():
+    context = TypedExpressionContext(root_values=[])
+
+    result, _ = run(SimpleExpressionPlan(return_expr="unknownVar"), context)
+
+    assert result.return_type.model_dump() == {
+        "is_list": False,
+        "data_type": "basic",
+        "data_type_name": "String",
+    }
 
 
 def test_unclosed_native_function_call_returns_parse_failed():

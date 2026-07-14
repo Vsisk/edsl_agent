@@ -27,7 +27,7 @@ from agent.expression_generation.typed_context import (
 )
 from agent.expression_generation.expression_type_validation import SimpleExpressionPlan
 from agent.expression_generation.edsl_expression_parser import EDSLExpressionParser
-from agent.models import NodeDef, ValueLogicRequest, ValueLogicResult, ValueLogicSource
+from agent.models import NodeDef, ValueLogicRequest, ValueLogicResult, ValueLogicSource, ValueReturnType
 from agent.naming_sql_selector import (
     NamingSqlSelectRequest,
     NamingSqlSelector,
@@ -335,6 +335,7 @@ class ValueLogicGenerator:
             context_pack=ctx.context_pack,
         )
         debug_info = None
+        result_return_type = None
         if isinstance(plan, SimpleExpressionPlan):
             try:
                 parsed_plan = EDSLExpressionParser(typed_context).parse_plan(plan)
@@ -360,6 +361,7 @@ class ValueLogicGenerator:
                     raise ValueError(message)
             except (ValueError, TypeError) as exc:
                 return self._simple_plan_failure(request, typed_context, plan, "AST_VALIDATION_FAILED", exc, parsed_plan)
+            result_return_type = _type_ref_to_value_return_type(ast_validation_result.return_type)
             if request.debug:
                 debug_info = {
                     "typed_context": typed_context.model_dump(mode="json"),
@@ -380,6 +382,7 @@ class ValueLogicGenerator:
             node_id=self._node_id(request.node),
             logic_type="expression",
             expression=expression,
+            return_type=result_return_type,
             source=ValueLogicSource(source_type="plan"),
             debug_info=debug_info,
         )
@@ -705,6 +708,29 @@ def _parse_rendered_type(value: str) -> TypeRef:
     if text in {"void", "unknown"}:
         return TypeRef(kind=text)
     return TypeRef(kind="unknown")
+
+
+def _type_ref_to_value_return_type(type_ref: TypeRef | None) -> ValueReturnType:
+    if type_ref is None or type_ref.kind == "unknown":
+        return _default_value_return_type()
+    if type_ref.kind == "list":
+        element = type_ref.element_type
+        if element is None or element.kind == "unknown":
+            return _default_value_return_type()
+        return ValueReturnType(
+            is_list=True,
+            data_type=element.kind,
+            data_type_name=element.name or "",
+        )
+    return ValueReturnType(
+        is_list=False,
+        data_type=type_ref.kind,
+        data_type_name=type_ref.name or "",
+    )
+
+
+def _default_value_return_type() -> ValueReturnType:
+    return ValueReturnType(is_list=False, data_type="basic", data_type_name="String")
 
 
 def _extract_fetch_name(expression: str) -> str | None:

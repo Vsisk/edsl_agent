@@ -17,7 +17,7 @@ def ootb_tree():
                 {
                     "node_id": "full-name",
                     "tree_node_type": "simple_leaf",
-                    "annotation": "客户完整姓名 title first middle last 判空拼接",
+                    "annotation": "客户完整姓名",
                     "xml_name_property": {"xml_name": "FULL_NAME"},
                     "data_expression": "joinNonEmpty(title, firstName, middleName, lastName)",
                 },

@@ -13,7 +13,12 @@ from agent.expression_generation.ast.nodes import (
     ReturnNode,
     SelectNode,
 )
-from agent.expression_generation.ast.validator import AstValidationContext, validate_ast
+from agent.expression_generation.ast.validator import (
+    AstValidationContext,
+    infer_ast_return_type,
+    validate_ast,
+    validate_ast_with_result,
+)
 from agent.expression_generation.type_system import (
     TypeDef,
     TypeRef,
@@ -174,6 +179,73 @@ class ExpressionValidatorTest(unittest.TestCase):
                 method_registry=create_builtin_method_registry(),
             ),
         )
+
+    def test_infer_ast_return_type_returns_final_return_typeref(self):
+        type_registry = TypeRegistry()
+        type_registry.register_type(
+            TypeDef(
+                owner_type=TypeRef(kind="logic", name="Address"),
+                fields={"addr1": TypeRef(kind="basic", name="String")},
+            )
+        )
+        ast = build_ast(
+            {
+                "nodes": [
+                    {
+                        "type": "return",
+                        "value": {
+                            "type": "method_call",
+                            "receiver": {
+                                "type": "field_access",
+                                "receiver": {"type": "context_path", "path": "$ctx$.address"},
+                                "field": "addr1",
+                            },
+                            "name": "length",
+                            "args": [],
+                        },
+                    }
+                ]
+            }
+        )
+
+        validation_context = AstValidationContext(
+                context_types={"$ctx$.address": TypeRef(kind="logic", name="Address")},
+                type_registry=type_registry,
+                method_registry=create_builtin_method_registry(),
+        )
+        result = validate_ast_with_result(ast, validation_context)
+
+        self.assertTrue(result.is_valid)
+        self.assertEqual(result.return_type, TypeRef(kind="basic", name="int"))
+        self.assertEqual(infer_ast_return_type(ast, validation_context), TypeRef(kind="basic", name="int"))
+
+    def test_validate_ast_with_result_reports_error_without_throwing(self):
+        ast = ProgramNode(
+            type="program",
+            body=[
+                ReturnNode(
+                    type="return",
+                    value=FieldAccessNode(
+                        type="field_access",
+                        receiver=ContextPathNode(type="context_path", path="$ctx$.name"),
+                        field="missing",
+                    ),
+                )
+            ],
+        )
+
+        result = validate_ast_with_result(
+            ast,
+            AstValidationContext(
+                context_types={"$ctx$.name": TypeRef(kind="basic", name="String")},
+                type_registry=TypeRegistry(),
+                method_registry=create_builtin_method_registry(),
+            ),
+        )
+
+        self.assertFalse(result.is_valid)
+        self.assertIsNone(result.return_type)
+        self.assertEqual(result.errors[0]["error_type"], "AST_VALIDATION_FAILED")
 
     def test_context_path_chain_rejects_missing_nested_field(self):
         type_registry = TypeRegistry()

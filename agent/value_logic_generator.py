@@ -10,7 +10,11 @@ from agent.environment.environment import build_filtered_environment, filter_res
 from agent.environment.resource_filter import LLMResourceFilter, ResourceFilterTargetGenerator
 from agent.expression_generation.ast.builder import build_ast
 from agent.expression_generation.ast.generator import generate_expression
-from agent.expression_generation.ast.validator import AstValidationContext, validate_ast
+from agent.expression_generation.ast.validator import (
+    AstValidationContext,
+    validate_ast,
+    validate_ast_with_result,
+)
 from agent.expression_generation.type_system import (
     MethodRegistry,
     TypeRef,
@@ -343,7 +347,7 @@ class ValueLogicGenerator:
             except (ValueError, TypeError) as exc:
                 return self._simple_plan_failure(request, typed_context, plan, "AST_BUILD_FAILED", exc, parsed_plan)
             try:
-                validate_ast(
+                ast_validation_result = validate_ast_with_result(
                     ast,
                     self._build_ast_validation_context(
                         loaded_resource=ctx.resources.loaded,
@@ -351,6 +355,9 @@ class ValueLogicGenerator:
                         typed_context=typed_context,
                     ),
                 )
+                if not ast_validation_result.is_valid:
+                    message = ast_validation_result.errors[0]["message"] if ast_validation_result.errors else "invalid ast"
+                    raise ValueError(message)
             except (ValueError, TypeError) as exc:
                 return self._simple_plan_failure(request, typed_context, plan, "AST_VALIDATION_FAILED", exc, parsed_plan)
             if request.debug:
@@ -358,7 +365,8 @@ class ValueLogicGenerator:
                     "typed_context": typed_context.model_dump(mode="json"),
                     "simple_plan": plan.model_dump(mode="json"),
                     "parsed_plan": parsed_plan.model_dump(mode="json"),
-                    "ast_validation_result": {"is_valid": True, "errors": []},
+                    "ast_validation_result": ast_validation_result.model_dump(mode="json"),
+                    "return_type": ast_validation_result.return_type.model_dump(mode="json") if ast_validation_result.return_type is not None else None,
                 }
             expression = generate_expression(ast)
         else:
@@ -407,15 +415,29 @@ class ValueLogicGenerator:
             }
         )
         context_types = {}
+        function_types = {}
+        fetch_return_types = {}
         if typed_context is not None:
             context_types = {
                 root.expr: _parse_rendered_type(root.return_type)
                 for root in typed_context.root_values
                 if root.source_type != "function"
             }
+            function_types = {
+                root.expr: _parse_rendered_type(root.return_type)
+                for root in typed_context.root_values
+                if root.source_type == "function"
+            }
+            fetch_return_types = {
+                _extract_fetch_name(template.definition_expr): _parse_rendered_type(template.return_type)
+                for template in typed_context.var_templates
+                if _extract_fetch_name(template.definition_expr)
+            }
         return AstValidationContext(
             context_registry=context_registry,
             context_types=context_types,
+            function_types=function_types,
+            fetch_return_types=fetch_return_types,
             type_registry=self.type_registry,
             method_registry=self.method_registry,
         )
@@ -683,6 +705,13 @@ def _parse_rendered_type(value: str) -> TypeRef:
     if text in {"void", "unknown"}:
         return TypeRef(kind=text)
     return TypeRef(kind="unknown")
+
+
+def _extract_fetch_name(expression: str) -> str | None:
+    match = re.match(r"^\s*(fetch_one|fetch)\(([^,\)]+)", str(expression or ""))
+    if not match:
+        return None
+    return match.group(2).strip()
 
 
 def _string_list(value: Any) -> list[str]:

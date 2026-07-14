@@ -47,8 +47,11 @@ def test_context_method_end_to_end_with_debug():
     expr = 'if($ctx$.address.addr1.length() > 0, $ctx$.address.addr1, "")'
     result, _ = run(SimpleExpressionPlan(return_expr=expr), context, registry, True)
     assert result.expression == expr
-    assert set(result.debug_info) == {"typed_context", "simple_plan", "parsed_plan", "ast_validation_result"}
-    assert result.debug_info["ast_validation_result"] == {"is_valid": True, "errors": []}
+    assert set(result.debug_info) == {"typed_context", "simple_plan", "parsed_plan", "ast_validation_result", "return_type"}
+    assert result.debug_info["ast_validation_result"]["is_valid"] is True
+    assert result.debug_info["ast_validation_result"]["return_type"]["kind"] == "basic"
+    assert result.debug_info["ast_validation_result"]["return_type"]["name"] == "String"
+    assert result.debug_info["return_type"] == {"kind": "basic", "name": "String", "element_type": None, "key_type": None, "value_type": None, "nullable": True}
 
 
 @pytest.mark.parametrize(("name", "fetch", "return_type", "return_expr", "expected"), [
@@ -65,8 +68,8 @@ def test_query_variable_and_list_find_end_to_end(name, fetch, return_type, retur
 
 def test_ast_validation_failure_returns_structured_error(monkeypatch):
     context = TypedExpressionContext(root_values=[TypedRootValue(expr="$ctx$.name", source_type="context", return_type="basic.String")])
-    def fail_validation(_ast): raise ValueError("invalid ast")
-    monkeypatch.setattr("agent.value_logic_generator.validate_ast", fail_validation)
+    def fail_validation(*_args, **_kwargs): raise ValueError("invalid ast")
+    monkeypatch.setattr("agent.value_logic_generator.validate_ast_with_result", fail_validation)
     result, generator = run(SimpleExpressionPlan(return_expr="$ctx$.name"), context, debug=True)
     assert result.logic_type == "validation_failed"
     assert result.validation_errors[0]["error_type"] == "AST_VALIDATION_FAILED"
@@ -106,6 +109,28 @@ def test_native_function_call_round_trips_through_ast():
     result, _ = run(SimpleExpressionPlan(return_expr=expr), context)
 
     assert result.expression == expr
+
+
+def test_debug_return_type_for_query_variable_method_chain():
+    charge = TypeRef(kind="bo", name="BB_BILL_CHARGE")
+    registry = TypeRegistry(); registry.register_type(TypeDef(owner_type=charge, fields={"CHARGE_AMT": TypeRef(kind="basic", name="long")}))
+    context = TypedExpressionContext(var_templates=[
+        TypedVarTemplate(var_name="it", definition_expr="fetch_one(E_QUERY_CHARGE)", return_type="bo.BB_BILL_CHARGE")
+    ])
+
+    result, _ = run(
+        SimpleExpressionPlan(
+            definitions=[SimpleDefinition(name="charge", expr="fetch_one(E_QUERY_CHARGE)")],
+            return_expr="charge.CHARGE_AMT.long2str()",
+        ),
+        context,
+        registry,
+        debug=True,
+    )
+
+    assert result.expression == "def charge: fetch_one(E_QUERY_CHARGE);\ncharge.CHARGE_AMT.long2str()"
+    assert result.debug_info["return_type"]["kind"] == "basic"
+    assert result.debug_info["return_type"]["name"] == "String"
 
 
 def test_unclosed_native_function_call_returns_parse_failed():

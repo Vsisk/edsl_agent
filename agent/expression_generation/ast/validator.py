@@ -2,6 +2,8 @@ from dataclasses import dataclass, field
 from collections.abc import Mapping
 from typing import Any
 
+from pydantic import BaseModel, Field
+
 from agent.expression_generation.ast.nodes import (
     CallNode,
     CompareNode,
@@ -9,6 +11,7 @@ from agent.expression_generation.ast.nodes import (
     DefNode,
     FetchNode,
     FetchOneNode,
+    LiteralNode,
     LogicalNode,
     ProgramNode,
     ReturnNode,
@@ -30,9 +33,17 @@ from agent.expression_generation.type_system import (
 class AstValidationContext:
     context_registry: Mapping[str, Any] = field(default_factory=dict)
     context_types: Mapping[str, TypeRef] = field(default_factory=dict)
+    function_types: Mapping[str, TypeRef] = field(default_factory=dict)
+    fetch_return_types: Mapping[str, TypeRef] = field(default_factory=dict)
     type_registry: TypeRegistry | None = None
     method_registry: MethodRegistry | None = None
     variable_types: Mapping[str, TypeRef] = field(default_factory=dict)
+
+
+class AstValidationResult(BaseModel):
+    is_valid: bool
+    return_type: TypeRef | None = None
+    errors: list[dict[str, Any]] = Field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -42,12 +53,45 @@ class _ValidationState:
 
 
 def validate_ast(program: ProgramNode, validation_context: AstValidationContext | None = None) -> None:
+    result = validate_ast_with_result(program, validation_context)
+    if not result.is_valid:
+        message = result.errors[0]["message"] if result.errors else "invalid ast"
+        raise ValueError(message)
+
+
+def validate_ast_with_result(
+    program: ProgramNode,
+    validation_context: AstValidationContext | None = None,
+) -> AstValidationResult:
+    try:
+        return_type = infer_ast_return_type(program, validation_context)
+    except (ValueError, TypeError) as exc:
+        return AstValidationResult(
+            is_valid=False,
+            errors=[
+                {
+                    "error_type": "AST_VALIDATION_FAILED",
+                    "message": " ".join(str(exc).split()),
+                }
+            ],
+        )
+    return AstValidationResult(is_valid=True, return_type=return_type, errors=[])
+
+
+def infer_ast_return_type(
+    program: ProgramNode,
+    validation_context: AstValidationContext | None = None,
+) -> TypeRef | None:
     state = _ValidationState(
         context=validation_context,
         variable_types=dict(validation_context.variable_types) if validation_context is not None else {},
     )
+    return_type: TypeRef | None = None
     for node in program.body:
-        _validate_node(node, state)
+        inferred = _validate_node(node, state)
+        if isinstance(node, ReturnNode):
+            return_type = inferred
+    return return_type
 
 
 def _validate_node(node, state: _ValidationState | None = None) -> TypeRef | None:
@@ -60,6 +104,8 @@ def _validate_node(node, state: _ValidationState | None = None) -> TypeRef | Non
         if not node.name.strip():
             raise ValueError("variable ref name must not be empty")
         return state.variable_types.get(node.name)
+    if isinstance(node, LiteralNode):
+        return _infer_literal_type(node.value)
     if isinstance(node, FieldAccessNode):
         if not node.field.strip():
             raise ValueError("field name must not be empty")
@@ -104,8 +150,11 @@ def _validate_node(node, state: _ValidationState | None = None) -> TypeRef | Non
             raise ValueError("call name must not be empty")
         if node.name == "exists" and len(node.args) != 1:
             raise ValueError("exists call must contain exactly one argument")
-        for arg in node.args:
-            _validate_node(arg, state)
+        arg_types = [_validate_node(arg, state) for arg in node.args]
+        if node.name == "if":
+            return _infer_if_call_type(node, arg_types)
+        if state.context is not None and node.name in state.context.function_types:
+            return state.context.function_types[node.name]
         return None
     if isinstance(node, (SelectNode, SelectOneNode)):
         if not isinstance(node.filter, (CompareNode, LogicalNode)):
@@ -116,12 +165,41 @@ def _validate_node(node, state: _ValidationState | None = None) -> TypeRef | Non
         _validate_fetch_params(node.params)
         for param in node.params:
             _validate_node(param.value, state)
+        if state.context is not None:
+            return state.context.fetch_return_types.get(node.name)
         return None
     if isinstance(node, ReturnNode):
         if node.value is None:
             raise ValueError("return must contain value")
         return _validate_node(node.value, state)
     return None
+
+
+def _infer_literal_type(value: Any) -> TypeRef:
+    if isinstance(value, bool):
+        return TypeRef(kind="basic", name="boolean")
+    if isinstance(value, int) and not isinstance(value, bool):
+        return TypeRef(kind="basic", name="int")
+    if isinstance(value, float):
+        return TypeRef(kind="basic", name="double")
+    if isinstance(value, str):
+        return TypeRef(kind="basic", name="String")
+    if value is None:
+        return TypeRef(kind="void")
+    return TypeRef(kind="unknown")
+
+
+def _infer_if_call_type(node: CallNode, arg_types: list[TypeRef | None]) -> TypeRef | None:
+    if len(node.args) != 3:
+        raise ValueError("if call must contain exactly three arguments")
+    condition_type, then_type, else_type = arg_types
+    if condition_type is not None and condition_type != TypeRef(kind="basic", name="boolean"):
+        raise ValueError("if condition must be basic.boolean")
+    if then_type is None or else_type is None:
+        return None
+    if then_type != else_type:
+        raise ValueError(f"if branch type mismatch: {then_type} != {else_type}")
+    return then_type
 
 
 def _infer_context_path_type(path: str, state: _ValidationState) -> TypeRef | None:

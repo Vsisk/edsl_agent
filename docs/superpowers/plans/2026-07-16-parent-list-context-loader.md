@@ -371,3 +371,57 @@ If Step 3 required changes, run the affected tests again, then commit only those
 git add -- agent/resource_manager/loader/local_context_loader.py tests docs/superpowers/plans/2026-07-16-parent-list-context-loader.md
 git commit -m "chore: finalize parent list context loader"
 ```
+
+### Task 6: Derive explicit declaration types from their data sources
+
+**Files:**
+- Modify: `tests/test_resource_loader.py`
+- Modify: `agent/resource_manager/loader/local_context_loader.py`
+- Update: consumer fixtures that still place authoritative return types at the
+  top level of `local_context` or `iter_local_context` entries
+
+- [ ] **Step 1: Write failing tests for SQL, expression, ignored legacy, and default types**
+
+Add focused loader tests showing that SQL declarations become `List<BO>`,
+expression declarations preserve their nested return type, conflicting
+top-level `return_type` is ignored, and missing metadata becomes
+`basic.String` with `is_list=False`.
+
+- [ ] **Step 2: Run the focused tests and verify RED**
+
+Run:
+
+```powershell
+python -m pytest tests/test_resource_loader.py -k "local_context_type" -v
+```
+
+Expected: assertions fail because the loader currently reads
+`context_item.return_type` directly.
+
+- [ ] **Step 3: Implement one declaration return-type helper**
+
+Add `_local_context_return_type(context_item)` that reads
+`context_item.data_source`, projects SQL as a BO list, preserves expression
+return types, and returns the default basic String type for incomplete input.
+Use the helper for both the registry return type and tag construction.
+
+- [ ] **Step 4: Run focused and loader regression tests**
+
+Run:
+
+```powershell
+python -m pytest tests/test_resource_loader.py -v
+```
+
+Expected: all resource-loader tests pass.
+
+- [ ] **Step 5: Run the complete test suite and merge the verified branch**
+
+Run:
+
+```powershell
+git diff --check
+python -m pytest -q
+```
+
+Expected: exit code 0 with no failed tests.

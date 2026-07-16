@@ -176,3 +176,23 @@ updated where they currently expect `$iter$.<explicit_name>`.
 - Nested lists do not expose an outer `$iter$`.
 - Partial tree metadata does not prevent other visible resources from loading.
 - No generation-time or duplicate-name validation is added to the loader.
+
+## Explicit Local Context Return Types
+
+The return type of both `local_context` and `iter_local_context` declarations
+is derived from the declaration's `data_source`; a top-level
+`context_item.return_type` is not an authoritative source and is ignored.
+
+For a SQL data source, the loader reads
+`data_source.sql_query.bo_name` and projects the declaration as
+`ReturnType(data_type="bo", data_type_name=<bo_name>, is_list=True)`, because
+the SQL data source returns a list of BO records.
+
+For an expression data source, the loader reads and preserves
+`data_source.data_expression.return_type`, including its `is_list` value.
+
+If the data source or its type metadata is missing, malformed, unsupported, or
+lacks a usable type name, the declaration remains available and receives the
+default `ReturnType(data_type="basic", data_type_name="String",
+is_list=False)`. Tags use this final derived or default type rather than a
+top-level declaration field.

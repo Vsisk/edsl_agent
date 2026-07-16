@@ -105,6 +105,15 @@ class ToolDecision(_StrictToolModel):
     arguments: dict[str, Any] = Field(default_factory=dict)
 
 
+class ToolExecutionContext(_StrictToolModel):
+    model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
+
+    target_tree: dict[str, Any]
+    tree_version: int = Field(ge=0)
+    site_id: str | None = None
+    project_id: str | None = None
+
+
 class ToolCallTrace(BaseModel):
     step: int = Field(ge=0)
     tool_name: str

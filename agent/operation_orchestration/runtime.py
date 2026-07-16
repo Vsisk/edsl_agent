@@ -18,6 +18,7 @@ from agent.operation_orchestration.models import (
     Operation,
     SearchNodesInput,
     ToolCallTrace,
+    ToolExecutionContext,
 )
 from agent.operation_orchestration.node_index import (
     NodeLocateCandidate,
@@ -78,7 +79,15 @@ class OperationToolRuntime:
         before = self.version
         step = len(self.traces)
         try:
-            output = self.registry.execute(tool_name, arguments, self)
+            if self.finished:
+                raise ValueError("operation tool runtime is finished")
+            context = ToolExecutionContext(
+                target_tree=deepcopy(self._tree),
+                tree_version=self.version,
+                site_id=self.site_id,
+                project_id=self.project_id,
+            )
+            output = self.registry.execute(tool_name, arguments, context)
             if not isinstance(output, dict):
                 raise ValueError("operation tool output must be an object")
         except Exception as exc:

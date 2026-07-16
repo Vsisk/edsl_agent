@@ -22,6 +22,7 @@ from agent.operation_orchestration.models import (
     SearchNodesInput,
     ToolCallTrace,
     ToolDecision,
+    ToolExecutionContext,
     validate_and_sort_operations,
 )
 from agent.operation_orchestration.node_index import (
@@ -67,6 +68,7 @@ __all__ = [
     "SearchNodesInput",
     "ToolCallTrace",
     "ToolDecision",
+    "ToolExecutionContext",
     "build_node_index",
     "is_valid_candidate",
     "validate_and_sort_operations",

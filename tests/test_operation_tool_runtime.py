@@ -4,7 +4,9 @@ from copy import deepcopy
 from typing import Any
 
 import pytest
+from pydantic import BaseModel, ConfigDict
 
+from agent.operation_orchestration.registry import OperationToolSpec
 from agent.operation_orchestration.runtime import OperationToolRuntime
 
 
@@ -101,6 +103,38 @@ def test_runtime_registers_only_phase_one_mapping_content_tools() -> None:
         "finish",
     ]
     assert "switch_tree" not in runtime.registry.names()
+
+
+def test_extension_handler_receives_a_tree_copy_not_runtime_internals() -> None:
+    class InspectInput(BaseModel):
+        model_config = ConfigDict(extra="forbid", strict=True)
+
+    runtime = OperationToolRuntime(_tree(), action_adapter=_RecordingAdapter())
+
+    def inspect(tool_input, context):
+        context.target_tree["poison"] = True
+        return {"version": context.tree_version}
+
+    runtime.registry.register(
+        OperationToolSpec(
+            name="inspect_extension",
+            description="Inspect through a controlled context.",
+            input_model=InspectInput,
+        ),
+        inspect,
+    )
+
+    assert runtime.execute("inspect_extension", {}) == {"version": 0}
+    assert "poison" not in runtime.tree
+    assert runtime.version == 0
+
+
+def test_finish_is_terminal_for_direct_runtime_callers() -> None:
+    runtime = OperationToolRuntime(_tree(), action_adapter=_RecordingAdapter())
+    runtime.execute("finish", {})
+
+    with pytest.raises(ValueError, match="^operation tool runtime is finished$"):
+        _search(runtime, "modify_node")
 
 
 def test_search_filters_by_intent_and_authorizes_current_tree_version() -> None:

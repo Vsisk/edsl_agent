@@ -395,6 +395,7 @@ def test_public_exports_are_explicit_and_importable() -> None:
         "SearchNodesInput",
         "ToolCallTrace",
         "ToolDecision",
+        "ToolExecutionContext",
         "build_node_index",
         "is_valid_candidate",
         "validate_and_sort_operations",

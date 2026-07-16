@@ -3,7 +3,7 @@ from __future__ import annotations
 import heapq
 from typing import Any, Literal, TypeAlias
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 IntentType: TypeAlias = Literal[
@@ -61,6 +61,67 @@ class ExecuteOperationsResponse(BaseModel):
     target_tree: dict[str, Any]
     operations: list[Operation]
     error_message: str | None = None
+
+
+class _StrictToolModel(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+
+class SearchNodesInput(_StrictToolModel):
+    query: str = Field(min_length=1, max_length=4096)
+    intent_type: IntentType
+    limit: int = Field(default=20, ge=1, le=100)
+
+
+class _TargetToolInput(_StrictToolModel):
+    target_node_id: str = Field(min_length=1, max_length=256)
+    target_jsonpath: str = Field(min_length=1, max_length=2048)
+    candidate_version: int = Field(ge=0)
+    query: str = Field(min_length=1, max_length=4096)
+
+
+class CreateNodeInput(_TargetToolInput):
+    pass
+
+
+class ModifyNodeInput(_TargetToolInput):
+    pass
+
+
+class GenerateExpressionInput(_TargetToolInput):
+    pass
+
+
+class DeleteNodeInput(_TargetToolInput):
+    pass
+
+
+class FinishInput(_StrictToolModel):
+    summary: str | None = Field(default=None, max_length=1024)
+
+
+class ToolDecision(_StrictToolModel):
+    tool_name: str = Field(min_length=1, max_length=64)
+    arguments: dict[str, Any] = Field(default_factory=dict)
+
+
+class ToolCallTrace(BaseModel):
+    step: int = Field(ge=0)
+    tool_name: str
+    arguments: dict[str, Any] = Field(default_factory=dict)
+    output: dict[str, Any] | None = None
+    success: bool
+    error_message: str | None = None
+    tree_version_before: int = Field(ge=0)
+    tree_version_after: int = Field(ge=0)
+
+
+class OperationToolLoopRequest(_StrictToolModel):
+    query: str = Field(min_length=1, max_length=4096)
+    target_tree: dict[str, Any]
+    site_id: str | None = None
+    project_id: str | None = None
+    max_steps: int = Field(default=20, ge=1, le=100)
 
 
 def validate_and_sort_operations(operations: list[Operation]) -> list[Operation]:

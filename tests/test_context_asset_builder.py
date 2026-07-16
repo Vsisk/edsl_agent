@@ -30,7 +30,7 @@ def test_resource_builder_creates_semantic_stable_assets_without_mutation():
     bo = BoRegistry(resource_id="bo.1", bo_name="Customer", bo_desc="customer records", property_list=[field], naming_sql_list=[sql])
     global_ctx = ContextRegistry(resource_id="ctx.1", context_name="$ctx$.customer.id", return_type=ReturnType(data_type="basic", data_type_name="string"), property_type="system", annotation="current customer")
     local_ctx = LocalContextRegistry(resource_id="local.1", context_name="$ctx$.local.total", return_type=ReturnType(data_type="basic", data_type_name="decimal"), annotation="running total", source_path="$.node")
-    iter_ctx = LocalContextRegistry(resource_id="iter.1", context_name="$iter$.line", return_type=ReturnType(data_type="bo", data_type_name="Line"), annotation="current line", property_type="iter")
+    iter_ctx = LocalContextRegistry(resource_id="iter.1", context_name="$local$.line", return_type=ReturnType(data_type="bo", data_type_name="Line"), annotation="current line", property_type="iter")
     func = FunctionRegistry(resource_id="fn.1", func_name="mask", func_class="Text", func_desc="mask text", param_list=[ParamTypeTerm(param_name="value", data_type=DataTypeEnum.basic, data_type_name="string")], return_type=ReturnTypeTerm(data_type=DataTypeEnum.basic, data_type_name="string"))
     originals = [copy.deepcopy(item.model_dump()) for item in (bo, global_ctx, local_ctx, iter_ctx, func)]
     builder = ResourceAssetBuilder()

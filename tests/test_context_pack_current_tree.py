@@ -56,6 +56,49 @@ def test_provider_returns_existing_field_and_visible_local_iter_without_mutation
     assert tree == original
 
 
+def test_provider_always_returns_structural_iter_and_list_scope_metadata():
+    tree = current_tree()
+    parent_list = tree["mapping_content"]["children"][0]
+    parent_list["data_source"] = {
+        "data_source_type": "sql",
+        "sql_query": {"bo_name": "Customer"},
+    }
+    provider = CurrentTreeProvider(LocalResourceSearchTool())
+
+    section = provider.retrieve(
+        ContextPackRequest(
+            node={"node_id": "customer-name", "tree_node_type": "simple_leaf"},
+            query="生成名称",
+            resource_names=["current_tree"],
+        ),
+        ProjectContext(current_tree=tree),
+        RecallProfile(10, 12000),
+    )
+
+    iterator = next(item for item in section.items if item.item_type == "iter_root")
+    assert iterator.authority.value == "authoritative"
+    assert iterator.content["path"] == "$iter$"
+    assert iterator.content["return_type"] == {
+        "data_type": "bo",
+        "data_type_name": "Customer",
+        "is_list": False,
+    }
+    assert section.metadata == {
+        "current_json_path": "$.mapping_content.children[0].children[0]",
+        "source_version": "request-snapshot",
+        "inside_parent_list": True,
+        "parent_list_path": "$.mapping_content.children[0]",
+        "iter": {
+            "path": "$iter$",
+            "return_type": {
+                "data_type": "bo",
+                "data_type_name": "Customer",
+                "is_list": False,
+            },
+        },
+    }
+
+
 def test_provider_returns_error_when_current_node_is_not_in_tree():
     section = CurrentTreeProvider(LocalResourceSearchTool()).retrieve(
         request("missing"), ProjectContext(current_tree=current_tree()), RecallProfile(10, 12000)

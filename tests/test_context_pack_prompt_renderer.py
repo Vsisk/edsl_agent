@@ -131,3 +131,49 @@ def test_renderer_drops_oversized_node_atomically_and_reports_trimming():
     assert value["sections"][0]["items"] == []
     assert "CONTEXT_PACK_PROMPT_TRIMMED" in value["warnings"]
     assert "x" * 1000 not in rendered
+
+
+def test_renderer_projects_bounded_current_tree_list_scope_metadata():
+    pack = ContextPack(
+        status="complete",
+        request_summary={"query": "name"},
+        current_node={"node_id": "name"},
+        sections=[
+            ContextSection(
+                resource_name="current_tree",
+                status="ready",
+                metadata={
+                    "current_json_path": "$.children[0]",
+                    "source_version": "request-snapshot",
+                    "inside_parent_list": True,
+                    "parent_list_path": "$.parent",
+                    "iter": {
+                        "path": "$iter$",
+                        "return_type": {
+                            "data_type": "bo",
+                            "data_type_name": "Customer",
+                            "is_list": False,
+                        },
+                    },
+                    "private": "hidden",
+                },
+            )
+        ],
+    )
+
+    section = json.loads(ContextPackPromptRenderer().render_json(pack))["sections"][0]
+
+    assert section["metadata"] == {
+        "current_json_path": "$.children[0]",
+        "inside_parent_list": True,
+        "parent_list_path": "$.parent",
+        "iter": {
+            "path": "$iter$",
+            "return_type": {
+                "data_type": "bo",
+                "data_type_name": "Customer",
+                "is_list": False,
+            },
+        },
+    }
+    assert "private" not in json.dumps(section)

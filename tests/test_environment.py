@@ -1,6 +1,10 @@
 import unittest
 
-from agent.environment.environment import build_filtered_environment
+from agent.environment.environment import (
+    FilteredEnvironment,
+    build_filtered_environment,
+    preserve_structural_local_context,
+)
 from agent.models import NodeDef
 from agent.resource_manager.loader.resource_loader import ResourceLoader
 
@@ -135,6 +139,54 @@ class StaticResourceLoader(ResourceLoader):
 
 
 class EnvironmentBuilderTest(unittest.TestCase):
+    def test_preserve_structural_iter_adds_iterator_after_empty_filter(self):
+        tree = {
+            "mapping_content": {
+                "tree_node_type": "parent_list",
+                "data_source": {
+                    "data_source_type": "sql",
+                    "sql_query": {"bo_name": "CUSTOMER"},
+                },
+                "children": [{"tree_node_type": "simple_leaf"}],
+            }
+        }
+        loaded = ResourceLoader().load_resource("site", "project", tree)
+
+        environment = preserve_structural_local_context(
+            FilteredEnvironment(selection_trace=[{"reason": "FILTER_TARGET_EMPTY"}]),
+            loaded_resource=loaded,
+            node_path="$.mapping_content.children[0]",
+        )
+
+        self.assertEqual(
+            [item.context_name for item in environment.visible_local_context],
+            ["$iter$"],
+        )
+        self.assertEqual(environment.selected_local_context_ids, ["local.0000"])
+        self.assertEqual(
+            environment.visible_local_context[0].return_type.data_type_name,
+            "CUSTOMER",
+        )
+
+    def test_preserve_structural_iter_does_nothing_outside_list(self):
+        tree = {
+            "mapping_content": {
+                "tree_node_type": "parent",
+                "children": [{"tree_node_type": "simple_leaf"}],
+            }
+        }
+        loaded = ResourceLoader().load_resource("site", "project", tree)
+        environment = FilteredEnvironment()
+
+        result = preserve_structural_local_context(
+            environment,
+            loaded_resource=loaded,
+            node_path="$.mapping_content.children[0]",
+        )
+
+        self.assertIs(result, environment)
+        self.assertEqual(result.visible_local_context, [])
+
     def test_includes_ranked_visible_local_context_from_node_info(self):
         loaded = ResourceLoader().load_resource("site1", "project1", sample_edsl_tree_payload())
         node_info = NodeDef(

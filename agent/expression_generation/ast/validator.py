@@ -218,7 +218,7 @@ def _infer_context_path_type(path: str, state: _ValidationState) -> TypeRef | No
 def _resolve_context_root(path: str, state: _ValidationState) -> tuple[str | None, TypeRef | None, list[str]]:
     assert state.context is not None
     parts = [part for part in path.split(".") if part]
-    for end in range(len(parts), 1, -1):
+    for end in range(len(parts), 0, -1):
         candidate = ".".join(parts[:end])
         typed_root = state.context.context_types.get(candidate)
         if typed_root is not None:
@@ -271,7 +271,7 @@ def _resolve_method_type(
 
 
 def _is_registry_context_path(path: str) -> bool:
-    return path.startswith(("$ctx$.", "$local$.", "$iter$."))
+    return path == "$iter$" or path.startswith(("$ctx$.", "$local$.", "$iter$."))
 
 
 def _validate_fetch_params(params) -> None:

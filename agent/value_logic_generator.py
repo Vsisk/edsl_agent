@@ -6,7 +6,11 @@ import re
 from collections.abc import Callable
 from typing import Any
 
-from agent.environment.environment import build_filtered_environment, filter_resources
+from agent.environment.environment import (
+    build_filtered_environment,
+    filter_resources,
+    preserve_structural_local_context,
+)
 from agent.environment.resource_filter import LLMResourceFilter, ResourceFilterTargetGenerator
 from agent.expression_generation.ast.builder import build_ast
 from agent.expression_generation.ast.generator import generate_expression
@@ -26,6 +30,10 @@ from agent.expression_generation.typed_context import (
     TypedExpressionContextBuilder,
 )
 from agent.expression_generation.expression_type_validation import SimpleExpressionPlan
+from agent.expression_generation.expression_spec import (
+    ExpressionSpec,
+    ExpressionSpecGenerator,
+)
 from agent.expression_generation.edsl_expression_parser import EDSLExpressionParser
 from agent.models import NodeDef, ValueLogicRequest, ValueLogicResult, ValueLogicSource, ValueReturnType
 from agent.naming_sql_selector import (
@@ -50,17 +58,6 @@ DEFAULT_CONTEXT_LIMIT = 5
 DEFAULT_RESOURCE_LIMIT = 5
 MAX_DYNAMIC_CONTEXT_LIMIT = 12
 MAX_DYNAMIC_RESOURCE_LIMIT = 10
-
-
-@dataclass(slots=True)
-class ExpressionSpec:
-    nl: str
-
-
-class ExpressionSpecGenerator:
-    def generate(self, *, request: ValueLogicRequest, node_info: NodeDef,
-                 context_pack: ContextPack | None = None) -> ExpressionSpec:
-        return ExpressionSpec(nl=str(request.query or "").strip())
 
 
 @dataclass(slots=True)
@@ -292,6 +289,11 @@ class ValueLogicGenerator:
                 llm_resource_filter=self.llm_resource_filter,
                 **legacy_limits,
             )
+        filtered_env = preserve_structural_local_context(
+            filtered_env,
+            loaded_resource=ctx.resources.loaded,
+            node_path=request.node_path,
+        )
         naming_sql_selection = None
         if requires_naming_sql(
             request.structured_spec, request.query, expression_spec.nl, request.node, request.parent_node
@@ -333,6 +335,7 @@ class ValueLogicGenerator:
             filtered_env=filtered_env,
             typed_context=typed_context,
             context_pack=ctx.context_pack,
+            expression_spec=expression_spec,
         )
         debug_info = None
         result_return_type = None

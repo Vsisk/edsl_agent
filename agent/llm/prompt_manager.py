@@ -27,8 +27,15 @@ class PromptManager:
 
     def render(self, prompt_key: str, lang: str = "zh", **variables: str) -> str:
         template = self._get_template(prompt_key, lang)
-        if prompt_key in {"planner", "planner_repair"}:
+        planner_family = {
+            "planner",
+            "planner_repair",
+            "simple_expression_planner",
+        }
+        if prompt_key in planner_family:
             variables.setdefault("typed_context_json", "{}")
+            variables.setdefault("expression_scope_json", "{}")
+            variables.setdefault("expression_skills_json", "[]")
         missing = sorted(set(PLACEHOLDER_PATTERN.findall(template)) - set(variables))
         if missing:
             raise ValueError(f"Missing prompt variables for {prompt_key}: {', '.join(missing)}")
@@ -36,7 +43,20 @@ class PromptManager:
         def replace(match: re.Match[str]) -> str:
             return str(variables[match.group(1)])
 
-        return PLACEHOLDER_PATTERN.sub(replace, template)
+        rendered = PLACEHOLDER_PATTERN.sub(replace, template)
+        if prompt_key in planner_family:
+            rendered += (
+                "\n\nExpression scope (authoritative system structure):\n"
+                f"{variables['expression_scope_json']}\n\n"
+                "Expression skills (normative system techniques):\n"
+                f"{variables['expression_skills_json']}\n\n"
+                "When inside_parent_list is true, $iter$ is the current element "
+                "of the nearest enclosing list. Use $iter$.FIELD only for fields "
+                "published by Typed Expression Context. $iter$ is not a named "
+                "explicit variable. In a nested list, use an available "
+                "$local$.name for a saved outer-list value."
+            )
+        return rendered
 
     def _get_template(self, prompt_key: str, lang: str) -> str:
         prompts = self._load_prompts()

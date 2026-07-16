@@ -117,6 +117,28 @@ def filter_resources(
     )
 
 
+def preserve_structural_local_context(
+    environment: FilteredEnvironment,
+    *,
+    loaded_resource: LoadedResource,
+    node_path: str,
+) -> FilteredEnvironment:
+    visible = loaded_resource.get_visible_local_context_registry(node_path)
+    iterator = visible.get("$iter$")
+    if iterator is None:
+        return environment
+
+    existing_names = {
+        item.context_name for item in environment.visible_local_context
+    }
+    if iterator.context_name not in existing_names:
+        environment.visible_local_context.append(iterator)
+    environment.selected_local_context_ids = [
+        item.resource_id for item in environment.visible_local_context
+    ]
+    return environment
+
+
 def _merge_filtered_bo_resources(bo_resources: list[BoRegistry], namingsql_resources: list[BoRegistry]) -> list[BoRegistry]:
     by_name: dict[str, BoRegistry] = {}
     for bo in [*bo_resources, *namingsql_resources]:

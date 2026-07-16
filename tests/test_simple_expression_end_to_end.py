@@ -4,7 +4,12 @@ from agent.expression_generation.expression_type_validation import SimpleDefinit
 from agent.expression_generation.type_system import TypeDef, TypeRef, TypeRegistry, create_builtin_method_registry
 from agent.expression_generation.typed_context import TypedExpressionContext, TypedRootValue, TypedVarTemplate
 from agent.models import ValueLogicRequest
-from agent.resource_manager.loader.registry_models import DomainRegistry
+from agent.resource_manager.loader.registry_models import (
+    BoRegistry,
+    DataTypeEnum,
+    DomainRegistry,
+    PropertyTerm,
+)
 from agent.resource_manager.loader.resource_loader import LoadedResource
 from agent.value_logic_generator import ValueLogicGenerator
 
@@ -26,6 +31,33 @@ class Builder:
 class Planner:
     def __init__(self, plan): self.result = plan
     def plan(self, **kwargs): return self.result
+
+
+class IterLoader:
+    def __init__(self, tree):
+        self.tree = tree
+        self.bo = BoRegistry(
+            resource_id="bo.customer",
+            bo_name="Customer",
+            bo_desc="customers",
+            property_list=[
+                PropertyTerm(
+                    field_name="ID",
+                    description="customer id",
+                    data_type=DataTypeEnum.basic,
+                    data_type_name="long",
+                )
+            ],
+        )
+
+    def load_resource(self, *args):
+        return LoadedResource(
+            context_registry={},
+            bo_registry={self.bo.bo_name: self.bo},
+            function_registry={},
+            edsl_tree=self.tree,
+            domain_registry=DomainRegistry(bo_domains=[self.bo.bo_name]),
+        )
 
 
 def request(debug=False):
@@ -57,6 +89,65 @@ def test_context_method_end_to_end_with_debug():
     assert result.debug_info["ast_validation_result"]["return_type"]["kind"] == "basic"
     assert result.debug_info["ast_validation_result"]["return_type"]["name"] == "String"
     assert result.debug_info["return_type"] == {"kind": "basic", "name": "String", "element_type": None, "key_type": None, "value_type": None, "nullable": True}
+
+
+def test_list_iterator_field_end_to_end_uses_structural_type_and_skill():
+    tree = {
+        "mapping_content": {
+            "node_id": "customers",
+            "tree_node_type": "parent_list",
+            "data_source": {
+                "data_source_type": "sql",
+                "sql_query": {"bo_name": "Customer"},
+            },
+            "children": [
+                {
+                    "node_id": "customer-id",
+                    "tree_node_type": "simple_leaf",
+                    "annotation": "客户ID",
+                }
+            ],
+        }
+    }
+
+    class IterPlanner:
+        def __init__(self):
+            self.calls = []
+
+        def plan(self, **kwargs):
+            self.calls.append(kwargs)
+            return SimpleExpressionPlan(return_expr="$iter$.ID")
+
+    planner = IterPlanner()
+    generator = ValueLogicGenerator(
+        resource_loader=IterLoader(tree),
+        resource_filter_target_generator=Targets(),
+        llm_planner=planner,
+    )
+    request_value = ValueLogicRequest(
+        site_id="s",
+        project_id="p",
+        node_path="$.mapping_content.children[0]",
+        node={"node_id": "customer-id", "annotation": "客户ID"},
+        query="生成客户ID",
+        edsl_tree=tree,
+        debug=True,
+    )
+
+    result = generator.generate(request_value)
+
+    assert result.expression == "$iter$.ID"
+    assert result.return_type.model_dump() == {
+        "is_list": False,
+        "data_type": "basic",
+        "data_type_name": "long",
+    }
+    typed_context = planner.calls[0]["typed_context"]
+    iterator = next(root for root in typed_context.root_values if root.expr == "$iter$")
+    assert any(field.access == "$iter$.ID" for field in iterator.fields)
+    spec = planner.calls[0]["expression_spec"]
+    assert spec.scope_context.inside_parent_list is True
+    assert [item.skill_id for item in spec.skill_instructions] == ["list-current-element"]
 
 
 @pytest.mark.parametrize(("name", "fetch", "return_type", "return_expr", "expected"), [

@@ -219,6 +219,55 @@ class ExpressionValidatorTest(unittest.TestCase):
         self.assertEqual(result.return_type, TypeRef(kind="basic", name="int"))
         self.assertEqual(infer_ast_return_type(ast, validation_context), TypeRef(kind="basic", name="int"))
 
+    def test_exact_iter_root_and_field_resolve_from_context_types(self):
+        type_registry = TypeRegistry()
+        type_registry.register_type(
+            TypeDef(
+                owner_type=TypeRef(kind="bo", name="Customer"),
+                fields={"ID": TypeRef(kind="basic", name="long")},
+            )
+        )
+        validation_context = AstValidationContext(
+            context_types={"$iter$": TypeRef(kind="bo", name="Customer")},
+            type_registry=type_registry,
+            method_registry=create_builtin_method_registry(),
+        )
+        exact = ProgramNode(
+            type="program",
+            body=[ReturnNode(type="return", value=ContextPathNode(type="context_path", path="$iter$"))],
+        )
+        field = ProgramNode(
+            type="program",
+            body=[
+                ReturnNode(
+                    type="return",
+                    value=FieldAccessNode(
+                        type="field_access",
+                        receiver=ContextPathNode(type="context_path", path="$iter$"),
+                        field="ID",
+                    ),
+                )
+            ],
+        )
+
+        self.assertEqual(
+            infer_ast_return_type(exact, validation_context),
+            TypeRef(kind="bo", name="Customer"),
+        )
+        self.assertEqual(
+            infer_ast_return_type(field, validation_context),
+            TypeRef(kind="basic", name="long"),
+        )
+
+    def test_unregistered_exact_iter_is_unknown_context_path(self):
+        ast = ProgramNode(
+            type="program",
+            body=[ReturnNode(type="return", value=ContextPathNode(type="context_path", path="$iter$"))],
+        )
+
+        with self.assertRaisesRegex(ValueError, r"context path not found: \$iter\$"):
+            validate_ast(ast, AstValidationContext(context_types={}))
+
     def test_validate_ast_with_result_reports_error_without_throwing(self):
         ast = ProgramNode(
             type="program",

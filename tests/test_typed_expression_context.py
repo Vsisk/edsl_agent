@@ -20,6 +20,7 @@ from agent.resource_manager.loader.registry_models import (
     DomainRegistry,
     PropertyTerm,
     ReturnType,
+    LocalContextRegistry,
 )
 from agent.resource_manager.loader.resource_loader import LoadedResource
 
@@ -104,6 +105,36 @@ def test_builder_expands_context_object_to_basic_field_with_methods():
     assert addr1.return_type == "basic.String"
     assert "length(): basic.int" in addr1.methods
     assert "dateValue(basic.String format): basic.Date" in addr1.methods
+
+
+def test_builder_registers_iterator_bo_and_expands_fields_without_selected_bo():
+    bo = charge_bo()
+    iterator = LocalContextRegistry(
+        resource_id="local.iter",
+        context_name="$iter$",
+        return_type=ReturnType(
+            data_type="bo",
+            data_type_name=bo.bo_name,
+            is_list=False,
+        ),
+        property_type="iter",
+        source_path="$.charges.data_source",
+    )
+
+    result = TypedExpressionContextBuilder().build(
+        build_input(
+            filtered_env=FilteredEnvironment(visible_local_context=[iterator]),
+            loaded=loaded_resource(bos=[bo]),
+        )
+    )
+
+    root = next(item for item in result.root_values if item.expr == "$iter$")
+    assert root.return_type == "bo.BB_BILL_CHARGE"
+    assert any(
+        field.access == "$iter$.CHARGE_AMT"
+        and field.return_type == "basic.long"
+        for field in root.fields
+    )
 
 
 def test_builder_expands_context_logic_and_extattr_data_type_defs():

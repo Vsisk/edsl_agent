@@ -116,6 +116,14 @@ class TypedExpressionContextBuilder:
             bo.bo_name: self._resolve_bo(bo.bo_name) or bo
             for bo in self._input.filtered_env.selected_bos
         }
+        for resource in self._input.filtered_env.visible_local_context:
+            type_ref = normalize_return_type(getattr(resource, "return_type", None))
+            bo_type = _bo_type(type_ref)
+            if bo_type is None:
+                continue
+            bo = self._resolve_bo(bo_type.name or "")
+            if bo is not None:
+                bos[bo.bo_name] = bo
         selection = self._input.filtered_env.naming_sql_selection
         if selection is not None:
             for candidate in selection.candidates:
@@ -412,6 +420,18 @@ def type_identity(type_ref: TypeRef) -> tuple[Any, ...]:
         type_identity(type_ref.key_type) if type_ref.key_type else None,
         type_identity(type_ref.value_type) if type_ref.value_type else None,
     )
+
+
+def _bo_type(type_ref: TypeRef) -> TypeRef | None:
+    if type_ref.kind == "bo":
+        return type_ref
+    if (
+        type_ref.kind == "list"
+        and type_ref.element_type is not None
+        and type_ref.element_type.kind == "bo"
+    ):
+        return type_ref.element_type
+    return None
 
 
 def _normalized_name(value: str) -> str:

@@ -12,6 +12,11 @@ from agent.expression_generation.typed_context import (
     TypedRootValue,
     TypedVarTemplate,
 )
+from agent.expression_generation.expression_spec import (
+    ExpressionScopeContext,
+    ExpressionSkillInstruction,
+    ExpressionSpec,
+)
 from agent.llm.prompt_manager import prompt_manager
 from agent.models import NodeDef
 from agent.planner.llm_planner import (
@@ -56,6 +61,7 @@ class LLMPlannerTest(unittest.TestCase):
                     "planner {{user_requirement}} {{node_info_json}} RESOURCES:"
                     "{{resources_json}} SCHEMA:{{plan_schema_json}} "
                     "TYPED:{{typed_context_json}}"
+                    " SCOPE:{{expression_scope_json}} SKILLS:{{expression_skills_json}}"
                 )
             },
             "planner_repair": {
@@ -63,6 +69,7 @@ class LLMPlannerTest(unittest.TestCase):
                     "repair {{user_requirement}} {{node_info_json}} "
                     "{{resources_json}} {{plan_schema_json}} "
                     "{{invalid_plan_json}} {{error_message}} {{typed_context_json}}"
+                    " {{expression_scope_json}} {{expression_skills_json}}"
                 )
             },
         }
@@ -150,6 +157,46 @@ class LLMPlannerTest(unittest.TestCase):
         self.assertIn('"Available Methods by Type"', prompt)
         self.assertIn('"Expression Patterns"', prompt)
         self.assertIn("$ctx$.address.addr1", prompt)
+
+    def test_plan_and_repair_prompts_preserve_expression_scope_and_skills(self):
+        client = FakeClient(
+            [
+                '{"nodes":[]}',
+                '{"nodes":[{"type":"return","value":{"type":"literal","value":"ok"}}]}',
+            ]
+        )
+        expression_spec = ExpressionSpec(
+            nl="customer field",
+            scope_context=ExpressionScopeContext(
+                inside_parent_list=True,
+                parent_list_path="$.customers",
+                iter_path="$iter$",
+                iter_return_type={
+                    "data_type": "bo",
+                    "data_type_name": "Customer",
+                    "is_list": False,
+                },
+            ),
+            skill_instructions=[
+                ExpressionSkillInstruction(
+                    skill_id="list-current-element",
+                    title="列表当前元素",
+                    markdown="使用 $iter$.FIELD",
+                )
+            ],
+        )
+
+        LLMPlanner(client=client).plan(
+            node_info=_node_info(),
+            user_query="customer field",
+            filtered_env=FilteredEnvironment(),
+            expression_spec=expression_spec,
+        )
+
+        self.assertEqual(len(client.calls), 2)
+        for call in client.calls:
+            self.assertIn('"inside_parent_list":true', call["prompt"])
+            self.assertIn("$iter$.FIELD", call["prompt"])
 
     def test_plan_exposes_function_resource_name_as_class_qualified_call_name(self):
         client = FakeClient(

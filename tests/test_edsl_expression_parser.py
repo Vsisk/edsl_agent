@@ -5,7 +5,14 @@ from agent.expression_generation.ast.generator import generate_expression
 from agent.expression_generation.edsl_expression_parser import EDSLExpressionParser
 from agent.expression_generation.expression_type_validation import SimpleDefinition, SimpleExpressionPlan
 from agent.expression_generation.typed_context import TypedExpressionContext, TypedRootValue
-from agent.planner.models import CallExprPlanNode, CompareExprPlanNode, MethodCallExprPlanNode, VariableRefExprPlanNode
+from agent.planner.models import (
+    CallExprPlanNode,
+    CompareExprPlanNode,
+    ContextPathExprPlanNode,
+    FieldAccessExprPlanNode,
+    MethodCallExprPlanNode,
+    VariableRefExprPlanNode,
+)
 
 
 @pytest.mark.parametrize("plan,expected", [
@@ -78,3 +85,34 @@ def test_parses_native_call_inside_binary_expression():
     assert isinstance(value, CompareExprPlanNode)
     assert isinstance(value.left, CallExprPlanNode)
     assert value.left.name == "Text.mask"
+
+
+def test_parses_exact_iter_as_context_path_even_without_typed_fields():
+    parsed = EDSLExpressionParser(TypedExpressionContext()).parse_plan(
+        SimpleExpressionPlan(return_expr="$iter$")
+    )
+
+    value = parsed.nodes[-1].value
+    assert isinstance(value, ContextPathExprPlanNode)
+    assert value.path == "$iter$"
+
+
+def test_parses_registered_iter_field_chain():
+    context = TypedExpressionContext(
+        root_values=[
+            TypedRootValue(
+                expr="$iter$",
+                source_type="local_context",
+                return_type="bo.Customer",
+            )
+        ]
+    )
+    parsed = EDSLExpressionParser(context).parse_plan(
+        SimpleExpressionPlan(return_expr="$iter$.ID")
+    )
+
+    value = parsed.nodes[-1].value
+    assert isinstance(value, FieldAccessExprPlanNode)
+    assert isinstance(value.receiver, ContextPathExprPlanNode)
+    assert value.receiver.path == "$iter$"
+    assert value.field == "ID"

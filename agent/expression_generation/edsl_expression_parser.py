@@ -80,7 +80,7 @@ class EDSLExpressionParser:
         else:
             tokens = MethodChainParser().parse(expr)
             root = tokens.pop(0)
-            if root.name.startswith(("$ctx$", "$local$")):
+            if root.name.startswith(("$ctx$", "$local$", "$iter$")):
                 current = {"type": "context_path", "path": root.name}
             else:
                 current = {"type": "variable_ref", "name": root.name}

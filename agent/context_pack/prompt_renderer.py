@@ -29,6 +29,10 @@ class ContextPackPromptRenderer:
                 for item in pack.trace
             ],
         }
+        for output_section, section in zip(value["sections"], pack.sections):
+            metadata = self._project_section_metadata(section)
+            if metadata:
+                output_section["metadata"] = metadata
         count = 0
         for output_section, section in zip(value["sections"], pack.sections):
             for item in section.items:
@@ -62,6 +66,23 @@ class ContextPackPromptRenderer:
         if not isinstance(value, dict):
             return None
         return {key: deepcopy(field_value) for key, field_value in value.items() if key != "children"}
+
+    @staticmethod
+    def _project_section_metadata(section) -> dict | None:
+        if section.resource_name.value != "current_tree":
+            return None
+        metadata = section.metadata
+        result = {
+            key: deepcopy(metadata[key])
+            for key in (
+                "current_json_path",
+                "inside_parent_list",
+                "parent_list_path",
+                "iter",
+            )
+            if key in metadata
+        }
+        return result or None
 
     def _bounded_dump(self, value) -> str:
         rendered = self._dump(value)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import asdict
 from typing import TYPE_CHECKING, Any
 
 from pydantic import ValidationError
@@ -8,6 +9,7 @@ from pydantic import ValidationError
 from agent.environment.environment import FilteredEnvironment
 from agent.context_pack import ContextPack, ContextPackPromptRenderer
 from agent.expression_generation.typed_context import TypedExpressionContext
+from agent.expression_generation.expression_spec import ExpressionSpec
 from agent.llm.generate_by_llm import generate_by_llm
 from agent.llm.llm_client import LLMClient
 from agent.models import NodeDef
@@ -49,6 +51,7 @@ class LLMPlanner:
         filtered_env: FilteredEnvironment,
         typed_context: TypedExpressionContext | None = None,
         context_pack: ContextPack | None = None,
+        expression_spec: ExpressionSpec | None = None,
     ) -> Plan:
         if not self.is_usable:
             raise RuntimeError("LLM planner is not usable")
@@ -59,6 +62,8 @@ class LLMPlanner:
         )
         resources_json = _dump_json(resources)
         typed_context_json = _summarize_typed_context_json(typed_context)
+        expression_scope_json = _summarize_expression_scope_json(expression_spec)
+        expression_skills_json = _summarize_expression_skills_json(expression_spec)
         node_info_json = _dump_json(_summarize_node(node_info))
         plan_schema_json = _dump_json(LEGACY_PLAN_SCHEMA)
 
@@ -72,6 +77,8 @@ class LLMPlanner:
                 node_info_json=node_info_json,
                 resources_json=resources_json,
                 typed_context_json=typed_context_json,
+                expression_scope_json=expression_scope_json,
+                expression_skills_json=expression_skills_json,
                 plan_schema_json=plan_schema_json,
             )
             plan = Plan.model_validate(response)
@@ -85,6 +92,8 @@ class LLMPlanner:
                 user_query=user_query,
                 resources_json=resources_json,
                 typed_context_json=typed_context_json,
+                expression_scope_json=expression_scope_json,
+                expression_skills_json=expression_skills_json,
                 node_info_json=node_info_json,
                 plan_schema_json=plan_schema_json,
                 invalid_plan_json=invalid_plan_json,
@@ -99,6 +108,8 @@ class LLMPlanner:
         user_query: str,
         resources_json: str,
         typed_context_json: str,
+        expression_scope_json: str,
+        expression_skills_json: str,
         node_info_json: str,
         plan_schema_json: str,
         invalid_plan_json: str,
@@ -114,6 +125,8 @@ class LLMPlanner:
             node_info_json=node_info_json,
             resources_json=resources_json,
             typed_context_json=typed_context_json,
+            expression_scope_json=expression_scope_json,
+            expression_skills_json=expression_skills_json,
             plan_schema_json=plan_schema_json,
             invalid_plan_json=invalid_plan_json,
             error_message=error_message,
@@ -182,6 +195,30 @@ def _summarize_typed_context_json(
     if len(rendered) > MAX_TYPED_CONTEXT_JSON_CHARS:
         raise ValueError("TYPED_EXPRESSION_CONTEXT_TOO_LARGE")
     return rendered
+
+
+def _summarize_expression_scope_json(
+    expression_spec: ExpressionSpec | None,
+) -> str:
+    if expression_spec is None:
+        return "{}"
+    return _dump_json(_bounded_typed_value(asdict(expression_spec.scope_context)))
+
+
+def _summarize_expression_skills_json(
+    expression_spec: ExpressionSpec | None,
+) -> str:
+    if expression_spec is None:
+        return "[]"
+    values = [
+        {
+            "skill_id": _summary_text(item.skill_id),
+            "title": _summary_text(item.title),
+            "markdown": str(item.markdown or "")[:4000],
+        }
+        for item in expression_spec.skill_instructions[:20]
+    ]
+    return _dump_json(values)
 
 
 def _bounded_typed_value(value: Any, depth: int = 0) -> Any:

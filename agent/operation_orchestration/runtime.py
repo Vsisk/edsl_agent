@@ -163,6 +163,10 @@ class OperationToolRuntime:
             (self._relevance_score(candidate, tool_input.query), order, candidate)
             for order, candidate in enumerate(self._index.values())
             if is_valid_candidate(tool_input.intent_type, candidate)
+            and not (
+                tool_input.intent_type == "delete_node"
+                and candidate.jsonpath == "$"
+            )
         ]
         ranked.sort(key=lambda item: (-item[0], item[1]))
         candidates: list[dict[str, Any]] = []

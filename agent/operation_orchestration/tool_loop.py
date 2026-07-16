@@ -5,8 +5,6 @@ from collections.abc import Callable
 from copy import deepcopy
 from typing import Any
 
-from pydantic import ValidationError
-
 from agent.operation_orchestration.models import (
     OperationToolLoopRequest,
     OperationToolLoopResponse,
@@ -61,7 +59,7 @@ class OperationToolLoop:
                     tool_history=self._tool_history(runtime),
                 )
                 decision = ToolDecision.model_validate(payload, strict=True)
-            except (ValidationError, TypeError, ValueError, RuntimeError, StopIteration):
+            except Exception:
                 return self._response(
                     runtime,
                     success=False,

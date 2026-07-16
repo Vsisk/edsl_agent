@@ -114,6 +114,16 @@ def test_search_filters_by_intent_and_authorizes_current_tree_version() -> None:
     assert result["candidates"][0]["identity_field"] == "node_id"
 
 
+def test_delete_search_never_authorizes_root_node() -> None:
+    runtime = OperationToolRuntime(_tree(), action_adapter=_RecordingAdapter())
+
+    result = _search(runtime, "delete_node")
+
+    assert [candidate["node_id"] for candidate in result["candidates"]] == [
+        "acct-id"
+    ]
+
+
 def test_mutation_requires_an_exact_authorized_search_candidate() -> None:
     runtime = OperationToolRuntime(_tree(), action_adapter=_RecordingAdapter())
     args = {

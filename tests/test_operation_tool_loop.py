@@ -5,6 +5,8 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from agent.operation_orchestration.models import OperationToolLoopRequest
 from agent.operation_orchestration.tool_loop import OperationToolLoop
 
@@ -175,11 +177,12 @@ def test_loop_rejects_forged_location_without_calling_adapter() -> None:
     assert response.tool_calls[-1].success is False
 
 
-def test_loop_hides_gateway_failure_details() -> None:
+@pytest.mark.parametrize("error_type", [RuntimeError, OSError])
+def test_loop_hides_gateway_failure_details(error_type) -> None:
     secret = "secret-api-key"
 
     def broken_gateway(**kwargs):
-        raise RuntimeError(secret)
+        raise error_type(secret)
 
     response = OperationToolLoop(
         llm_gateway=broken_gateway, action_adapter=_Adapter()

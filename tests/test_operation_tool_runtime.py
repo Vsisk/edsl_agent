@@ -193,9 +193,10 @@ def test_adapter_failure_does_not_commit_attempted_tree_and_records_trace() -> N
         if candidate["node_id"] == "acct-id"
     )
 
-    with pytest.raises(RuntimeError, match="secret backend detail"):
+    with pytest.raises(ValueError, match="^operation execution failed$") as exc_info:
         runtime.execute("modify_node", _target_args(candidate))
 
+    assert "secret backend detail" not in str(exc_info.value)
     assert runtime.tree == original
     assert runtime.tree is not original
     assert runtime.version == 0
@@ -220,7 +221,7 @@ def test_invalid_adapter_output_is_atomic() -> None:
         if candidate["node_id"] == "acct-id"
     )
 
-    with pytest.raises(ValueError, match="output node ID is absent"):
+    with pytest.raises(ValueError, match="^operation execution failed$"):
         runtime.execute("modify_node", _target_args(candidate))
 
     assert runtime.tree == before

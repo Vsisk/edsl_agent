@@ -7,9 +7,11 @@ from typing import Any
 from pydantic import BaseModel
 
 from agent.operation_orchestration.action_adapter import OperationActionAdapter
+from agent.operation_orchestration.executor import OperationExecutor
 from agent.operation_orchestration.models import (
     CreateNodeInput,
     DeleteNodeInput,
+    ExecuteOperationsRequest,
     FinishInput,
     GenerateExpressionInput,
     ModifyNodeInput,
@@ -45,7 +47,14 @@ class OperationToolRuntime:
     ) -> None:
         self._tree = deepcopy(target_tree)
         self._index = build_node_index(self._tree)
-        self._action_adapter = action_adapter or OperationActionAdapter()
+        chosen_adapter = (
+            action_adapter
+            if action_adapter is not None
+            else OperationActionAdapter()
+        )
+        self._executor = OperationExecutor(
+            locator=_UnexpectedLocator(), action_adapter=chosen_adapter
+        )
         self.site_id = site_id
         self.project_id = project_id
         self.version = 0
@@ -261,31 +270,35 @@ class OperationToolRuntime:
             target_jsonpath=candidate.jsonpath,
             status="located",
         )
-        attempt_tree = deepcopy(self._tree)
-        result = self._dispatch(intent_type, tool_input, attempt_tree)
-        if not isinstance(result, dict):
-            raise ValueError("adapter result must be an object")
-        candidate_tree = result.get("target_tree")
-        if not isinstance(candidate_tree, dict):
-            raise ValueError("adapter result target_tree must be an object")
-        candidate_tree = deepcopy(candidate_tree)
+        response = self._executor.execute(
+            ExecuteOperationsRequest(
+                operations=[operation],
+                target_tree=self._tree,
+                site_id=self.site_id,
+                project_id=self.project_id,
+            )
+        )
+        if (
+            not response.success
+            or len(response.operations) != 1
+            or response.operations[0].status != "executed"
+        ):
+            raise ValueError("operation execution failed")
+        executed_operation = response.operations[0]
+        candidate_tree = deepcopy(response.target_tree)
         candidate_index = build_node_index(candidate_tree)
-        output_node_id = self._output_node_id(intent_type, candidate.node_id, result)
+        output_node_id = executed_operation.output_node_id
         if not isinstance(output_node_id, str) or not output_node_id.strip():
-            raise ValueError("adapter result output node ID is blank or missing")
+            raise ValueError("operation execution failed")
         output_candidate = candidate_index.get(output_node_id)
         if output_candidate is None:
-            raise ValueError(
-                f"adapter result output node ID is absent from resulting index: {output_node_id}"
-            )
+            raise ValueError("operation execution failed")
 
         self._tree = candidate_tree
         self._index = candidate_index
         self.version += 1
         self._authorized_candidates.clear()
-        operation.output_node_id = output_node_id
-        operation.status = "executed"
-        self.operations.append(operation)
+        self.operations.append(executed_operation.model_copy(deep=True))
         output = {
             "version": self.version,
             "target_node_id": candidate.node_id,
@@ -299,53 +312,11 @@ class OperationToolRuntime:
             output["parent_node_id"] = output_node_id
         return output
 
-    def _dispatch(
-        self,
-        intent_type: str,
-        tool_input: CreateNodeInput
-        | ModifyNodeInput
-        | GenerateExpressionInput
-        | DeleteNodeInput,
-        attempt_tree: dict[str, Any],
-    ) -> dict[str, Any]:
-        if intent_type == "create_node":
-            return self._action_adapter.create_node(
-                tool_input.query, tool_input.target_jsonpath, attempt_tree
-            )
-        if intent_type == "modify_node":
-            return self._action_adapter.modify_node(
-                tool_input.query,
-                tool_input.target_jsonpath,
-                attempt_tree,
-                site_id=self.site_id,
-                project_id=self.project_id,
-            )
-        if intent_type == "generate_expression":
-            return self._action_adapter.generate_expression(
-                tool_input.query,
-                tool_input.target_jsonpath,
-                attempt_tree,
-                site_id=self.site_id,
-                project_id=self.project_id,
-            )
-        if intent_type == "delete_node":
-            return self._action_adapter.delete_node(
-                tool_input.target_jsonpath, attempt_tree
-            )
-        raise ValueError(f"unsupported operation intent: {intent_type}")
-
-    @staticmethod
-    def _output_node_id(
-        intent_type: str, target_node_id: str, result: dict[str, Any]
-    ) -> Any:
-        if intent_type == "create_node":
-            return result.get("created_node_id")
-        if intent_type in {"modify_node", "generate_expression"}:
-            return target_node_id
-        if intent_type == "delete_node":
-            return result.get("parent_node_id")
-        return None
-
     def _finish(self, tool_input: FinishInput, _: Any) -> dict[str, Any]:
         self.finished = True
         return {"version": self.version, "summary": tool_input.summary}
+
+
+class _UnexpectedLocator:
+    def locate(self, request: Any) -> Any:
+        raise AssertionError("authorized tool targets must not invoke the locator")

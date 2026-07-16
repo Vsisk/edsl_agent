@@ -305,16 +305,22 @@ def _legacy_generator(route, result, planner=None):
 ])
 def test_legacy_fallback_gates_context_bo_and_function_groups(route, expected_bo, expected_function):
     result = {"bo": [{"resource_id": "bo.0000"}], "function": [{"resource_id": "func.0001"}],
-        "local_context": [{"resource_id": "local.0002"}], "global_context": [{"resource_id": "ctx.0001"}]}
+        "local_context": [{"resource_id": "local.0001"}], "global_context": [{"resource_id": "ctx.0001"}]}
     gen, resource_filter, planner = _legacy_generator(route, result)
-    query = "lookup BO by CUST_ID" if route.use_bo else "mask CUST_ID with function" if route.use_function else "assign CUST_ID from subId context directly"
+    query = (
+        "lookup BO by CUST_ID with local_2 context"
+        if route.use_bo
+        else "mask CUST_ID with function and local_2 context"
+        if route.use_function
+        else "assign CUST_ID from local_2 context directly"
+    )
     gen.generate(request(False).model_copy(update={"node_path": "$.mapping_content.children[1]", "query": query}))
     env, call = planner.calls[0]["filtered_env"], resource_filter.calls[0]
     assert env.selected_bo_ids == expected_bo
     assert env.selected_function_ids[:len(expected_function)] == expected_function
     if not route.use_function:
         assert env.selected_function_ids == []
-    assert env.selected_local_context_ids[0] == "local.0002" and env.selected_global_context_ids[0] == "ctx.0001"
+    assert env.selected_local_context_ids[0] == "local.0001" and env.selected_global_context_ids[0] == "ctx.0001"
     assert call["limits"]["bo"] == (5 if route.use_bo else 0)
     assert call["limits"]["function"] == (5 if route.use_function else 0)
 

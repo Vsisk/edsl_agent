@@ -771,10 +771,10 @@ class ResourceLoaderTest(unittest.TestCase):
 
         local_registry = loaded.get_visible_local_context_registry("$.mapping_content.children[1]")
 
-        self.assertEqual(sorted(local_registry), ["$iter$.subId", "$local$.local_2", "$local$.rootLocal"])
+        self.assertEqual(sorted(local_registry), ["$local$.local_2", "$local$.rootLocal"])
         self.assertEqual(
-            local_registry["$iter$.subId"].source_path,
-            "$.mapping_content.children[1].iter_local_context[0]",
+            local_registry["$local$.local_2"].source_path,
+            "$.mapping_content.children[1].local_context[0]",
         )
 
     def test_load_visible_local_context_registry_reads_default_sample_tree(self):
@@ -791,19 +791,16 @@ class ResourceLoaderTest(unittest.TestCase):
 
         self.assertEqual(
             [local_context.context_name for local_context in registry],
-            ["$local$.local_2", "$iter$.subId"],
+            ["$local$.local_2"],
         )
         self.assertEqual(
             [local_context.source_path for local_context in registry],
             [
                 "$.mapping_content.children[1].local_context[0]",
-                "$.mapping_content.children[1].iter_local_context[0]",
             ],
         )
         self.assertIn("local_2", registry[0].tag)
         self.assertIn("SUB_INFO", registry[0].tag)
-        self.assertIn("subId", registry[1].tag)
-        self.assertIn("SUB_INFO", registry[1].tag)
 
     def test_resource_loader_reads_default_sample_data(self):
         loaded = ResourceLoader().load_resource("sample_site", "sample_project", {"sample": True})

@@ -228,17 +228,16 @@ class ResourceLoaderTest(unittest.TestCase):
 
         self.assertEqual(
             [local_context.context_name for local_context in registry],
-            ["$local$.rootLocal", "$local$.local_2", "$iter$.subId"],
+            ["$local$.rootLocal", "$local$.local_2"],
         )
         parse_jsonpath.assert_any_call("$.mapping_content")
         parse_jsonpath.assert_any_call("$.mapping_content.children[1]")
-        self.assertEqual([local_context.resource_id for local_context in registry], ["local.0000", "local.0001", "local.0002"])
+        self.assertEqual([local_context.resource_id for local_context in registry], ["local.0000", "local.0001"])
         self.assertEqual(
             [local_context.source_path for local_context in registry],
             [
                 "$.mapping_content.local_context[0]",
                 "$.mapping_content.children[1].local_context[0]",
-                "$.mapping_content.children[1].iter_local_context[0]",
             ],
         )
         self.assertEqual(registry[0].return_type.data_type, "basic")
@@ -246,10 +245,6 @@ class ResourceLoaderTest(unittest.TestCase):
         self.assertIn("local_2", registry[1].tag)
         self.assertIn("desc_2", registry[1].tag)
         self.assertIn("INT32", registry[1].tag)
-        self.assertIn("subId", registry[2].tag)
-        self.assertIn("id", registry[2].tag)
-        self.assertIn("INT64", registry[2].tag)
-        self.assertEqual(registry[2].property_type, "iter")
 
     def test_load_visible_local_context_registry_for_insert_position(self):
         registry = load_visible_local_context_registry(
@@ -259,8 +254,9 @@ class ResourceLoaderTest(unittest.TestCase):
 
         self.assertEqual(
             [local_context.context_name for local_context in registry],
-            ["$local$.rootLocal", "$local$.local_2", "$iter$.subId"],
+            ["$local$.rootLocal", "$local$.local_2", "$local$.subId"],
         )
+        self.assertEqual(registry[-1].property_type, "iter")
 
     def test_load_context_registry_from_json_loads_basic_leaf(self):
         payload = {

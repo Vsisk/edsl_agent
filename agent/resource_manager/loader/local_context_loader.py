@@ -7,19 +7,27 @@ from agent.resource_manager.models import LocalContextRegistry
 
 
 PARENT_NODE_TYPES = {"parent", "parent_list"}
-LOCAL_CONTEXT_FIELDS = (("local_context", "$local$", "local"), ("lobal_context", "$local$", "local"), ("iter_local_context", "$iter$", "iter"))
+LOCAL_CONTEXT_FIELDS = (("local_context", "local"), ("lobal_context", "local"))
 
 
 def load_visible_local_context_registry(edsl_tree: Dict[str, Any], node_path: str) -> List[LocalContextRegistry]:
     registry: List[LocalContextRegistry] = []
+    normalized_path = _normalize_path(node_path)
 
-    for ancestor_node, ancestor_path in _resolve_existing_path_nodes(edsl_tree, node_path):
+    for ancestor_node, ancestor_path in _resolve_existing_path_nodes(edsl_tree, normalized_path):
         if not isinstance(ancestor_node, dict):
             continue
         if ancestor_node.get("tree_node_type") not in PARENT_NODE_TYPES:
             continue
 
-        for field_name, prefix, property_type in LOCAL_CONTEXT_FIELDS:
+        context_fields = LOCAL_CONTEXT_FIELDS
+        if (
+            ancestor_node.get("tree_node_type") == "parent_list"
+            and _is_inside_list_body(normalized_path, ancestor_path)
+        ):
+            context_fields += (("iter_local_context", "iter"),)
+
+        for field_name, property_type in context_fields:
             context_items = ancestor_node.get(field_name) or []
             if not isinstance(context_items, list):
                 continue
@@ -32,7 +40,7 @@ def load_visible_local_context_registry(edsl_tree: Dict[str, Any], node_path: st
                 registry.append(
                     LocalContextRegistry(
                         resource_id=f"local.{len(registry):04d}",
-                        context_name=f"{prefix}.{property_name}",
+                        context_name=f"$local$.{property_name}",
                         return_type=context_item.get("return_type"),
                         annotation=context_item.get("annotation") or "",
                         source_path=f"{ancestor_path}.{field_name}[{index}]",
@@ -42,6 +50,20 @@ def load_visible_local_context_registry(edsl_tree: Dict[str, Any], node_path: st
                 )
 
     return registry
+
+
+def _normalize_path(node_path: str) -> str:
+    path = node_path.strip()
+    if not path.startswith("$"):
+        path = f"$.{path.lstrip('.')}"
+    return path
+
+
+def _is_inside_list_body(node_path: str, list_path: str) -> bool:
+    body_path = f"{list_path}.children"
+    return node_path == body_path or node_path.startswith(
+        (f"{body_path}[", f"{body_path}.")
+    )
 
 
 def _resolve_existing_path_nodes(edsl_tree: Dict[str, Any], node_path: str) -> List[Tuple[Any, str]]:
@@ -57,9 +79,7 @@ def _resolve_existing_path_nodes(edsl_tree: Dict[str, Any], node_path: str) -> L
 
 
 def _iter_candidate_paths(node_path: str) -> List[str]:
-    path = node_path.strip()
-    if not path.startswith("$"):
-        path = f"$.{path.lstrip('.')}"
+    path = _normalize_path(node_path)
 
     paths: List[str] = []
     while path and path != "$":

@@ -21,6 +21,7 @@ from agent.resource_manager.loader.function_loader import (
 from agent.resource_manager.loader.structured_type_loader import (
     load_structured_type_defs_from_json,
 )
+from agent.resource_manager.loader import local_context_loader
 from agent.resource_manager.loader.local_context_loader import load_visible_local_context_registry
 from agent.resource_manager.loader.resource_loader import ResourceLoader
 from agent.resource_manager.models import NamingSqlDefTerm, ParamTerm, PropertyTerm
@@ -231,6 +232,23 @@ def sample_edsl_tree_payload():
 
 
 class ResourceLoaderTest(unittest.TestCase):
+    def test_data_source_return_type_parses_sql_as_bo_list(self):
+        return_type = local_context_loader._data_source_return_type(
+            {
+                "data_source_type": "sql",
+                "sql_query": {"bo_name": "CUSTOMER"},
+            }
+        )
+
+        self.assertEqual(
+            return_type,
+            {
+                "data_type": "bo",
+                "data_type_name": "CUSTOMER",
+                "is_list": True,
+            },
+        )
+
     def test_local_context_type_uses_sql_data_source_bo_list(self):
         tree = {
             "mapping_content": {

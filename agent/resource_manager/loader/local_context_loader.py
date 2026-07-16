@@ -106,7 +106,13 @@ def _is_inside_list_body(node_path: str, list_path: str) -> bool:
 
 
 def _list_element_return_type(node: Dict[str, Any]) -> Dict[str, Any] | None:
-    data_source = node.get("data_source")
+    return_type = _data_source_return_type(node.get("data_source"))
+    if return_type is None:
+        return None
+    return {**return_type, "is_list": False}
+
+
+def _data_source_return_type(data_source: Any) -> Dict[str, Any] | None:
     if not isinstance(data_source, dict):
         return None
 
@@ -121,7 +127,7 @@ def _list_element_return_type(node: Dict[str, Any]) -> Dict[str, Any] | None:
         return {
             "data_type": "bo",
             "data_type_name": bo_name,
-            "is_list": False,
+            "is_list": True,
         }
 
     if source_type == "expression":
@@ -139,48 +145,21 @@ def _list_element_return_type(node: Dict[str, Any]) -> Dict[str, Any] | None:
         return {
             "data_type": data_type,
             "data_type_name": return_type.get("data_type_name"),
-            "is_list": False,
+            "is_list": bool(return_type.get("is_list", False)),
         }
 
     return None
 
 
 def _local_context_return_type(context_item: Dict[str, Any]) -> Dict[str, Any]:
-    data_source = context_item.get("data_source")
-    if not isinstance(data_source, dict):
+    return_type = _data_source_return_type(context_item.get("data_source"))
+    if return_type is None:
         return dict(DEFAULT_LOCAL_CONTEXT_RETURN_TYPE)
 
-    source_type = str(data_source.get("data_source_type") or "").strip().lower()
-    if source_type == "sql":
-        sql_query = data_source.get("sql_query")
-        if isinstance(sql_query, dict):
-            bo_name = str(sql_query.get("bo_name") or "").strip()
-            if bo_name:
-                return {
-                    "data_type": "bo",
-                    "data_type_name": bo_name,
-                    "is_list": True,
-                }
+    data_type_name = str(return_type.get("data_type_name") or "").strip()
+    if not data_type_name:
         return dict(DEFAULT_LOCAL_CONTEXT_RETURN_TYPE)
-
-    if source_type == "expression":
-        data_expression = data_source.get("data_expression")
-        return_type = (
-            data_expression.get("return_type")
-            if isinstance(data_expression, dict)
-            else None
-        )
-        if isinstance(return_type, dict):
-            data_type = str(return_type.get("data_type") or "").strip()
-            data_type_name = str(return_type.get("data_type_name") or "").strip()
-            if data_type and data_type_name:
-                return {
-                    "data_type": data_type,
-                    "data_type_name": data_type_name,
-                    "is_list": bool(return_type.get("is_list", False)),
-                }
-
-    return dict(DEFAULT_LOCAL_CONTEXT_RETURN_TYPE)
+    return {**return_type, "data_type_name": data_type_name}
 
 
 def _resolve_existing_path_nodes(edsl_tree: Dict[str, Any], node_path: str) -> List[Tuple[Any, str]]:

@@ -8,6 +8,11 @@ from agent.resource_manager.models import LocalContextRegistry
 
 PARENT_NODE_TYPES = {"parent", "parent_list"}
 LOCAL_CONTEXT_FIELDS = (("local_context", "local"), ("lobal_context", "local"))
+DEFAULT_LOCAL_CONTEXT_RETURN_TYPE = {
+    "data_type": "basic",
+    "data_type_name": "String",
+    "is_list": False,
+}
 
 
 def load_visible_local_context_registry(edsl_tree: Dict[str, Any], node_path: str) -> List[LocalContextRegistry]:
@@ -40,15 +45,21 @@ def load_visible_local_context_registry(edsl_tree: Dict[str, Any], node_path: st
                 property_name = str(context_item.get("property_name") or "").strip()
                 if not property_name:
                     continue
+                return_type = _local_context_return_type(context_item)
                 registry.append(
                     LocalContextRegistry(
                         resource_id=f"local.{len(registry):04d}",
                         context_name=f"$local$.{property_name}",
-                        return_type=context_item.get("return_type"),
+                        return_type=return_type,
                         annotation=context_item.get("annotation") or "",
                         source_path=f"{ancestor_path}.{field_name}[{index}]",
                         property_type=property_type,
-                        tag=_build_local_context_tags(property_name, context_item, ancestor_node),
+                        tag=_build_local_context_tags(
+                            property_name,
+                            context_item,
+                            ancestor_node,
+                            return_type,
+                        ),
                     )
                 )
 
@@ -68,7 +79,12 @@ def load_visible_local_context_registry(edsl_tree: Dict[str, Any], node_path: st
                     annotation=context_item["annotation"],
                     source_path=f"{list_path}.data_source",
                     property_type="iter",
-                    tag=_build_local_context_tags("$iter$", context_item, list_node),
+                    tag=_build_local_context_tags(
+                        "$iter$",
+                        context_item,
+                        list_node,
+                        return_type,
+                    ),
                 )
             )
 
@@ -129,6 +145,44 @@ def _list_element_return_type(node: Dict[str, Any]) -> Dict[str, Any] | None:
     return None
 
 
+def _local_context_return_type(context_item: Dict[str, Any]) -> Dict[str, Any]:
+    data_source = context_item.get("data_source")
+    if not isinstance(data_source, dict):
+        return dict(DEFAULT_LOCAL_CONTEXT_RETURN_TYPE)
+
+    source_type = str(data_source.get("data_source_type") or "").strip().lower()
+    if source_type == "sql":
+        sql_query = data_source.get("sql_query")
+        if isinstance(sql_query, dict):
+            bo_name = str(sql_query.get("bo_name") or "").strip()
+            if bo_name:
+                return {
+                    "data_type": "bo",
+                    "data_type_name": bo_name,
+                    "is_list": True,
+                }
+        return dict(DEFAULT_LOCAL_CONTEXT_RETURN_TYPE)
+
+    if source_type == "expression":
+        data_expression = data_source.get("data_expression")
+        return_type = (
+            data_expression.get("return_type")
+            if isinstance(data_expression, dict)
+            else None
+        )
+        if isinstance(return_type, dict):
+            data_type = str(return_type.get("data_type") or "").strip()
+            data_type_name = str(return_type.get("data_type_name") or "").strip()
+            if data_type and data_type_name:
+                return {
+                    "data_type": data_type,
+                    "data_type_name": data_type_name,
+                    "is_list": bool(return_type.get("is_list", False)),
+                }
+
+    return dict(DEFAULT_LOCAL_CONTEXT_RETURN_TYPE)
+
+
 def _resolve_existing_path_nodes(edsl_tree: Dict[str, Any], node_path: str) -> List[Tuple[Any, str]]:
     resolved_nodes: List[Tuple[Any, str]] = []
 
@@ -166,10 +220,14 @@ def _get_node_xml_name(node: Dict[str, Any]) -> str:
     return str(xml_name_property.get("xml_name") or "").strip()
 
 
-def _build_local_context_tags(property_name: str, context_item: Dict[str, Any], node: Dict[str, Any]) -> List[str]:
+def _build_local_context_tags(
+    property_name: str,
+    context_item: Dict[str, Any],
+    node: Dict[str, Any],
+    return_type: Dict[str, Any],
+) -> List[str]:
     tags = [property_name]
-    return_type = context_item.get("return_type") or {}
-    return_type_name = return_type.get("data_type_name") if isinstance(return_type, dict) else None
+    return_type_name = return_type.get("data_type_name")
     for tag in build_tags(
         _get_node_xml_name(node),
         node.get("annotation"),

@@ -168,10 +168,15 @@ def sample_edsl_tree_payload():
                 {
                     "property_name": "rootLocal",
                     "annotation": "root local context",
-                    "return_type": {
-                        "data_type": "basic",
-                        "data_type_name": "STRING",
-                        "is_list": False,
+                    "data_source": {
+                        "data_source_type": "expression",
+                        "data_expression": {
+                            "return_type": {
+                                "data_type": "basic",
+                                "data_type_name": "STRING",
+                                "is_list": False,
+                            }
+                        },
                     },
                 }
             ],
@@ -190,10 +195,15 @@ def sample_edsl_tree_payload():
                         {
                             "property_name": "local_2",
                             "annotation": "desc_2",
-                            "return_type": {
-                                "data_type": "basic",
-                                "data_type_name": "INT32",
-                                "is_list": False,
+                            "data_source": {
+                                "data_source_type": "expression",
+                                "data_expression": {
+                                    "return_type": {
+                                        "data_type": "basic",
+                                        "data_type_name": "INT32",
+                                        "is_list": False,
+                                    }
+                                },
                             },
                         }
                     ],
@@ -201,10 +211,15 @@ def sample_edsl_tree_payload():
                         {
                             "property_name": "subId",
                             "annotation": "user id",
-                            "return_type": {
-                                "data_type": "basic",
-                                "data_type_name": "INT64",
-                                "is_list": False,
+                            "data_source": {
+                                "data_source_type": "expression",
+                                "data_expression": {
+                                    "return_type": {
+                                        "data_type": "basic",
+                                        "data_type_name": "INT64",
+                                        "is_list": False,
+                                    }
+                                },
                             },
                         }
                     ],
@@ -216,6 +231,120 @@ def sample_edsl_tree_payload():
 
 
 class ResourceLoaderTest(unittest.TestCase):
+    def test_local_context_type_uses_sql_data_source_bo_list(self):
+        tree = {
+            "mapping_content": {
+                "tree_node_type": "parent",
+                "local_context": [
+                    {
+                        "property_name": "customers",
+                        "return_type": {
+                            "data_type": "basic",
+                            "data_type_name": "LegacyType",
+                            "is_list": False,
+                        },
+                        "data_source": {
+                            "data_source_type": "sql",
+                            "sql_query": {"bo_name": "CUSTOMER"},
+                        },
+                    }
+                ],
+            }
+        }
+
+        registry = load_visible_local_context_registry(tree, "$.mapping_content")
+
+        self.assertEqual(registry[0].return_type.data_type, "bo")
+        self.assertEqual(registry[0].return_type.data_type_name, "CUSTOMER")
+        self.assertTrue(registry[0].return_type.is_list)
+        self.assertIn("CUSTOMER", registry[0].tag)
+        self.assertNotIn("LegacyType", registry[0].tag)
+
+    def test_local_context_type_uses_expression_data_source_return_type(self):
+        tree = {
+            "mapping_content": {
+                "tree_node_type": "parent",
+                "local_context": [
+                    {
+                        "property_name": "customerView",
+                        "data_source": {
+                            "data_source_type": "expression",
+                            "data_expression": {
+                                "return_type": {
+                                    "data_type": "logic",
+                                    "data_type_name": "CustomerView",
+                                    "is_list": True,
+                                }
+                            },
+                        },
+                    }
+                ],
+            }
+        }
+
+        registry = load_visible_local_context_registry(tree, "$.mapping_content")
+
+        self.assertEqual(registry[0].return_type.data_type, "logic")
+        self.assertEqual(registry[0].return_type.data_type_name, "CustomerView")
+        self.assertTrue(registry[0].return_type.is_list)
+
+    def test_local_context_type_defaults_when_data_source_metadata_is_missing(self):
+        tree = {
+            "mapping_content": {
+                "tree_node_type": "parent",
+                "local_context": [
+                    {
+                        "property_name": "fallbackValue",
+                        "return_type": {
+                            "data_type": "bo",
+                            "data_type_name": "IgnoredLegacyBO",
+                            "is_list": True,
+                        },
+                    }
+                ],
+            }
+        }
+
+        registry = load_visible_local_context_registry(tree, "$.mapping_content")
+
+        self.assertEqual(registry[0].return_type.data_type, "basic")
+        self.assertEqual(registry[0].return_type.data_type_name, "String")
+        self.assertFalse(registry[0].return_type.is_list)
+        self.assertIn("String", registry[0].tag)
+        self.assertNotIn("IgnoredLegacyBO", registry[0].tag)
+
+    def test_iter_local_context_type_uses_its_data_source(self):
+        tree = {
+            "mapping_content": {
+                "tree_node_type": "parent_list",
+                "iter_local_context": [
+                    {
+                        "property_name": "innerValues",
+                        "data_source": {
+                            "data_source_type": "expression",
+                            "data_expression": {
+                                "return_type": {
+                                    "data_type": "basic",
+                                    "data_type_name": "Long",
+                                    "is_list": True,
+                                }
+                            },
+                        },
+                    }
+                ],
+                "children": [{"tree_node_type": "simple_leaf"}],
+            }
+        }
+
+        registry = load_visible_local_context_registry(
+            tree,
+            "$.mapping_content.children[0]",
+        )
+
+        self.assertEqual(registry[0].context_name, "$local$.innerValues")
+        self.assertEqual(registry[0].return_type.data_type_name, "Long")
+        self.assertTrue(registry[0].return_type.is_list)
+
     def test_load_visible_local_context_registry_for_existing_node_path(self):
         with patch("agent.resource_manager.loader.local_context_loader.parse") as parse_jsonpath:
             from jsonpath_ng import parse as real_parse

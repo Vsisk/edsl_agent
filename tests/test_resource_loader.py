@@ -258,6 +258,107 @@ class ResourceLoaderTest(unittest.TestCase):
         )
         self.assertEqual(registry[-1].property_type, "iter")
 
+    def test_list_body_loads_sql_data_source_element_as_iter(self):
+        tree = sample_edsl_tree_payload()
+        parent_list = tree["mapping_content"]["children"][1]
+        parent_list["children"] = [{"tree_node_type": "simple_leaf"}]
+        parent_list["data_source"] = {
+            "data_source_type": "sql",
+            "sql_query": {"bo_name": "SUBSCRIBER"},
+        }
+
+        registry = load_visible_local_context_registry(
+            tree,
+            "$.mapping_content.children[1].children[0]",
+        )
+        current = next(item for item in registry if item.context_name == "$iter$")
+
+        self.assertEqual(current.property_type, "iter")
+        self.assertEqual(
+            current.source_path,
+            "$.mapping_content.children[1].data_source",
+        )
+        self.assertEqual(current.return_type.data_type, "bo")
+        self.assertEqual(current.return_type.data_type_name, "SUBSCRIBER")
+        self.assertFalse(current.return_type.is_list)
+
+    def test_list_body_loads_expression_return_element_as_iter(self):
+        tree = sample_edsl_tree_payload()
+        parent_list = tree["mapping_content"]["children"][1]
+        parent_list["children"] = [{"tree_node_type": "simple_leaf"}]
+        parent_list["data_source"] = {
+            "data_source_type": "expression",
+            "data_expression": {
+                "expression": "$local$.items",
+                "return_type": {
+                    "data_type": "logic",
+                    "data_type_name": "SubscriberView",
+                    "is_list": True,
+                },
+            },
+        }
+
+        registry = load_visible_local_context_registry(
+            tree,
+            "$.mapping_content.children[1].children[0]",
+        )
+        current = next(item for item in registry if item.context_name == "$iter$")
+
+        self.assertEqual(current.return_type.data_type, "logic")
+        self.assertEqual(current.return_type.data_type_name, "SubscriberView")
+        self.assertFalse(current.return_type.is_list)
+
+    def test_nested_list_body_loads_only_nearest_iter(self):
+        tree = {
+            "mapping_content": {
+                "tree_node_type": "parent_list",
+                "data_source": {
+                    "data_source_type": "sql",
+                    "sql_query": {"bo_name": "OuterItem"},
+                },
+                "iter_local_context": [
+                    {
+                        "property_name": "outerItem",
+                        "return_type": {
+                            "data_type": "bo",
+                            "data_type_name": "OuterItem",
+                            "is_list": False,
+                        },
+                    }
+                ],
+                "children": [
+                    {
+                        "tree_node_type": "parent_list",
+                        "data_source": {
+                            "data_source_type": "expression",
+                            "data_expression": {
+                                "return_type": {
+                                    "data_type": "logic",
+                                    "data_type_name": "InnerItem",
+                                    "is_list": True,
+                                }
+                            },
+                        },
+                        "children": [{"tree_node_type": "simple_leaf"}],
+                    }
+                ],
+            }
+        }
+
+        registry = load_visible_local_context_registry(
+            tree,
+            "$.mapping_content.children[0].children[0]",
+        )
+        names = [item.context_name for item in registry]
+        by_name = {item.context_name: item for item in registry}
+
+        self.assertIn("$local$.outerItem", names)
+        self.assertEqual(names.count("$iter$"), 1)
+        self.assertEqual(
+            by_name["$iter$"].return_type.data_type_name,
+            "InnerItem",
+        )
+
     def test_load_context_registry_from_json_loads_basic_leaf(self):
         payload = {
             "global_context": {

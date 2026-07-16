@@ -13,18 +13,21 @@ LOCAL_CONTEXT_FIELDS = (("local_context", "local"), ("lobal_context", "local"))
 def load_visible_local_context_registry(edsl_tree: Dict[str, Any], node_path: str) -> List[LocalContextRegistry]:
     registry: List[LocalContextRegistry] = []
     normalized_path = _normalize_path(node_path)
+    nearest_list: Tuple[Dict[str, Any], str] | None = None
 
     for ancestor_node, ancestor_path in _resolve_existing_path_nodes(edsl_tree, normalized_path):
         if not isinstance(ancestor_node, dict):
             continue
-        if ancestor_node.get("tree_node_type") not in PARENT_NODE_TYPES:
+        node_type = ancestor_node.get("tree_node_type")
+        if node_type not in PARENT_NODE_TYPES:
             continue
 
         context_fields = LOCAL_CONTEXT_FIELDS
         if (
-            ancestor_node.get("tree_node_type") == "parent_list"
+            node_type == "parent_list"
             and _is_inside_list_body(normalized_path, ancestor_path)
         ):
+            nearest_list = (ancestor_node, ancestor_path)
             context_fields += (("iter_local_context", "iter"),)
 
         for field_name, property_type in context_fields:
@@ -49,6 +52,26 @@ def load_visible_local_context_registry(edsl_tree: Dict[str, Any], node_path: st
                     )
                 )
 
+    if nearest_list is not None:
+        list_node, list_path = nearest_list
+        return_type = _list_element_return_type(list_node)
+        if return_type is not None:
+            context_item = {
+                "annotation": list_node.get("annotation") or "",
+                "return_type": return_type,
+            }
+            registry.append(
+                LocalContextRegistry(
+                    resource_id=f"local.{len(registry):04d}",
+                    context_name="$iter$",
+                    return_type=return_type,
+                    annotation=context_item["annotation"],
+                    source_path=f"{list_path}.data_source",
+                    property_type="iter",
+                    tag=_build_local_context_tags("$iter$", context_item, list_node),
+                )
+            )
+
     return registry
 
 
@@ -64,6 +87,46 @@ def _is_inside_list_body(node_path: str, list_path: str) -> bool:
     return node_path == body_path or node_path.startswith(
         (f"{body_path}[", f"{body_path}.")
     )
+
+
+def _list_element_return_type(node: Dict[str, Any]) -> Dict[str, Any] | None:
+    data_source = node.get("data_source")
+    if not isinstance(data_source, dict):
+        return None
+
+    source_type = str(data_source.get("data_source_type") or "").strip().lower()
+    if source_type == "sql":
+        sql_query = data_source.get("sql_query")
+        if not isinstance(sql_query, dict):
+            return None
+        bo_name = str(sql_query.get("bo_name") or "").strip()
+        if not bo_name:
+            return None
+        return {
+            "data_type": "bo",
+            "data_type_name": bo_name,
+            "is_list": False,
+        }
+
+    if source_type == "expression":
+        data_expression = data_source.get("data_expression")
+        return_type = (
+            data_expression.get("return_type")
+            if isinstance(data_expression, dict)
+            else None
+        )
+        if not isinstance(return_type, dict):
+            return None
+        data_type = str(return_type.get("data_type") or "").strip()
+        if not data_type:
+            return None
+        return {
+            "data_type": data_type,
+            "data_type_name": return_type.get("data_type_name"),
+            "is_list": False,
+        }
+
+    return None
 
 
 def _resolve_existing_path_nodes(edsl_tree: Dict[str, Any], node_path: str) -> List[Tuple[Any, str]]:

@@ -1,4 +1,5 @@
 import json
+from copy import deepcopy
 
 from agent.context_pack.models import (
     ContextConflict, ContextFact, ContextItem, ContextPack, ContextSection,
@@ -45,3 +46,88 @@ def test_renderer_enforces_item_and_character_limits():
     value = json.loads(rendered)
     assert len(value["sections"][0]["items"]) <= 2
     assert len(rendered) <= 500
+
+
+def test_renderer_projects_complete_current_tree_node_without_children_or_mutation():
+    canonical_node = {
+        "node_id": "customer-name",
+        "tree_node_type": "simple_leaf",
+        "data_expression": {"expression": "$ctx$.customer.name"},
+        "edsl_semi_struct": {"operator": "property"},
+        "custom_config": {"enabled": True},
+        "children": [{"node_id": "nested", "data_expression": {"expression": "hidden"}}],
+    }
+    item = ContextItem(
+        item_id="current-field",
+        resource_name="current_tree",
+        item_type="field",
+        authority="authoritative",
+        content={"value": canonical_node, "json_path": "$.children[0]"},
+        summary="customer name",
+        locator=SourceLocator(source_id="current-tree", kind="json_path", value="$.children[0]"),
+        content_hash="current-hash",
+    )
+    pack = ContextPack(
+        status="complete",
+        request_summary={"query": "customer name"},
+        current_node={"node_id": "customer-name"},
+        sections=[ContextSection(resource_name="current_tree", status="ready", items=[item])],
+    )
+    original = deepcopy(item.content["value"])
+
+    rendered_item = json.loads(ContextPackPromptRenderer().render_json(pack))["sections"][0]["items"][0]
+
+    assert rendered_item["node"] == {
+        "node_id": "customer-name",
+        "tree_node_type": "simple_leaf",
+        "data_expression": {"expression": "$ctx$.customer.name"},
+        "edsl_semi_struct": {"operator": "property"},
+        "custom_config": {"enabled": True},
+    }
+    assert item.content["value"] == original
+
+
+def test_renderer_keeps_non_node_items_compact():
+    pack = _pack()
+    local_item = ContextItem(
+        item_id="current-local",
+        resource_name="current_tree",
+        item_type="local",
+        authority="authoritative",
+        content={"value": {"property_name": "customer"}},
+        summary="customer",
+        locator=SourceLocator(source_id="current-tree", kind="json_path", value="$.local_context[0]"),
+        content_hash="local-hash",
+    )
+    pack.sections.append(ContextSection(resource_name="current_tree", status="ready", items=[local_item]))
+
+    sections = json.loads(ContextPackPromptRenderer().render_json(pack))["sections"]
+
+    assert "node" not in sections[0]["items"][0]
+    assert "node" not in sections[1]["items"][0]
+
+
+def test_renderer_drops_oversized_node_atomically_and_reports_trimming():
+    item = ContextItem(
+        item_id="oversized-node",
+        resource_name="current_tree",
+        item_type="node",
+        authority="authoritative",
+        content={"value": {"node_id": "large", "data_expression": {"expression": "x" * 1000}}},
+        summary="large node",
+        locator=SourceLocator(source_id="current-tree", kind="json_path", value="$.children[0]"),
+        content_hash="large-hash",
+    )
+    pack = ContextPack(
+        status="complete",
+        request_summary={"query": "large"},
+        current_node={"node_id": "large"},
+        sections=[ContextSection(resource_name="current_tree", status="ready", items=[item])],
+    )
+
+    rendered = ContextPackPromptRenderer(max_chars=500).render_json(pack)
+    value = json.loads(rendered)
+
+    assert value["sections"][0]["items"] == []
+    assert "CONTEXT_PACK_PROMPT_TRIMMED" in value["warnings"]
+    assert "x" * 1000 not in rendered

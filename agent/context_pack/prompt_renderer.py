@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 
 from .models import ContextPack
 
@@ -40,13 +41,27 @@ class ContextPackPromptRenderer:
                     "summary": item.summary[:512],
                     "facts": {fact.key: fact.value for fact in item.facts},
                 }
+                node = self._project_node(section, item)
+                if node is not None:
+                    projection["node"] = node
                 output_section["items"].append(projection)
                 rendered = self._dump(value)
                 if len(rendered) > self.max_chars:
                     output_section["items"].pop()
+                    if "CONTEXT_PACK_PROMPT_TRIMMED" not in value["warnings"]:
+                        value["warnings"].append("CONTEXT_PACK_PROMPT_TRIMMED")
                     return self._bounded_dump(value)
                 count += 1
         return self._bounded_dump(value)
+
+    @staticmethod
+    def _project_node(section, item) -> dict | None:
+        if section.resource_name.value != "current_tree" or item.item_type not in {"node", "field"}:
+            return None
+        value = item.content.get("value")
+        if not isinstance(value, dict):
+            return None
+        return {key: deepcopy(field_value) for key, field_value in value.items() if key != "children"}
 
     def _bounded_dump(self, value) -> str:
         rendered = self._dump(value)

@@ -124,6 +124,11 @@ class OperationToolLoopRequest(_StrictToolModel):
     max_steps: int = Field(default=20, ge=1, le=100)
 
 
+class OperationToolLoopResponse(ExecuteOperationsResponse):
+    tool_calls: list[ToolCallTrace] = Field(default_factory=list)
+    tree_version: int = Field(default=0, ge=0)
+
+
 def validate_and_sort_operations(operations: list[Operation]) -> list[Operation]:
     """Validate operation dependencies and return a stable topological order."""
     operation_by_id: dict[str, Operation] = {}

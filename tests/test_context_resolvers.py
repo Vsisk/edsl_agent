@@ -22,7 +22,7 @@ def tree():
             {"id": "la.semantic", "name": "Semantic charge", "description": "fallback"},
         ],
         "nodes": [{"node_id": "root", "tree_node_type": "parent", "children": [
-            {"node_id": "parent", "tree_node_type": "parent", "local_context": [{"property_name": "accountId", "annotation": "account"}], "iter_local_context": [{"property_name": "line", "annotation": "line"}], "children": [
+            {"node_id": "parent", "tree_node_type": "parent_list", "local_context": [{"property_name": "accountId", "annotation": "account"}], "iter_local_context": [{"property_name": "line", "annotation": "line"}], "children": [
                 {"node_id": "sibling", "tree_node_type": "field", "annotation": "neighbor"},
                 {"node_id": "target", "tree_node_type": "ab_pivot_table", "reference_logic_area_id_list": ["la.node"], "ab_content": {"data_source": "charges", "detail_fields": ["detail"], "group_by_fields": ["category"], "group_region": {"group_related_fields": ["region"]}, "detail_region": {"detail_fields": ["item"]}, "summary_fields": ["total"]}},
             ]},
@@ -58,7 +58,7 @@ def test_project_resolver_extracts_structure_visibility_and_fee_table(tree):
     assert [n["node_id"] for n in block.ancestors] == ["root", "parent"]
     assert [n["node_id"] for n in block.sibling_summaries] == ["sibling"]
     assert block.visible_local_context[0]["context_name"] == "$local$.accountId"
-    assert block.visible_iter_context[0]["context_name"] == "$iter$.line"
+    assert block.visible_iter_context[0]["context_name"] == "$local$.line"
     assert block.fee_table_summary["group_by_fields"] == ["category"]
     assert block.fee_table_summary["group_region"] == {"group_related_fields": ["region"]}
     assert block.existing_bo_ids == []

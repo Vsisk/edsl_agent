@@ -152,7 +152,7 @@ class EnvironmentBuilderTest(unittest.TestCase):
 
         self.assertEqual(
             [local_context.context_name for local_context in environment.visible_local_context],
-            ["$local$.local_2", "$local$.rootLocal", "$iter$.subId"],
+            ["$local$.local_2", "$local$.rootLocal"],
         )
 
     def test_filters_ranked_resources_by_weighted_tags(self):
@@ -315,7 +315,7 @@ class EnvironmentBuilderTest(unittest.TestCase):
             {
                 "bo": [{"resource_id": "bo.0000", "reason": "transaction semantic match"}],
                 "function": [{"resource_id": "func.0001", "reason": "mask semantic match"}],
-                "local_context": [{"resource_id": "local.0002", "reason": "iter id semantic match"}],
+                "local_context": [{"resource_id": "local.0001", "reason": "local semantic match"}],
                 "global_context": [{"resource_id": "ctx.0001", "reason": "customer context match"}],
             }
         )
@@ -333,7 +333,7 @@ class EnvironmentBuilderTest(unittest.TestCase):
 
         self.assertEqual(environment.selected_bo_ids, ["bo.0000"])
         self.assertEqual(environment.selected_function_ids, ["func.0001"])
-        self.assertEqual(environment.selected_local_context_ids, ["local.0002"])
+        self.assertEqual(environment.selected_local_context_ids, ["local.0001"])
         self.assertEqual(environment.selected_global_context_ids, ["ctx.0001"])
         self.assertEqual(llm_filter.calls[0]["limits"]["bo"], 1)
         self.assertLessEqual(len(llm_filter.calls[0]["candidates"]["bo"]), 5)
@@ -504,7 +504,7 @@ class EnvironmentBuilderTest(unittest.TestCase):
             {
                 "bo": [{"resource_id": "bo.0000", "reason": "semantic BO match"}],
                 "function": [{"resource_id": "func.0000", "reason": "semantic function should be ignored"}],
-                "local_context": [{"resource_id": "local.0002", "reason": "semantic local context"}],
+                "local_context": [{"resource_id": "local.0001", "reason": "semantic local context"}],
                 "global_context": [{"resource_id": "ctx.0001", "reason": "semantic global context"}],
             },
             search_commands={
@@ -531,7 +531,7 @@ class EnvironmentBuilderTest(unittest.TestCase):
 
         self.assertEqual(environment.selected_function_ids, ["func.0001"])
         self.assertEqual(environment.selected_bo_ids, ["bo.0000"])
-        self.assertEqual(environment.selected_local_context_ids, ["local.0002"])
+        self.assertEqual(environment.selected_local_context_ids, ["local.0001"])
         self.assertEqual(environment.selected_global_context_ids, ["ctx.0001"])
         self.assertEqual(len(llm_filter.search_calls), 1)
         self.assertEqual(len(llm_filter.calls), 1)

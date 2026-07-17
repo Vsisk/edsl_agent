@@ -16,6 +16,8 @@ from agent.operation_orchestration import (
     OperationGenerator,
     OperationLocator,
     OperationOrchestrator,
+    OperationToolLoopRequest,
+    OperationToolLoopResponse,
     build_node_index,
     is_valid_candidate,
     validate_and_sort_operations,
@@ -35,6 +37,52 @@ def _tree() -> dict[str, Any]:
             }
         ],
     }
+
+
+def test_default_facade_delegates_to_tool_loop_and_preserves_inputs() -> None:
+    tree = _tree()
+    original = deepcopy(tree)
+    expected = OperationToolLoopResponse(
+        success=True,
+        target_tree={"node_id": "updated"},
+        operations=[],
+        tree_version=2,
+    )
+
+    class ToolLoop:
+        request = None
+
+        def run(self, request):
+            self.request = request
+            request.target_tree["poison"] = True
+            return expected
+
+    tool_loop = ToolLoop()
+    actual = OperationOrchestrator(tool_loop=tool_loop).run(
+        "multi task", tree, "site", "project", max_steps=8
+    )
+
+    assert actual is expected
+    assert isinstance(tool_loop.request, OperationToolLoopRequest)
+    assert tool_loop.request.query == "multi task"
+    assert tool_loop.request.site_id == "site"
+    assert tool_loop.request.project_id == "project"
+    assert tool_loop.request.max_steps == 8
+    assert tree == original
+
+
+def test_tool_loop_cannot_be_combined_with_legacy_dependencies() -> None:
+    for dependency in (
+        {"generator": object()},
+        {"locator": object()},
+        {"executor": object()},
+        {"action_adapter": object()},
+    ):
+        with pytest.raises(
+            ValueError,
+            match="^tool_loop cannot be combined with legacy dependencies$",
+        ):
+            OperationOrchestrator(tool_loop=object(), **dependency)
 
 
 def test_facade_forwards_exact_requests_and_preserves_inputs_and_response() -> None:
@@ -318,13 +366,18 @@ def test_real_components_support_ab_field_id_output() -> None:
 
 def test_public_exports_are_explicit_and_importable() -> None:
     expected = {
+        "CreateNodeInput",
+        "DeleteNodeInput",
         "ExecuteOperationsRequest",
         "ExecuteOperationsResponse",
+        "FinishInput",
+        "GenerateExpressionInput",
         "GenerateOperationsRequest",
         "GenerateOperationsResponse",
         "IntentType",
         "LocateOperationRequest",
         "LocateOperationResponse",
+        "ModifyNodeInput",
         "NodeLocateCandidate",
         "Operation",
         "OperationActionAdapter",
@@ -333,6 +386,16 @@ def test_public_exports_are_explicit_and_importable() -> None:
         "OperationLocator",
         "OperationOrchestrator",
         "OperationStatus",
+        "OperationToolLoop",
+        "OperationToolLoopRequest",
+        "OperationToolLoopResponse",
+        "OperationToolRegistry",
+        "OperationToolRuntime",
+        "OperationToolSpec",
+        "SearchNodesInput",
+        "ToolCallTrace",
+        "ToolDecision",
+        "ToolExecutionContext",
         "build_node_index",
         "is_valid_candidate",
         "validate_and_sort_operations",

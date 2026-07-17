@@ -11,11 +11,14 @@ from agent.operation_orchestration.models import (
     ExecuteOperationsRequest,
     ExecuteOperationsResponse,
     GenerateOperationsRequest,
+    OperationToolLoopRequest,
+    OperationToolLoopResponse,
 )
+from agent.operation_orchestration.tool_loop import OperationToolLoop
 
 
 class OperationOrchestrator:
-    """Public facade for generating and executing operation graphs."""
+    """Public facade using a tool loop by default with explicit graph compatibility."""
 
     def __init__(
         self,
@@ -23,7 +26,25 @@ class OperationOrchestrator:
         locator=None,
         executor=None,
         action_adapter=None,
+        tool_loop=None,
     ) -> None:
+        legacy_dependencies = (generator, locator, executor, action_adapter)
+        if tool_loop is not None and any(
+            dependency is not None for dependency in legacy_dependencies
+        ):
+            raise ValueError(
+                "tool_loop cannot be combined with legacy dependencies"
+            )
+        if tool_loop is not None:
+            self.tool_loop = tool_loop
+            self._uses_tool_loop = True
+            return
+        if not any(dependency is not None for dependency in legacy_dependencies):
+            self.tool_loop = OperationToolLoop()
+            self._uses_tool_loop = True
+            return
+
+        self._uses_tool_loop = False
         if executor is not None and (locator is not None or action_adapter is not None):
             raise ValueError(
                 "executor cannot be combined with locator or action_adapter"
@@ -48,8 +69,27 @@ class OperationOrchestrator:
         target_tree: dict[str, Any],
         site_id: str | None = None,
         project_id: str | None = None,
-    ) -> ExecuteOperationsResponse:
+        max_steps: int = 20,
+    ) -> ExecuteOperationsResponse | OperationToolLoopResponse:
         pristine_tree = deepcopy(target_tree)
+        if self._uses_tool_loop:
+            try:
+                request = OperationToolLoopRequest(
+                    query=query,
+                    target_tree=deepcopy(pristine_tree),
+                    site_id=site_id,
+                    project_id=project_id,
+                    max_steps=max_steps,
+                )
+            except Exception:
+                return OperationToolLoopResponse(
+                    success=False,
+                    target_tree=pristine_tree,
+                    operations=[],
+                    error_message="operation tool request invalid",
+                )
+            return self.tool_loop.run(request)
+
         try:
             generated = self.generator.generate(
                 GenerateOperationsRequest(

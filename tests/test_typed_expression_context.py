@@ -106,6 +106,40 @@ def test_builder_expands_context_object_to_basic_field_with_methods():
     assert "dateValue(basic.String format): basic.Date" in addr1.methods
 
 
+def test_builder_registers_bo_referenced_only_by_selected_context_return_type():
+    bo = charge_bo()
+    charge_context = ContextRegistry(
+        resource_id="ctx.charge",
+        context_name="$ctx$.charge",
+        return_type=ReturnType(
+            data_type="bo",
+            data_type_name=bo.bo_name,
+            is_list=False,
+        ),
+        property_type="system",
+        annotation="current charge",
+    )
+
+    context = TypedExpressionContextBuilder().build(
+        build_input(
+            filtered_env=FilteredEnvironment(
+                selected_global_contexts=[charge_context],
+                selected_bos=[],
+            ),
+            loaded=loaded_resource(contexts=[charge_context], bos=[bo]),
+        )
+    )
+
+    root = context.root_values[0]
+    charge_amount = next(
+        field
+        for field in root.fields
+        if field.access == "$ctx$.charge.CHARGE_AMT"
+    )
+    assert charge_amount.return_type == "basic.long"
+    assert charge_amount.methods == ["long2str(): basic.String"]
+
+
 def test_builder_expands_context_logic_and_extattr_data_type_defs():
     extattr_context = ContextRegistry(
         resource_id="ctx.a.b",

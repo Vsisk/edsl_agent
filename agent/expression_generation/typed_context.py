@@ -85,6 +85,7 @@ class TypedExpressionContextBuilder:
         self._field_annotations: dict[tuple[tuple[Any, ...], str], str] = {}
         self._register_loaded_type_defs()
         self._register_selected_bos()
+        self._register_candidate_return_types()
 
         roots: list[TypedRootValue] = []
         for resource in build_input.filtered_env.selected_global_contexts:
@@ -124,21 +125,82 @@ class TypedExpressionContextBuilder:
                     bos[bo.bo_name] = bo
         for bo in bos.values():
             owner_type = TypeRef(kind="bo", name=bo.bo_name)
-            fields = {
-                prop.field_name: normalize_return_type(prop)
-                for prop in bo.property_list
-            }
-            fields = {name: type_ref for name, type_ref in fields.items() if type_ref.kind != "unknown"}
-            for prop in bo.property_list:
-                self._field_annotations[(type_identity(owner_type), prop.field_name)] = (
-                    prop.description or ""
-                )
-            self._input.type_registry.register_type(
-                TypeDef(
-                    owner_type=owner_type,
-                    fields=fields,
-                )
+            fields = self._register_bo_type(bo)
+            visited = {type_identity(owner_type)}
+            for field_type in fields.values():
+                self._register_reachable_type(field_type, visited)
+
+    def _register_candidate_return_types(self) -> None:
+        resources = [
+            *self._input.filtered_env.selected_global_contexts,
+            *self._input.filtered_env.visible_local_context,
+        ]
+        for resource in resources:
+            authoritative = self._resolve_context(resource.context_name) or resource
+            self._register_reachable_type(
+                normalize_return_type(getattr(authoritative, "return_type", None)),
+                set(),
             )
+        for resource in self._input.filtered_env.selected_functions:
+            authoritative = self._resolve_function(resource) or resource
+            self._register_reachable_type(
+                normalize_return_type(getattr(authoritative, "return_type", None)),
+                set(),
+            )
+
+    def _register_reachable_type(
+        self,
+        type_ref: TypeRef,
+        visited: set[tuple[Any, ...]],
+    ) -> None:
+        if type_ref.kind == "list" and type_ref.element_type is not None:
+            self._register_reachable_type(type_ref.element_type, visited)
+            return
+        if type_ref.kind == "map":
+            if type_ref.key_type is not None:
+                self._register_reachable_type(type_ref.key_type, visited)
+            if type_ref.value_type is not None:
+                self._register_reachable_type(type_ref.value_type, visited)
+            return
+        if type_ref.kind not in {"bo", "logic", "extattr"}:
+            return
+        key = type_identity(type_ref)
+        if key in visited:
+            return
+        visited.add(key)
+
+        if type_ref.kind == "bo":
+            bo = self._resolve_bo(type_ref.name or "")
+            if bo is None:
+                warning = f"missing type definition for {render_type(type_ref)}"
+                if warning not in self._warnings:
+                    self._warnings.append(warning)
+                return
+            fields = self._register_bo_type(bo)
+        else:
+            fields = self._input.type_registry.resolve_fields(type_ref)
+        for field_type in fields.values():
+            self._register_reachable_type(field_type, visited)
+
+    def _register_bo_type(self, bo: BoRegistry) -> dict[str, TypeRef]:
+        owner_type = TypeRef(kind="bo", name=bo.bo_name)
+        fields = {
+            prop.field_name: normalize_return_type(prop)
+            for prop in bo.property_list
+        }
+        fields = {
+            name: type_ref
+            for name, type_ref in fields.items()
+            if type_ref.kind != "unknown"
+        }
+        for prop in bo.property_list:
+            self._field_annotations[(type_identity(owner_type), prop.field_name)] = (
+                prop.description or ""
+            )
+        self._input.type_registry.register_type(
+            TypeDef(owner_type=owner_type, fields=fields)
+        )
+        return fields
 
     def _append_context_root(self, roots: list[TypedRootValue], resource: Any, source_type: str) -> None:
         authoritative = self._resolve_context(resource.context_name) or resource

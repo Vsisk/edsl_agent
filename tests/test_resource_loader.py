@@ -440,8 +440,10 @@ class ResourceLoaderTest(unittest.TestCase):
         self.assertEqual([type_def.owner_type.kind for type_def in type_defs], ["logic", "extattr"])
         self.assertEqual(type_defs[0].owner_type.name, "UserLogic")
         self.assertEqual(type_defs[0].fields["special"].kind, "extattr")
+        self.assertEqual(type_defs[0].field_descriptions["special"], "特殊信息")
         self.assertEqual(type_defs[1].owner_type.name, "Aextattr")
         self.assertEqual(type_defs[1].fields["a_extattr_id"].kind, "basic")
+        self.assertEqual(type_defs[1].field_descriptions["a_extattr_id"], "扩展属性ID")
 
     def test_load_context_registry_from_json_reads_default_sample_data(self):
         data_path = (

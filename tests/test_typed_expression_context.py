@@ -137,6 +137,7 @@ def test_builder_registers_bo_referenced_only_by_selected_context_return_type():
         if field.access == "$ctx$.charge.CHARGE_AMT"
     )
     assert charge_amount.return_type == "basic.long"
+    assert charge_amount.description == "charge amount"
     assert charge_amount.methods == ["long2str(): basic.String"]
 
 

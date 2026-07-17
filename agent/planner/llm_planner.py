@@ -188,7 +188,7 @@ def _bounded_typed_value(value: Any, depth: int = 0) -> Any:
     if depth >= 8:
         return None
     if hasattr(value, "model_dump"):
-        value = value.model_dump(mode="python")
+        value = value.model_dump(mode="python", exclude_none=True)
     if isinstance(value, str):
         return _summary_text(value)
     if isinstance(value, dict):

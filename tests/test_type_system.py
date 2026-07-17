@@ -148,6 +148,20 @@ def test_type_registry_lists_registered_fields_without_exposing_internal_mapping
     assert registry.resolve_fields(owner) == {"CHARGE_AMT": LONG}
 
 
+def test_type_registry_preserves_registered_field_description():
+    owner = TypeRef(kind="bo", name="BB_BILL_CHARGE")
+    registry = TypeRegistry()
+    registry.register_type(
+        TypeDef(
+            owner_type=owner,
+            fields={"CHARGE_AMT": LONG},
+            field_descriptions={"CHARGE_AMT": "charge amount"},
+        )
+    )
+
+    assert registry.resolve_field_description(owner, "CHARGE_AMT") == "charge amount"
+
+
 def test_method_registry_lists_only_methods_for_concrete_owner():
     registry = create_builtin_method_registry()
 

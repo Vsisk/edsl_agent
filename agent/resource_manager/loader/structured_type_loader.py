@@ -31,18 +31,24 @@ def _load_type_defs(items: Iterable[Any], kind: StructuredKind) -> list[TypeDef]
         type_name = str(item.get("type_name") or "").strip()
         if not type_name:
             continue
-        fields = _collect_fields(item.get("sub_properties") or [])
+        fields, field_descriptions = _collect_fields(
+            item.get("sub_properties") or []
+        )
         type_defs.append(
             TypeDef(
                 owner_type=TypeRef(kind=kind, name=type_name),
                 fields=fields,
+                field_descriptions=field_descriptions,
             )
         )
     return type_defs
 
 
-def _collect_fields(items: Iterable[Any]) -> dict[str, TypeRef]:
+def _collect_fields(
+    items: Iterable[Any],
+) -> tuple[dict[str, TypeRef], dict[str, str]]:
     fields: dict[str, TypeRef] = {}
+    field_descriptions: dict[str, str] = {}
     for item in items:
         if not isinstance(item, dict):
             continue
@@ -53,7 +59,15 @@ def _collect_fields(items: Iterable[Any]) -> dict[str, TypeRef]:
         if type_ref.kind == "unknown":
             continue
         fields[field_name] = type_ref
-    return fields
+        description = str(
+            item.get("property_annotation")
+            or item.get("annotation")
+            or item.get("description")
+            or ""
+        ).strip()
+        if description:
+            field_descriptions[field_name] = description
+    return fields, field_descriptions
 
 
 def _dedupe_type_defs(type_defs: list[TypeDef]) -> list[TypeDef]:

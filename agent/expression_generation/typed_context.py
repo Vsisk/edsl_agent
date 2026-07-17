@@ -23,6 +23,7 @@ from agent.resource_manager.loader.resource_loader import LoadedResource
 class TypedAccessView(BaseModel):
     access: str
     return_type: str
+    description: str | None = None
     methods: list[str] = Field(default_factory=list)
 
 
@@ -82,7 +83,6 @@ class TypedExpressionContextBuilder:
         self._input = build_input
         self._warnings: list[str] = []
         self._method_catalog: dict[str, list[str]] = {}
-        self._field_annotations: dict[tuple[tuple[Any, ...], str], str] = {}
         self._register_loaded_type_defs()
         self._register_selected_bos()
         self._register_candidate_return_types()
@@ -193,12 +193,17 @@ class TypedExpressionContextBuilder:
             for name, type_ref in fields.items()
             if type_ref.kind != "unknown"
         }
-        for prop in bo.property_list:
-            self._field_annotations[(type_identity(owner_type), prop.field_name)] = (
-                prop.description or ""
-            )
+        field_descriptions = {
+            prop.field_name: prop.description
+            for prop in bo.property_list
+            if prop.description
+        }
         self._input.type_registry.register_type(
-            TypeDef(owner_type=owner_type, fields=fields)
+            TypeDef(
+                owner_type=owner_type,
+                fields=fields,
+                field_descriptions=field_descriptions,
+            )
         )
         return fields
 
@@ -264,6 +269,9 @@ class TypedExpressionContextBuilder:
                 TypedAccessView(
                     access=access,
                     return_type=render_type(field_type),
+                    description=self._input.type_registry.resolve_field_description(
+                        owner_type, field_name
+                    ),
                     methods=self._methods(field_type),
                 )
             )
@@ -274,8 +282,11 @@ class TypedExpressionContextBuilder:
         normalized = field_name.lower()
         query = self._input.query.lower()
         node_name = self._input.node.node_name.lower()
-        annotation = self._field_annotations.get(
-            (type_identity(owner_type), field_name), ""
+        annotation = (
+            self._input.type_registry.resolve_field_description(
+                owner_type, field_name
+            )
+            or ""
         ).lower()
         annotation_matches = sum(
             1 for token in query.split() if token and token in annotation

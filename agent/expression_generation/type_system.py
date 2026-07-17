@@ -29,6 +29,7 @@ TypeRef.model_rebuild()
 class TypeDef(BaseModel):
     owner_type: TypeRef
     fields: dict[str, TypeRef]
+    field_descriptions: dict[str, str] = Field(default_factory=dict)
 
 
 class TypeRegistry:
@@ -49,6 +50,14 @@ class TypeRegistry:
         if type_def is None:
             return {}
         return dict(type_def.fields)
+
+    def resolve_field_description(
+        self, owner_type: TypeRef, field_name: str
+    ) -> str | None:
+        type_def = self._types.get(_type_key(owner_type))
+        if type_def is None:
+            return None
+        return type_def.field_descriptions.get(field_name)
 
 
 class TypePattern(BaseModel):

@@ -110,6 +110,7 @@ class LLMPlannerTest(unittest.TestCase):
                         TypedAccessView(
                             access="$ctx$.address.addr1",
                             return_type="basic.String",
+                            description="address first line",
                             methods=["length(): basic.int"],
                         )
                     ],
@@ -150,6 +151,7 @@ class LLMPlannerTest(unittest.TestCase):
         self.assertIn('"Available Methods by Type"', prompt)
         self.assertIn('"Expression Patterns"', prompt)
         self.assertIn("$ctx$.address.addr1", prompt)
+        self.assertIn("address first line", prompt)
 
     def test_plan_exposes_function_resource_name_as_class_qualified_call_name(self):
         client = FakeClient(

@@ -6,13 +6,18 @@ import re
 from agent.expression_generation.expression_syntax import MethodChainParser, split_top_level_commas
 from agent.expression_generation.expression_type_validation import SimpleExpressionPlan, _find_binary
 from agent.expression_generation.typed_context import TypedExpressionContext
+from agent.expression_generation.type_system import create_builtin_function_type_registry
 from agent.planner.models import Plan
 
 
 class EDSLExpressionParser:
     def __init__(self, typed_context: TypedExpressionContext):
+        builtin_functions = create_builtin_function_type_registry().function_names()
         self.function_roots = sorted(
-            (item.expr for item in typed_context.root_values if item.source_type == "function"),
+            {
+                *(item.expr for item in typed_context.root_values if item.source_type == "function"),
+                *builtin_functions,
+            },
             key=len,
             reverse=True,
         )

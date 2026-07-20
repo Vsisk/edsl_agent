@@ -173,6 +173,23 @@ def test_builder_expands_context_logic_and_extattr_data_type_defs():
     assert "length(): basic.int" in ext_id.methods
 
 
+def test_builder_exposes_builtin_find_function_signatures_to_prompt_context():
+    context = TypedExpressionContextBuilder().build(
+        build_input(
+            filtered_env=FilteredEnvironment(),
+            loaded=loaded_resource(),
+        )
+    )
+
+    patterns = {item.name: item.expression for item in context.expression_patterns}
+    assert patterns["builtin_find"] == (
+        "find(List<T> list, basic.boolean if_expr): T"
+    )
+    assert patterns["builtin_find_all"] == (
+        "find_all(List<T> list, basic.boolean if_expr): List<T>"
+    )
+
+
 def test_builder_uses_it_for_naming_sql_owning_bo_fields():
     bo = charge_bo()
     candidate = NamingSqlCandidate(

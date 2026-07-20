@@ -78,3 +78,15 @@ def test_parses_native_call_inside_binary_expression():
     assert isinstance(value, CompareExprPlanNode)
     assert isinstance(value.left, CallExprPlanNode)
     assert value.left.name == "Text.mask"
+
+
+def test_parses_builtin_exists_and_renders_variadic_join_as_concatenation():
+    parser = EDSLExpressionParser(TypedExpressionContext())
+
+    exists_plan = parser.parse_plan(SimpleExpressionPlan(return_expr='exists("value")'))
+    join_plan = parser.parse_plan(
+        SimpleExpressionPlan(return_expr='join("a", "b", "c")')
+    )
+
+    assert generate_expression(build_ast(exists_plan)) == 'exists("value")'
+    assert generate_expression(build_ast(join_plan)) == '"a" + "b" + "c"'

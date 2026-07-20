@@ -46,6 +46,8 @@ def generate_expression(node: ASTNode) -> str:
     if isinstance(node, LogicalNode):
         return f" {node.op} ".join(generate_expression(item) for item in node.items).join(("(", ")"))
     if isinstance(node, CallNode):
+        if node.name == "join":
+            return " + ".join(generate_expression(arg) for arg in node.args)
         return f"{node.name}({', '.join(generate_expression(arg) for arg in node.args)})"
     if isinstance(node, SelectNode):
         return f"select({node.bo}, {generate_expression(node.filter)})"

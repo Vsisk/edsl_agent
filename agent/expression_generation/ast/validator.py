@@ -22,9 +22,11 @@ from agent.expression_generation.ast.nodes import (
     MethodCallNode,
 )
 from agent.expression_generation.type_system import (
+    FunctionTypeRegistry,
     MethodRegistry,
     TypeRef,
     TypeRegistry,
+    create_builtin_function_type_registry,
     normalize_return_type,
 )
 
@@ -38,6 +40,9 @@ class AstValidationContext:
     type_registry: TypeRegistry | None = None
     method_registry: MethodRegistry | None = None
     variable_types: Mapping[str, TypeRef] = field(default_factory=dict)
+    function_type_registry: FunctionTypeRegistry = field(
+        default_factory=create_builtin_function_type_registry
+    )
 
 
 class AstValidationResult(BaseModel):
@@ -150,11 +155,21 @@ def _validate_node(node, state: _ValidationState | None = None) -> TypeRef | Non
             raise ValueError("call name must not be empty")
         if node.name == "exists" and len(node.args) != 1:
             raise ValueError("exists call must contain exactly one argument")
+        if node.name in {"find", "find_all"}:
+            return _infer_list_search_call_type(node, state)
         arg_types = [_validate_node(arg, state) for arg in node.args]
         if node.name == "if":
             return _infer_if_call_type(node, arg_types)
         if state.context is not None and node.name in state.context.function_types:
             return state.context.function_types[node.name]
+        if state.context is not None and all(arg_type is not None for arg_type in arg_types):
+            matched = state.context.function_type_registry.match(
+                node.name, [arg_type for arg_type in arg_types if arg_type is not None]
+            )
+            if matched is not None:
+                return matched
+            if state.context.function_type_registry.has_function(node.name):
+                raise ValueError(f"function arguments do not match signature: {node.name}")
         return None
     if isinstance(node, (SelectNode, SelectOneNode)):
         if not isinstance(node.filter, (CompareNode, LogicalNode)):
@@ -200,6 +215,32 @@ def _infer_if_call_type(node: CallNode, arg_types: list[TypeRef | None]) -> Type
     if then_type != else_type:
         raise ValueError(f"if branch type mismatch: {then_type} != {else_type}")
     return then_type
+
+
+def _infer_list_search_call_type(node: CallNode, state: _ValidationState) -> TypeRef | None:
+    if len(node.args) != 2:
+        raise ValueError(f"{node.name} call must contain exactly two arguments")
+    list_type = _validate_node(node.args[0], state)
+    if list_type is None:
+        return None
+    if list_type.kind != "list" or list_type.element_type is None:
+        raise ValueError(f"{node.name} first argument must be List<T>")
+    predicate_state = _ValidationState(
+        context=state.context,
+        variable_types={**state.variable_types, "it": list_type.element_type},
+    )
+    predicate_type = _validate_node(node.args[1], predicate_state)
+    boolean = TypeRef(kind="basic", name="boolean")
+    if predicate_type != boolean:
+        raise ValueError(f"{node.name} predicate must be basic.boolean")
+    if state.context is None:
+        return None
+    matched = state.context.function_type_registry.match(
+        node.name, [list_type, predicate_type]
+    )
+    if matched is None:
+        raise ValueError(f"function signature not found: {node.name}")
+    return matched
 
 
 def _infer_context_path_type(path: str, state: _ValidationState) -> TypeRef | None:

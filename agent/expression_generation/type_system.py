@@ -97,6 +97,51 @@ class ResolvedMethod(BaseModel):
     return_type: TypeRef
 
 
+class FunctionSig(BaseModel):
+    name: str
+    arg_types: list[TypePattern]
+    arg_names: list[str] = Field(default_factory=list)
+    variadic_arg_type: TypePattern | None = None
+    return_type: TypePattern
+
+
+class FunctionTypeRegistry:
+    def __init__(self) -> None:
+        self._functions: list[FunctionSig] = []
+
+    def register_function(self, function_sig: FunctionSig) -> None:
+        self._functions.append(function_sig)
+
+    def match(self, function_name: str, arg_types: list[TypeRef]) -> TypeRef | None:
+        for function in self._functions:
+            if function.name != function_name:
+                continue
+            if function.variadic_arg_type is None and len(function.arg_types) != len(arg_types):
+                continue
+            if function.variadic_arg_type is not None and len(arg_types) < len(function.arg_types):
+                continue
+            bindings: dict[str, TypeRef] = {}
+            fixed_types = arg_types[:len(function.arg_types)]
+            variadic_types = arg_types[len(function.arg_types):]
+            fixed_match = all(
+                _match_pattern(pattern, actual, bindings)
+                for pattern, actual in zip(function.arg_types, fixed_types)
+            )
+            variadic_match = function.variadic_arg_type is None or all(
+                _match_pattern(function.variadic_arg_type, actual, bindings)
+                for actual in variadic_types
+            )
+            if fixed_match and variadic_match:
+                return _resolve_pattern(function.return_type, bindings)
+        return None
+
+    def has_function(self, function_name: str) -> bool:
+        return any(function.name == function_name for function in self._functions)
+
+    def function_names(self) -> set[str]:
+        return {function.name for function in self._functions}
+
+
 class MethodRegistry:
     def __init__(self) -> None:
         self._methods: list[MethodSig] = []
@@ -149,6 +194,53 @@ def create_builtin_method_registry() -> MethodRegistry:
     registry = MethodRegistry()
     register_builtin_methods(registry)
     return registry
+
+
+def create_builtin_function_type_registry() -> FunctionTypeRegistry:
+    registry = FunctionTypeRegistry()
+    register_builtin_functions(registry)
+    return registry
+
+
+def register_builtin_functions(registry: FunctionTypeRegistry) -> None:
+    type_var = TypePattern(kind="var", name="T")
+    list_of_t = TypePattern(kind="list", element_type=type_var)
+    boolean = _named_pattern("basic", "boolean")
+    string = _named_pattern("basic", "String")
+    registry.register_function(
+        FunctionSig(
+            name="if",
+            arg_types=[boolean, type_var, type_var],
+            arg_names=["condition", "then_expr", "else_expr"],
+            return_type=type_var,
+        )
+    )
+    registry.register_function(
+        FunctionSig(
+            name="exists",
+            arg_types=[type_var],
+            arg_names=["value"],
+            return_type=boolean,
+        )
+    )
+    registry.register_function(
+        FunctionSig(
+            name="join",
+            arg_types=[string, string],
+            arg_names=["str1", "str2"],
+            variadic_arg_type=string,
+            return_type=string,
+        )
+    )
+    for name, return_type in (("find", type_var), ("find_all", list_of_t)):
+        registry.register_function(
+            FunctionSig(
+                name=name,
+                arg_types=[list_of_t, boolean],
+                arg_names=["list", "if_expr"],
+                return_type=return_type,
+            )
+        )
 
 
 def register_builtin_methods(registry: MethodRegistry) -> None:

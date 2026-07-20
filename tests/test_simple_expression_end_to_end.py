@@ -166,6 +166,110 @@ def test_value_result_return_type_for_list_return_expression():
     }
 
 
+@pytest.mark.parametrize(
+    ("return_expr", "expected_expression", "expected_type"),
+    [
+        (
+            "find(charges, it.CHARGE_AMT > 0).CHARGE_AMT",
+            "def charges: fetch(E_QUERY_CHARGE);\nfind(charges, it.CHARGE_AMT > 0).CHARGE_AMT",
+            {"is_list": False, "data_type": "basic", "data_type_name": "long"},
+        ),
+        (
+            "find_all(charges, it.CHARGE_AMT > 0)",
+            "def charges: fetch(E_QUERY_CHARGE);\nfind_all(charges, it.CHARGE_AMT > 0)",
+            {
+                "is_list": True,
+                "data_type": "bo",
+                "data_type_name": "BB_BILL_CHARGE",
+            },
+        ),
+    ],
+)
+def test_builtin_find_functions_infer_generic_return_type(
+    return_expr, expected_expression, expected_type
+):
+    charge = TypeRef(kind="bo", name="BB_BILL_CHARGE")
+    registry = TypeRegistry()
+    registry.register_type(
+        TypeDef(
+            owner_type=charge,
+            fields={"CHARGE_AMT": TypeRef(kind="basic", name="long")},
+        )
+    )
+    context = TypedExpressionContext(
+        var_templates=[
+            TypedVarTemplate(
+                var_name="it",
+                definition_expr="fetch(E_QUERY_CHARGE)",
+                return_type="List<bo.BB_BILL_CHARGE>",
+            )
+        ]
+    )
+
+    result, _ = run(
+        SimpleExpressionPlan(
+            definitions=[
+                SimpleDefinition(name="charges", expr="fetch(E_QUERY_CHARGE)")
+            ],
+            return_expr=return_expr,
+        ),
+        context,
+        registry,
+    )
+
+    assert result.expression == expected_expression
+    assert result.return_type.model_dump() == expected_type
+
+
+def test_builtin_find_requires_boolean_predicate():
+    charge = TypeRef(kind="bo", name="BB_BILL_CHARGE")
+    registry = TypeRegistry()
+    registry.register_type(
+        TypeDef(
+            owner_type=charge,
+            fields={"CHARGE_AMT": TypeRef(kind="basic", name="long")},
+        )
+    )
+    context = TypedExpressionContext(
+        var_templates=[
+            TypedVarTemplate(
+                var_name="it",
+                definition_expr="fetch(E_QUERY_CHARGE)",
+                return_type="List<bo.BB_BILL_CHARGE>",
+            )
+        ]
+    )
+
+    result, _ = run(
+        SimpleExpressionPlan(
+            definitions=[
+                SimpleDefinition(name="charges", expr="fetch(E_QUERY_CHARGE)")
+            ],
+            return_expr="find(charges, it.CHARGE_AMT)",
+        ),
+        context,
+        registry,
+        debug=True,
+    )
+
+    assert result.logic_type == "validation_failed"
+    assert "predicate must be basic.boolean" in result.validation_errors[0]["message"]
+
+
+def test_builtin_join_renders_concatenation_and_infers_string_type():
+    result, _ = run(
+        SimpleExpressionPlan(return_expr='join("a", "b", "c")'),
+        TypedExpressionContext(),
+    )
+
+    assert result.expression == '"a" + "b" + "c"'
+    assert result.return_type.model_dump() == {
+        "is_list": False,
+        "data_type": "basic",
+        "data_type_name": "String",
+    }
+
+
 def test_value_result_return_type_defaults_to_basic_string_when_static_inference_unknown():
     context = TypedExpressionContext(root_values=[])
 

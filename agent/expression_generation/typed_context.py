@@ -380,13 +380,36 @@ class TypedExpressionContextBuilder:
         self,
         templates: list[TypedVarTemplate],
     ) -> list[TypedExpressionPattern]:
-        return [
+        patterns = [
+            TypedExpressionPattern(
+                name="builtin_if",
+                expression="if(basic.boolean condition, T then_expr, T else_expr): T",
+            ),
+            TypedExpressionPattern(
+                name="builtin_exists",
+                expression="exists(T value): basic.boolean",
+            ),
+            TypedExpressionPattern(
+                name="builtin_join",
+                expression="join(basic.String str1, basic.String str2, ...): basic.String",
+            ),
+            TypedExpressionPattern(
+                name="builtin_find",
+                expression="find(List<T> list, basic.boolean if_expr): T",
+            ),
+            TypedExpressionPattern(
+                name="builtin_find_all",
+                expression="find_all(List<T> list, basic.boolean if_expr): List<T>",
+            ),
+        ]
+        patterns.extend(
             TypedExpressionPattern(
                 name="naming_sql_fetch_one",
                 expression=template.definition_expr,
             )
             for template in templates
-        ]
+        )
+        return patterns
 
     def _resolve_context(self, context_name: str) -> Any | None:
         return self._input.loaded_resource.context_registry.get(context_name)

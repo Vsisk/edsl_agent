@@ -1,6 +1,8 @@
 import pytest
 
 from agent.expression_generation.type_system import (
+    FunctionSig,
+    FunctionTypeRegistry,
     MethodRegistry,
     MethodSig,
     TypeDef,
@@ -8,6 +10,7 @@ from agent.expression_generation.type_system import (
     TypeRef,
     TypeRegistry,
     create_builtin_method_registry,
+    create_builtin_function_type_registry,
     normalize_return_type,
 )
 from agent.resource_manager.loader.registry_models import ReturnType
@@ -127,6 +130,49 @@ def test_builtin_method_registry_matches_signatures(
     registry = create_builtin_method_registry()
 
     assert registry.match(owner, method_name, arg_types) == expected
+
+
+@pytest.mark.parametrize(
+    ("function_name", "expected"),
+    [
+        ("find", CHARGE),
+        ("find_all", list_of(CHARGE)),
+    ],
+)
+def test_builtin_function_registry_resolves_generic_list_return_type(
+    function_name, expected
+):
+    registry = create_builtin_function_type_registry()
+
+    assert registry.match(
+        function_name,
+        [list_of(CHARGE), TypeRef(kind="basic", name="boolean")],
+    ) == expected
+
+
+def test_function_registry_supports_custom_registration():
+    registry = FunctionTypeRegistry()
+    registry.register_function(
+        FunctionSig(
+            name="identity",
+            arg_types=[TypePattern(kind="var", name="T")],
+            return_type=TypePattern(kind="var", name="T"),
+        )
+    )
+
+    assert registry.match("identity", [STRING]) == STRING
+
+
+def test_builtin_function_registry_matches_existing_and_variadic_functions():
+    registry = create_builtin_function_type_registry()
+
+    assert registry.match("exists", [STRING]) == TypeRef(kind="basic", name="boolean")
+    assert registry.match(
+        "if", [TypeRef(kind="basic", name="boolean"), STRING, STRING]
+    ) == STRING
+    assert registry.match("join", [STRING, STRING, STRING]) == STRING
+    assert registry.match("join", [STRING, INT]) is None
+    assert {"if", "exists", "join", "find", "find_all"} <= registry.function_names()
 
 
 def test_method_registry_returns_none_for_non_matching_signature():

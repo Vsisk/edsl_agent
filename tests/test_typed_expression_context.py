@@ -103,8 +103,8 @@ def test_builder_expands_context_object_to_basic_field_with_methods():
     assert context.root_values[0].expr == "$ctx$.address"
     addr1 = next(field for field in context.root_values[0].fields if field.access == "$ctx$.address.addr1")
     assert addr1.return_type == "basic.String"
-    assert "length(): basic.int" in addr1.methods
-    assert "dateValue(basic.String format): basic.Date" in addr1.methods
+    assert "length(): basic.int" in next(item.methods for item in context.method_catalog if item.owner_type == "basic.String")
+    assert "dateValue(basic.String format): basic.Date" in next(item.methods for item in context.method_catalog if item.owner_type == "basic.String")
 
 
 def test_builder_registers_iterator_bo_and_expands_fields_without_selected_bo():
@@ -166,7 +166,7 @@ def test_builder_expands_context_logic_and_extattr_data_type_defs():
     assert root.expr == "$ctx$.a.b"
     ext_id = next(field for field in root.fields if field.access == "$ctx$.a.b.a_extattr_id")
     assert ext_id.return_type == "basic.String"
-    assert "length(): basic.int" in ext_id.methods
+    assert "length(): basic.int" in next(item.methods for item in context.method_catalog if item.owner_type == "basic.String")
 
 
 def test_builder_uses_it_for_naming_sql_owning_bo_fields():
@@ -194,7 +194,7 @@ def test_builder_uses_it_for_naming_sql_owning_bo_fields():
     assert template.return_type == "bo.BB_BILL_CHARGE"
     charge_amount = next(field for field in template.available_fields if field.access == "it.CHARGE_AMT")
     assert charge_amount.return_type == "basic.long"
-    assert charge_amount.methods == ["long2str(): basic.String"]
+    assert next(item.methods for item in context.method_catalog if item.owner_type == "basic.long") == ["long2str(): basic.String"]
 
 
 def test_builder_binds_naming_sql_condition_from_owning_bo_field():
@@ -276,7 +276,7 @@ def test_builder_expands_list_methods_and_first_object_fields():
     )
 
     root = result.root_values[0]
-    assert [method.split("(", 1)[0] for method in root.methods] == [
+    assert [method.split("(", 1)[0] for method in next(item.methods for item in result.method_catalog if item.owner_type == root.return_type)] == [
         "first",
         "size",
         "find{expr}",
@@ -423,7 +423,7 @@ def test_builder_expands_map_get_value_fields():
     )
 
     root = result.root_values[0]
-    assert root.methods == ["get(basic.String k): bo.BB_BILL_CHARGE"]
+    assert next(item.methods for item in result.method_catalog if item.owner_type == root.return_type) == ["get(basic.String k): bo.BB_BILL_CHARGE"]
     assert any(
         field.access == "$ctx$.chargeMap.get(...).CHARGE_AMT"
         for field in root.fields
@@ -471,3 +471,105 @@ def test_builder_prioritizes_bo_field_annotation_match_under_budget():
     assert [field.access for field in result.root_values[0].fields] == [
         "$ctx$.annotated.first().Z_FIELD"
     ]
+
+
+def _basic_context(name: str, *, local: bool = False, property_type: str = "system"):
+    cls = LocalContextRegistry if local else ContextRegistry
+    return cls(
+        resource_id=f"context.{name}",
+        context_name=name,
+        return_type=ReturnType(data_type="basic", data_type_name="String"),
+        property_type=property_type,
+        annotation=name,
+        **({"source_path": "$.n"} if local else {}),
+    )
+
+
+def test_builder_promotes_explicit_global_path_over_nearer_scopes():
+    unrelated_global = _basic_context("$ctx$.unrelated")
+    global_context = _basic_context("$ctx$.required")
+    local_context = _basic_context("$local$.near", local=True, property_type="local")
+    request = build_input(
+        filtered_env=FilteredEnvironment(
+            selected_global_contexts=[unrelated_global, global_context],
+            visible_local_context=[local_context],
+        ),
+        loaded=loaded_resource(contexts=[unrelated_global, global_context]),
+        max_items=1,
+    ).model_copy(update={"query": "use $ctx$.required"})
+
+    result = TypedExpressionContextBuilder().build(request)
+
+    assert [root.expr for root in result.root_values] == ["$ctx$.required"]
+
+
+def test_builder_admits_near_scope_roots_before_field_details():
+    bo = BoRegistry(
+        resource_id="bo.large",
+        bo_name="LARGE_BO",
+        bo_desc="large",
+        property_list=[
+            PropertyTerm(field_name=name, data_type=DataTypeEnum.basic, data_type_name="String")
+            for name in ("A", "B", "C")
+        ],
+    )
+    iterator = LocalContextRegistry(
+        resource_id="context.iter",
+        context_name="$iter$",
+        return_type=ReturnType(data_type="bo", data_type_name=bo.bo_name),
+        property_type="iter",
+        annotation="iterator",
+        source_path="$.n",
+    )
+    local_context = _basic_context("$local$.near", local=True, property_type="local")
+    global_context = _basic_context("$ctx$.far")
+
+    result = TypedExpressionContextBuilder().build(
+        build_input(
+            filtered_env=FilteredEnvironment(
+                selected_global_contexts=[global_context],
+                visible_local_context=[local_context, iterator],
+                selected_bos=[bo],
+            ),
+            loaded=loaded_resource(contexts=[global_context], bos=[bo]),
+            max_items=3,
+        )
+    )
+
+    assert [root.expr for root in result.root_values] == [
+        "$iter$",
+        "$local$.near",
+        "$ctx$.far",
+    ]
+    assert result.root_values[0].fields == []
+
+
+def test_builder_serializes_methods_once_per_referenced_type():
+    first = _basic_context("$ctx$.first")
+    second = _basic_context("$ctx$.second")
+
+    result = TypedExpressionContextBuilder().build(
+        build_input(
+            filtered_env=FilteredEnvironment(selected_global_contexts=[first, second]),
+            loaded=loaded_resource(contexts=[first, second]),
+        )
+    )
+    serialized = result.model_dump()
+
+    assert all("methods" not in root for root in serialized["root_values"])
+    assert [item.owner_type for item in result.method_catalog].count("basic.String") == 1
+
+
+def test_builder_reports_budget_truncation_once():
+    first = _basic_context("$ctx$.first")
+    second = _basic_context("$ctx$.second")
+
+    result = TypedExpressionContextBuilder().build(
+        build_input(
+            filtered_env=FilteredEnvironment(selected_global_contexts=[first, second]),
+            loaded=loaded_resource(contexts=[first, second]),
+            max_items=1,
+        )
+    )
+
+    assert result.warnings.count("typed context truncated by max_items budget") == 1

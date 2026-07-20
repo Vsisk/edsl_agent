@@ -23,14 +23,12 @@ from agent.resource_manager.loader.resource_loader import LoadedResource
 class TypedAccessView(BaseModel):
     access: str
     return_type: str
-    methods: list[str] = Field(default_factory=list)
 
 
 class TypedRootValue(BaseModel):
     expr: str
     source_type: str
     return_type: str
-    methods: list[str] = Field(default_factory=list)
     fields: list[TypedAccessView] = Field(default_factory=list)
 
 
@@ -93,6 +91,7 @@ class TypedExpressionContextBuilder:
             self._append_context_root(roots, resource, "local_context")
         for resource in build_input.filtered_env.selected_functions:
             self._append_function_root(roots, resource)
+        roots.sort(key=self._root_priority)
 
         var_templates = self._build_naming_sql_templates()
         context = TypedExpressionContext(
@@ -100,7 +99,7 @@ class TypedExpressionContextBuilder:
             var_templates=var_templates,
             method_catalog=[
                 TypedMethodView(owner_type=owner, methods=methods)
-                for owner, methods in self._method_catalog.items()
+                for owner, methods in sorted(self._method_catalog.items())
             ],
             expression_patterns=self._build_patterns(var_templates),
             warnings=self._warnings,
@@ -168,14 +167,31 @@ class TypedExpressionContextBuilder:
         roots.append(self._root(name, "function", type_ref))
 
     def _root(self, expr: str, source_type: str, type_ref: TypeRef) -> TypedRootValue:
-        methods = self._methods(type_ref)
+        self._methods(type_ref)
         return TypedRootValue(
             expr=expr,
             source_type=source_type,
             return_type=render_type(type_ref),
-            methods=methods,
             fields=self._expand_fields(expr, type_ref, set()),
         )
+
+    def _root_priority(self, root: TypedRootValue) -> tuple[int, int, int, str]:
+        query = self._input.query.lower()
+        expr = root.expr.lower()
+        explicit_tier = 0 if expr in query else 1
+        if expr == "$iter$" or expr.startswith("$iter$."):
+            scope_tier = 0
+        elif expr.startswith("$local$."):
+            scope_tier = 1
+        elif expr.startswith("$ctx$."):
+            scope_tier = 2
+        else:
+            scope_tier = 3
+        leaf = expr.rsplit(".", 1)[-1]
+        relevance = (4 if leaf and leaf in query else 0) + (
+            2 if leaf == self._input.node.node_name.lower() else 0
+        )
+        return explicit_tier, scope_tier, -relevance, expr
 
     def _expand_fields(
         self,
@@ -210,9 +226,9 @@ class TypedExpressionContextBuilder:
                 TypedAccessView(
                     access=access,
                     return_type=render_type(field_type),
-                    methods=self._methods(field_type),
                 )
             )
+            self._methods(field_type)
             result.extend(self._expand_fields(access, field_type, nested_path))
         return result
 
@@ -343,27 +359,38 @@ class TypedExpressionContextBuilder:
 
     def _apply_item_budget(self, context: TypedExpressionContext) -> TypedExpressionContext:
         remaining = self._input.max_items
-        roots: list[TypedRootValue] = []
+        admitted_roots: list[TypedRootValue] = []
         for root in context.root_values:
             if remaining <= 0:
                 break
             remaining -= 1
-            field_count = min(len(root.fields), remaining)
-            roots.append(root.model_copy(update={"fields": root.fields[:field_count]}))
-            remaining -= field_count
+            admitted_roots.append(root.model_copy(update={"fields": []}))
 
         templates: list[TypedVarTemplate] = []
         for template in context.var_templates:
             if remaining <= 0:
                 break
             remaining -= 1
-            field_count = min(len(template.available_fields), remaining)
             templates.append(
-                template.model_copy(
-                    update={"available_fields": template.available_fields[:field_count]}
+                template.model_copy(update={"available_fields": []})
+            )
+
+        roots: list[TypedRootValue] = []
+        for original, admitted in zip(context.root_values, admitted_roots):
+            field_count = min(len(original.fields), remaining)
+            roots.append(admitted.model_copy(update={"fields": original.fields[:field_count]}))
+            remaining -= field_count
+
+        detailed_templates: list[TypedVarTemplate] = []
+        for original, admitted in zip(context.var_templates, templates):
+            field_count = min(len(original.available_fields), remaining)
+            detailed_templates.append(
+                admitted.model_copy(
+                    update={"available_fields": original.available_fields[:field_count]}
                 )
             )
             remaining -= field_count
+        templates = detailed_templates
 
         emitted_types = {
             item.return_type
@@ -376,21 +403,45 @@ class TypedExpressionContextBuilder:
             for item in [template, *template.available_fields]
         )
         catalog: list[TypedMethodView] = []
-        for method_view in context.method_catalog:
+        applicable_catalog = sorted(
+            (
+                method_view
+                for method_view in context.method_catalog
+                if method_view.owner_type in emitted_types
+            ),
+            key=lambda item: item.owner_type,
+        )
+        for method_view in applicable_catalog:
             if remaining <= 0:
                 break
-            if method_view.owner_type not in emitted_types:
-                continue
             catalog.append(method_view)
             remaining -= 1
 
         patterns = context.expression_patterns[:remaining]
+        truncated = (
+            len(roots) < len(context.root_values)
+            or any(
+                len(emitted.fields) < len(original.fields)
+                for emitted, original in zip(roots, context.root_values)
+            )
+            or len(templates) < len(context.var_templates)
+            or any(
+                len(emitted.available_fields) < len(original.available_fields)
+                for emitted, original in zip(templates, context.var_templates)
+            )
+            or len(catalog) < len(applicable_catalog)
+            or len(patterns) < len(context.expression_patterns)
+        )
+        warnings = list(context.warnings)
+        budget_warning = "typed context truncated by max_items budget"
+        if truncated and budget_warning not in warnings:
+            warnings.append(budget_warning)
         return TypedExpressionContext(
             root_values=roots,
             var_templates=templates,
             method_catalog=catalog,
             expression_patterns=patterns,
-            warnings=context.warnings,
+            warnings=warnings,
         )
 
 

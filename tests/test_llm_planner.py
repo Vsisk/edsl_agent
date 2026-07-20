@@ -117,7 +117,6 @@ class LLMPlannerTest(unittest.TestCase):
                         TypedAccessView(
                             access="$ctx$.address.addr1",
                             return_type="basic.String",
-                            methods=["length(): basic.int"],
                         )
                     ],
                 )

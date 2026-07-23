@@ -195,6 +195,75 @@ def test_parse_failure_returns_structured_error():
     assert result.debug_info["parsed_plan"] is None
 
 
+def test_parse_validation_failure_retries_whole_pipeline_and_can_recover():
+    context = TypedExpressionContext(root_values=[])
+
+    class RecoveringPlanner:
+        def __init__(self):
+            self.calls = 0
+            self.feedback = []
+
+        def plan(self, **kwargs):
+            self.calls += 1
+            self.feedback.append(kwargs.get("retry_feedback"))
+            if self.calls == 1:
+                return SimpleExpressionPlan(
+                    definitions=[{"name": "charge", "expr": "fetch_one(E_QUERY_CHARGE, broken)"}],
+                    return_expr="charge",
+                )
+            return SimpleExpressionPlan(return_expr='"ok"')
+
+    planner = RecoveringPlanner()
+    generator = ValueLogicGenerator(
+        resource_loader=Loader(),
+        resource_filter_target_generator=Targets(),
+        llm_planner=planner,
+        typed_expression_context_builder=Builder(context),
+    )
+
+    result = generator.generate(request(debug=True))
+
+    assert result.logic_type == "expression"
+    assert result.expression == '"ok"'
+    assert planner.calls == 2
+    assert planner.feedback[0] is None
+    assert planner.feedback[1]["stage"] == "validation"
+    assert planner.feedback[1]["error_type"] == "PARSE_FAILED"
+    assert "broken" in planner.feedback[1]["message"]
+
+
+def test_validation_failure_returns_last_result_after_retry_exhaustion():
+    context = TypedExpressionContext(root_values=[])
+    invalid_plan = SimpleExpressionPlan(
+        definitions=[{"name": "charge", "expr": "fetch_one(E_QUERY_CHARGE, broken)"}],
+        return_expr="charge",
+    )
+
+    class CountingPlanner(Planner):
+        def __init__(self):
+            super().__init__(invalid_plan)
+            self.calls = 0
+
+        def plan(self, **kwargs):
+            self.calls += 1
+            return super().plan(**kwargs)
+
+    planner = CountingPlanner()
+    generator = ValueLogicGenerator(
+        resource_loader=Loader(),
+        resource_filter_target_generator=Targets(),
+        llm_planner=planner,
+        typed_expression_context_builder=Builder(context),
+        generation_max_attempts=3,
+    )
+
+    result = generator.generate(request(debug=True))
+
+    assert result.logic_type == "validation_failed"
+    assert result.validation_errors[0]["error_type"] == "PARSE_FAILED"
+    assert planner.calls == 3
+
+
 def test_native_function_call_round_trips_through_ast():
     context = TypedExpressionContext(root_values=[
         TypedRootValue(expr="$ctx$.name", source_type="context", return_type="basic.String"),

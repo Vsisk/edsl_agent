@@ -1,4 +1,5 @@
 import json
+from typing import Any
 
 from agent.environment.environment import FilteredEnvironment
 from agent.context_pack import ContextPack, ContextPackPromptRenderer
@@ -33,6 +34,7 @@ class SimpleExpressionPlanner:
         typed_context: TypedExpressionContext,
         context_pack: ContextPack | None = None,
         expression_spec: ExpressionSpec | None = None,
+        retry_feedback: dict[str, Any] | None = None,
     ) -> SimpleExpressionPlan:
         if not self.is_usable:
             raise RuntimeError("Simple expression planner is not usable")
@@ -47,5 +49,6 @@ class SimpleExpressionPlanner:
             typed_context_json=_summarize_typed_context_json(typed_context),
             expression_scope_json=_summarize_expression_scope_json(expression_spec),
             expression_skills_json=_summarize_expression_skills_json(expression_spec),
+            retry_feedback_json=json.dumps(retry_feedback or {}, ensure_ascii=False, separators=(",", ":")),
         )
         return SimpleExpressionPlan.model_validate(response)

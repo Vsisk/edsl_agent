@@ -232,6 +232,7 @@ class ResourceFilterTargetGenerator:
         query: str,
         domain_registry: DomainRegistry,
         resource_count_summary: dict[str, int] | None = None,
+        retry_feedback: dict[str, Any] | None = None,
     ) -> list[FilterTarget]:
         self.selection_trace = []
         if not self.is_usable:
@@ -248,6 +249,7 @@ class ResourceFilterTargetGenerator:
                 func_domains=_dump_json(domain_registry.func_domains),
                 namingsql_domains=_dump_json(domain_registry.namingsql_domains),
                 resource_count_summary=_dump_json(resource_count_summary or {}),
+                retry_feedback_json=_dump_json(retry_feedback or {}),
             )
             content = self.client.complete(
                 prompt=prompt,

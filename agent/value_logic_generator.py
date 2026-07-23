@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import inspect
 import json
 import re
 from collections.abc import Callable
@@ -58,6 +59,15 @@ DEFAULT_CONTEXT_LIMIT = 5
 DEFAULT_RESOURCE_LIMIT = 5
 MAX_DYNAMIC_CONTEXT_LIMIT = 12
 MAX_DYNAMIC_RESOURCE_LIMIT = 10
+DEFAULT_GENERATION_MAX_ATTEMPTS = 3
+MAX_RETRY_FEEDBACK_MESSAGE_LENGTH = 2000
+
+
+class _GenerationAttemptError(Exception):
+    def __init__(self, stage: str, error: Exception):
+        super().__init__(str(error))
+        self.stage = stage
+        self.error = error
 
 
 @dataclass(slots=True)
@@ -93,7 +103,14 @@ class ValueLogicGenerator:
         typed_expression_context_builder: Any | None = None,
         type_registry: TypeRegistry | None = None,
         method_registry: MethodRegistry | None = None,
+        generation_max_attempts: int = DEFAULT_GENERATION_MAX_ATTEMPTS,
     ):
+        if (
+            not isinstance(generation_max_attempts, int)
+            or isinstance(generation_max_attempts, bool)
+            or generation_max_attempts < 1
+        ):
+            raise ValueError("generation_max_attempts must be a positive integer")
         self.resource_loader = resource_loader or default_resource_loader
         self.llm_resource_filter = llm_resource_filter or LLMResourceFilter()
         self.llm_difficulty_router = llm_difficulty_router or LLMDifficultyRouter()
@@ -111,6 +128,7 @@ class ValueLogicGenerator:
         )
         self.type_registry = type_registry or TypeRegistry()
         self.method_registry = method_registry or create_builtin_method_registry()
+        self.generation_max_attempts = generation_max_attempts
 
     def generate(self, request: ValueLogicRequest) -> ValueLogicResult:
         resources = ResourceContext(
@@ -262,23 +280,83 @@ class ValueLogicGenerator:
         return None
 
     def _generate_expression_by_plan(self, request: ValueLogicRequest, ctx: GenerationContext) -> ValueLogicResult:
+        retry_feedback = None
+        for attempt in range(1, self.generation_max_attempts + 1):
+            try:
+                result = self._generate_expression_attempt(request, ctx, retry_feedback=retry_feedback)
+            except _GenerationAttemptError as failure:
+                if attempt == self.generation_max_attempts:
+                    raise failure.error.with_traceback(failure.error.__traceback__)
+                retry_feedback = _build_retry_feedback(
+                    attempt=attempt,
+                    stage=failure.stage,
+                    error_type=type(failure.error).__name__,
+                    message=str(failure.error),
+                )
+                continue
+            if result.logic_type != "validation_failed" or attempt == self.generation_max_attempts:
+                return result
+            error = result.validation_errors[0] if result.validation_errors else {}
+            retry_feedback = _build_retry_feedback(
+                attempt=attempt,
+                stage="validation",
+                error_type=str(error.get("error_type") or "VALIDATION_FAILED"),
+                message=str(error.get("message") or "expression validation failed"),
+            )
+
+        raise AssertionError("expression generation retry loop exited unexpectedly")
+
+    def _generate_expression_attempt(
+        self,
+        request: ValueLogicRequest,
+        ctx: GenerationContext,
+        *,
+        retry_feedback: dict[str, Any] | None,
+    ) -> ValueLogicResult:
+        try:
+            return self._run_expression_attempt(request, ctx, retry_feedback=retry_feedback)
+        except _GenerationAttemptError:
+            raise
+        except Exception as exc:
+            raise _GenerationAttemptError("pipeline", exc) from exc
+
+    def _run_expression_attempt(
+        self,
+        request: ValueLogicRequest,
+        ctx: GenerationContext,
+        *,
+        retry_feedback: dict[str, Any] | None,
+    ) -> ValueLogicResult:
         node_info = self._to_node_def(request.node, request.node_path)
         resource_limits = _default_resource_limits()
-        expression_spec = self.expression_spec_generator.generate(
-            request=request,
-            node_info=node_info,
-            context_pack=ctx.context_pack,
-        )
-        targets = self.resource_filter_target_generator.generate(
-            query=expression_spec.nl,
-            domain_registry=ctx.resources.loaded.domain_registry,
-            resource_count_summary=_resource_count_summary(ctx.resources.loaded),
-        )
-        filtered_env = filter_resources(
-            targets=targets,
-            loaded_resource=ctx.resources.loaded,
-            resource_limits=resource_limits,
-        )
+        try:
+            expression_spec = _call_with_retry_feedback(
+                self.expression_spec_generator.generate,
+                retry_feedback,
+                request=request,
+                node_info=node_info,
+                context_pack=ctx.context_pack,
+            )
+        except Exception as exc:
+            raise _GenerationAttemptError("spec", exc) from exc
+        try:
+            targets = _call_with_retry_feedback(
+                self.resource_filter_target_generator.generate,
+                retry_feedback,
+                query=expression_spec.nl,
+                domain_registry=ctx.resources.loaded.domain_registry,
+                resource_count_summary=_resource_count_summary(ctx.resources.loaded),
+            )
+        except Exception as exc:
+            raise _GenerationAttemptError("resource_filter", exc) from exc
+        try:
+            filtered_env = filter_resources(
+                targets=targets,
+                loaded_resource=ctx.resources.loaded,
+                resource_limits=resource_limits,
+            )
+        except Exception as exc:
+            raise _GenerationAttemptError("resource_filter", exc) from exc
         if not targets and self.enable_legacy_filter_fallback:
             route = self._route_resources(node_info, expression_spec.nl)
             legacy_limits = _resource_limits_from_route(route)
@@ -329,14 +407,19 @@ class ValueLogicGenerator:
                 method_registry=self.method_registry,
             )
         )
-        plan = self.llm_planner.plan(
-            node_info=node_info,
-            user_query=request.query,
-            filtered_env=filtered_env,
-            typed_context=typed_context,
-            context_pack=ctx.context_pack,
-            expression_spec=expression_spec,
-        )
+        try:
+            plan = _call_with_retry_feedback(
+                self.llm_planner.plan,
+                retry_feedback,
+                node_info=node_info,
+                user_query=request.query,
+                filtered_env=filtered_env,
+                typed_context=typed_context,
+                context_pack=ctx.context_pack,
+                expression_spec=expression_spec,
+            )
+        except Exception as exc:
+            raise _GenerationAttemptError("planner", exc) from exc
         debug_info = None
         result_return_type = None
         if isinstance(plan, SimpleExpressionPlan):
@@ -745,6 +828,44 @@ def _extract_fetch_name(expression: str) -> str | None:
 
 def _string_list(value: Any) -> list[str]:
     return [str(item) for item in value] if isinstance(value, list) else []
+
+
+def _call_with_retry_feedback(
+    callback: Callable[..., Any],
+    retry_feedback: dict[str, Any] | None,
+    **kwargs: Any,
+) -> Any:
+    if retry_feedback is not None and _accepts_retry_feedback(callback):
+        kwargs["retry_feedback"] = retry_feedback
+    return callback(**kwargs)
+
+
+def _accepts_retry_feedback(callback: Callable[..., Any]) -> bool:
+    try:
+        parameters = inspect.signature(callback).parameters.values()
+    except (TypeError, ValueError):
+        return False
+    return any(
+        parameter.name == "retry_feedback"
+        or parameter.kind is inspect.Parameter.VAR_KEYWORD
+        for parameter in parameters
+    )
+
+
+def _build_retry_feedback(
+    *,
+    attempt: int,
+    stage: str,
+    error_type: str,
+    message: str,
+) -> dict[str, Any]:
+    normalized_message = " ".join(message.split())[:MAX_RETRY_FEEDBACK_MESSAGE_LENGTH]
+    return {
+        "attempt": attempt,
+        "stage": stage,
+        "error_type": error_type,
+        "message": normalized_message,
+    }
 
 
 def requires_naming_sql(structured_spec: dict[str, Any], *text_values: Any) -> bool:

@@ -52,6 +52,7 @@ class LLMPlanner:
         typed_context: TypedExpressionContext | None = None,
         context_pack: ContextPack | None = None,
         expression_spec: ExpressionSpec | None = None,
+        retry_feedback: dict[str, Any] | None = None,
     ) -> Plan:
         if not self.is_usable:
             raise RuntimeError("LLM planner is not usable")
@@ -80,6 +81,7 @@ class LLMPlanner:
                 expression_scope_json=expression_scope_json,
                 expression_skills_json=expression_skills_json,
                 plan_schema_json=plan_schema_json,
+                retry_feedback_json=_dump_json(retry_feedback or {}),
             )
             plan = Plan.model_validate(response)
             if filtered_env.naming_sql_selection is not None:
@@ -99,6 +101,7 @@ class LLMPlanner:
                 invalid_plan_json=invalid_plan_json,
                 error_message=_error_diagnostic(exc),
                 naming_sql_selection=filtered_env.naming_sql_selection,
+                retry_feedback_json=_dump_json(retry_feedback or {}),
             )
 
     def _repair(
@@ -115,6 +118,7 @@ class LLMPlanner:
         invalid_plan_json: str,
         error_message: str,
         naming_sql_selection: NamingSqlSelectResponse | None,
+        retry_feedback_json: str,
     ) -> Plan:
         response = generate_by_llm(
             prompt_template="planner_repair",
@@ -130,6 +134,7 @@ class LLMPlanner:
             plan_schema_json=plan_schema_json,
             invalid_plan_json=invalid_plan_json,
             error_message=error_message,
+            retry_feedback_json=retry_feedback_json,
         )
         plan = Plan.model_validate(response)
         if naming_sql_selection is not None:

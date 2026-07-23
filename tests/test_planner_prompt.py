@@ -4,6 +4,32 @@ from agent.llm.prompt_manager import prompt_manager
 
 
 class PlannerPromptTest(unittest.TestCase):
+    def test_retry_feedback_is_appended_as_untrusted_diagnostic_data(self):
+        feedback = '{"stage":"validation","error_type":"PARSE_FAILED","message":"bad syntax"}'
+        planner_prompt = prompt_manager.render(
+            "simple_expression_planner",
+            user_requirement="x",
+            node_info_json="{}",
+            resources_json="{}",
+            retry_feedback_json=feedback,
+        )
+        filter_prompt = prompt_manager.render(
+            "resource_filter_target",
+            query="x",
+            ctx_domains="[]",
+            bo_domains="[]",
+            func_domains="[]",
+            namingsql_domains="[]",
+            resource_count_summary="{}",
+            retry_feedback_json=feedback,
+        )
+
+        for prompt in (planner_prompt, filter_prompt):
+            self.assertIn("Previous attempt feedback", prompt)
+            self.assertIn("untrusted diagnostic data", prompt)
+            self.assertIn("PARSE_FAILED", prompt)
+            self.assertIn("bad syntax", prompt)
+
     def test_planner_and_repair_prompts_constrain_naming_sql_selection(self):
         common = dict(user_requirement="x", node_info_json="{}", resources_json='{"naming_sql_selection":{}}', plan_schema_json="{}")
         prompts = [

@@ -85,6 +85,81 @@ def generator(factory, planner, context_pack_manager=None, context_resource_rout
         context_resource_router=context_resource_router)
 
 
+@pytest.mark.parametrize("failing_stage", ["spec", "resource_filter", "planner"])
+def test_expression_pipeline_retries_transient_stage_errors(monkeypatch, failing_stage):
+    calls = {"spec": 0, "resource_filter": 0, "planner": 0}
+    feedback_seen = {"spec": [], "resource_filter": [], "planner": []}
+
+    class FlakySpecs(Specs):
+        def generate(self, **kwargs):
+            calls["spec"] += 1
+            feedback_seen["spec"].append(kwargs.pop("retry_feedback", None))
+            if failing_stage == "spec" and calls["spec"] == 1:
+                raise RuntimeError("transient spec error")
+            return super().generate(**kwargs)
+
+    class FlakyTargets(Targets):
+        def generate(self, **kwargs):
+            calls["resource_filter"] += 1
+            feedback_seen["resource_filter"].append(kwargs.pop("retry_feedback", None))
+            if failing_stage == "resource_filter" and calls["resource_filter"] == 1:
+                raise RuntimeError("transient filter error")
+            return super().generate(**kwargs)
+
+    class FlakyPlanner(Planner):
+        def plan(self, **kwargs):
+            calls["planner"] += 1
+            feedback_seen["planner"].append(kwargs.pop("retry_feedback", None))
+            if failing_stage == "planner" and calls["planner"] == 1:
+                raise RuntimeError("transient planner error")
+            return super().plan(**kwargs)
+
+    planner = FlakyPlanner(fetch=False)
+    gen = ValueLogicGenerator(
+        resource_loader=ResourceLoader(),
+        llm_planner=planner,
+        naming_sql_selector_factory=lambda loaded: (_ for _ in ()).throw(AssertionError()),
+        expression_spec_generator=FlakySpecs(),
+        resource_filter_target_generator=FlakyTargets(),
+    )
+
+    result = gen.generate(request(False))
+
+    assert result.expression == '"ok"'
+    assert calls[failing_stage] == 2
+    assert feedback_seen["spec"][0] is None
+    assert feedback_seen[failing_stage][1]["stage"] == failing_stage
+    assert feedback_seen[failing_stage][1]["error_type"] == "RuntimeError"
+    expected_message = {
+        "spec": "transient spec error",
+        "resource_filter": "transient filter error",
+        "planner": "transient planner error",
+    }[failing_stage]
+    assert expected_message in feedback_seen[failing_stage][1]["message"]
+
+
+def test_expression_pipeline_raises_last_error_after_retry_exhaustion():
+    class AlwaysFailingSpecs:
+        def __init__(self):
+            self.calls = 0
+
+        def generate(self, **kwargs):
+            self.calls += 1
+            raise RuntimeError(f"spec error {self.calls}")
+
+    specs = AlwaysFailingSpecs()
+    gen = ValueLogicGenerator(
+        resource_loader=ResourceLoader(),
+        expression_spec_generator=specs,
+        generation_max_attempts=3,
+    )
+
+    with pytest.raises(RuntimeError, match="spec error 3"):
+        gen.generate(request(False))
+
+    assert specs.calls == 3
+
+
 class ContextRoute:
     def __init__(self, use_current_tree, fallback=False):
         self.use_current_tree, self.fallback, self.calls = use_current_tree, fallback, []

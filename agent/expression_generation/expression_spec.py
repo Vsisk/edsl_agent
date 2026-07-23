@@ -129,8 +129,9 @@ class ExpressionSpecGenerator:
         request: ValueLogicRequest,
         node_info: NodeDef,
         context_pack: ContextPack | None = None,
+        retry_feedback: dict[str, Any] | None = None,
     ) -> ExpressionSpec:
-        del context_pack
+        del context_pack, retry_feedback
         visible = load_visible_local_context_registry(
             request.edsl_tree or {},
             request.node_path,

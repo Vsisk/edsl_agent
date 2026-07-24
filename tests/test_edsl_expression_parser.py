@@ -120,6 +120,20 @@ def test_accepts_or_but_does_not_split_operator_text_inside_identifiers():
     assert generate_expression(build_ast(parsed)) == '(brand == "A" or order == "B")'
 
 
+@pytest.mark.parametrize("operator", ["+", "-", "*", "/"])
+def test_preserves_arithmetic_as_infix_expression(operator):
+    context = TypedExpressionContext(root_values=[
+        TypedRootValue(expr="A", source_type="context", return_type="basic.long"),
+        TypedRootValue(expr="B", source_type="context", return_type="basic.long"),
+    ])
+
+    parsed = EDSLExpressionParser(context).parse_plan(
+        SimpleExpressionPlan(return_expr=f"A {operator} B")
+    )
+
+    assert generate_expression(build_ast(parsed)) == f"A {operator} B"
+
+
 def test_parses_exact_iter_as_context_path_even_without_typed_fields():
     parsed = EDSLExpressionParser(TypedExpressionContext()).parse_plan(
         SimpleExpressionPlan(return_expr="$iter$")

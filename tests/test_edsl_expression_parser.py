@@ -87,6 +87,39 @@ def test_parses_native_call_inside_binary_expression():
     assert value.left.name == "Text.mask"
 
 
+def test_accepts_word_logical_operator_and_single_quoted_strings():
+    context = TypedExpressionContext(root_values=[
+        TypedRootValue(expr="exists", source_type="function", return_type="basic.boolean"),
+        TypedRootValue(expr="prep_main", source_type="context", return_type="bo.PrepMain"),
+    ])
+
+    parsed = EDSLExpressionParser(context).parse_plan(
+        SimpleExpressionPlan(
+            return_expr=(
+                "if(exists(prep_main) and "
+                "prep_main.BEXT_ATTR.RE_BILL_GEN_FLAG == '1', 'Y', 'N')"
+            )
+        )
+    )
+
+    assert generate_expression(build_ast(parsed)) == (
+        'if((exists(prep_main) and prep_main.BEXT_ATTR.RE_BILL_GEN_FLAG == "1"), "Y", "N")'
+    )
+
+
+def test_accepts_or_but_does_not_split_operator_text_inside_identifiers():
+    context = TypedExpressionContext(root_values=[
+        TypedRootValue(expr="brand", source_type="context", return_type="basic.String"),
+        TypedRootValue(expr="order", source_type="context", return_type="basic.String"),
+    ])
+
+    parsed = EDSLExpressionParser(context).parse_plan(
+        SimpleExpressionPlan(return_expr="brand == 'A' or order == 'B'")
+    )
+
+    assert generate_expression(build_ast(parsed)) == '(brand == "A" or order == "B")'
+
+
 def test_parses_exact_iter_as_context_path_even_without_typed_fields():
     parsed = EDSLExpressionParser(TypedExpressionContext()).parse_plan(
         SimpleExpressionPlan(return_expr="$iter$")

@@ -60,6 +60,18 @@ def test_resolves_required_context_expressions(expr, expected):
     assert result.return_type == expected
 
 
+def test_resolves_word_logical_operator_and_single_quoted_strings():
+    expr = (
+        "if($ctx$.address.addr1.length() > 0 and "
+        "$ctx$.billStatement.fromDate == '2026-07-24', 'Y', 'N')"
+    )
+
+    result = validator().validate(plan(expr))
+
+    assert result.errors == []
+    assert result.return_type == STRING
+
+
 def test_resolves_definition_fetch_one_then_method_chain():
     result = validator().validate(plan("charge.CHARGE_AMT.long2str()", [SimpleDefinition(name="charge", expr="fetch_one(E_QUERY_CHARGE)")]))
     assert result.errors == [] and result.return_type == STRING

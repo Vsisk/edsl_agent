@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import re
 from typing import Any
 
@@ -117,7 +118,7 @@ class ExpressionTypeResolver:
                 self._error("METHOD_ARG_TYPE_MISMATCH", expr, op, "comparison operands must be numeric", expected=left, actual=right)
                 return None
             return BOOLEAN
-        if op in {"&&", "||"}:
+        if op in {"&&", "||", "and", "or"}:
             if left != BOOLEAN or right != BOOLEAN:
                 self._error("METHOD_ARG_TYPE_MISMATCH", expr, op, "boolean operator requires boolean operands", expected=BOOLEAN, actual=right)
                 return None
@@ -236,7 +237,11 @@ def parse_type_text(text: str) -> TypeRef:
 
 
 def _literal_type(expr: str) -> TypeRef | None:
-    if len(expr) >= 2 and expr[0] == expr[-1] == '"': return STRING
+    if len(expr) >= 2 and expr[0] == expr[-1] and expr[0] in {'"', "'"}:
+        try:
+            return STRING if isinstance(ast.literal_eval(expr), str) else None
+        except (SyntaxError, ValueError):
+            return None
     if expr in {"true", "false"}: return BOOLEAN
     if re.fullmatch(r"-?\d+", expr): return INT
     if re.fullmatch(r"-?\d+\.\d+", expr): return DECIMAL
@@ -244,8 +249,9 @@ def _literal_type(expr: str) -> TypeRef | None:
 
 
 def _find_binary(expr: str) -> tuple[str, str, str] | None:
-    groups = [["||"], ["&&"], ["==", "!=", ">=", "<=", ">", "<"], ["+", "-"], ["*", "/"]]
-    quote = escape = False; parens = braces = 0
+    groups = [["||", "or"], ["&&", "and"], ["==", "!=", ">=", "<=", ">", "<"], ["+", "-"], ["*", "/"]]
+    quote: str | None = None
+    escape = False; parens = braces = 0
     positions: list[tuple[int, str, int]] = []
     index = 0
     while index < len(expr):
@@ -253,9 +259,9 @@ def _find_binary(expr: str) -> tuple[str, str, str] | None:
         if quote:
             if escape: escape = False
             elif char == "\\": escape = True
-            elif char == '"': quote = False
+            elif char == quote: quote = None
             index += 1; continue
-        if char == '"': quote = True; index += 1; continue
+        if char in {'"', "'"}: quote = char; index += 1; continue
         if char == "(": parens += 1
         elif char == ")": parens -= 1
         elif char == "{": braces += 1
@@ -263,7 +269,18 @@ def _find_binary(expr: str) -> tuple[str, str, str] | None:
         if parens == 0 and braces == 0:
             for precedence, ops in enumerate(groups):
                 op = next((item for item in ops if expr.startswith(item, index)), None)
-                if op and index > 0:
+                if (
+                    op
+                    and index > 0
+                    and (
+                        op not in {"and", "or"}
+                        or (
+                            not (expr[index - 1].isalnum() or expr[index - 1] == "_")
+                            and index + len(op) < len(expr)
+                            and not (expr[index + len(op)].isalnum() or expr[index + len(op)] == "_")
+                        )
+                    )
+                ):
                     positions.append((precedence, op, index)); index += len(op) - 1; break
         index += 1
     if not positions: return None

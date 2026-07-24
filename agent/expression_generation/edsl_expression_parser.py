@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import json
 import re
 
@@ -34,8 +35,13 @@ class EDSLExpressionParser:
 
     def parse_expression(self, expr: str) -> dict:
         expr = expr.strip()
-        if len(expr) >= 2 and expr[0] == expr[-1] == '"':
-            return {"type": "literal", "value": json.loads(expr)}
+        if len(expr) >= 2 and expr[0] == expr[-1] and expr[0] in {'"', "'"}:
+            try:
+                value = json.loads(expr) if expr[0] == '"' else ast.literal_eval(expr)
+            except (json.JSONDecodeError, SyntaxError, ValueError):
+                value = None
+            if isinstance(value, str):
+                return {"type": "literal", "value": value}
         if expr in {"true", "false"}:
             return {"type": "literal", "value": expr == "true"}
         if re.fullmatch(r"-?\d+", expr):
@@ -47,8 +53,8 @@ class EDSLExpressionParser:
         binary = _find_binary(expr)
         if binary:
             left, op, right = binary
-            if op in {"&&", "||"}:
-                return {"type": "logical", "op": "and" if op == "&&" else "or",
+            if op in {"&&", "||", "and", "or"}:
+                return {"type": "logical", "op": "and" if op in {"&&", "and"} else "or",
                         "items": [self.parse_expression(left), self.parse_expression(right)]}
             if op in {"==", "!=", ">", ">=", "<", "<="}:
                 return {"type": "compare", "op": op, "left": self.parse_expression(left), "right": self.parse_expression(right)}
@@ -118,7 +124,7 @@ class EDSLExpressionParser:
     @staticmethod
     def _find_matching_paren(expr: str, open_paren: int) -> int | None:
         depth = 0
-        quote = False
+        quote: str | None = None
         escaped = False
         for index in range(open_paren, len(expr)):
             char = expr[index]
@@ -127,11 +133,11 @@ class EDSLExpressionParser:
                     escaped = False
                 elif char == "\\":
                     escaped = True
-                elif char == '"':
-                    quote = False
+                elif char == quote:
+                    quote = None
                 continue
-            if char == '"':
-                quote = True
+            if char in {'"', "'"}:
+                quote = char
             elif char == "(":
                 depth += 1
             elif char == ")":

@@ -17,7 +17,7 @@ class ExpressionTokenizer:
     def split_top_level(self, expr: str, separator: str) -> list[str]:
         result: list[str] = []
         start = 0
-        quote = False
+        quote: str | None = None
         escape = False
         parens = braces = 0
         for index, char in enumerate(expr):
@@ -26,11 +26,11 @@ class ExpressionTokenizer:
                     escape = False
                 elif char == "\\":
                     escape = True
-                elif char == '"':
-                    quote = False
+                elif char == quote:
+                    quote = None
                 continue
-            if char == '"':
-                quote = True
+            if char in {'"', "'"}:
+                quote = char
             elif char == "(":
                 parens += 1
             elif char == ")":

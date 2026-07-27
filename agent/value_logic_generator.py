@@ -352,20 +352,14 @@ class ValueLogicGenerator:
         node_info = self._to_node_def(request.node, request.node_path)
         if not self._legacy_resource_pipeline:
             try:
-                base_spec = _call_with_retry_feedback(
-                    self.expression_spec_generator.generate,
-                    retry_feedback,
-                    request=request,
-                    node_info=node_info,
-                    context_pack=ctx.context_pack,
-                )
                 orchestration = self.spec_orchestrator_factory(
                     ctx.resources.loaded
                 ).resolve(
-                    node_info=node_info.model_dump(mode="json"),
+                    node_info=node_info,
                     query=request.query,
                     expected_type=_requested_goal_return_type(request),
-                    base_spec=base_spec,
+                    request=request,
+                    context_pack=ctx.context_pack,
                     node_path=request.node_path,
                 )
                 compiled = self.resolution_compiler.compile(orchestration)

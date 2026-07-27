@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from agent.expression_generation.expression_spec import ExpressionSpec
+from agent.expression_generation.expression_spec import ExpressionSpec, ExpressionSpecGenerator
 from agent.resource_manager.loader.registry_models import ReturnType
 
 from .models import (
@@ -25,11 +25,15 @@ class SpecOrchestrator:
         *,
         semantic: Any,
         search: Any,
+        expression_spec_generator: Any | None = None,
         max_depth: int = 6,
         max_goals: int = 20,
     ) -> None:
         self.semantic = semantic
         self.search = search
+        self.expression_spec_generator = (
+            expression_spec_generator or ExpressionSpecGenerator()
+        )
         self.max_depth = max_depth
         self.max_goals = max_goals
 
@@ -39,9 +43,19 @@ class SpecOrchestrator:
         node_info: Any,
         query: str,
         expected_type: ReturnType,
-        base_spec: ExpressionSpec,
+        request: Any | None = None,
+        context_pack: Any | None = None,
+        base_spec: ExpressionSpec | None = None,
         node_path: str = "",
     ) -> SpecOrchestrationResult:
+        if base_spec is None:
+            if request is None:
+                raise ValueError("request is required when base_spec is not supplied")
+            base_spec = self.expression_spec_generator.generate(
+                request=request,
+                node_info=node_info,
+                context_pack=context_pack,
+            )
         root = self.semantic.generate_goal(
             goal_id="root",
             node_info=node_info,

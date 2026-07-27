@@ -215,9 +215,16 @@ def test_non_naming_sql_route_does_not_construct_factory_and_regresses_ordinary_
 def test_default_resource_pipeline_can_be_replaced_by_spec_orchestrator():
     events = []
 
+    class ForbiddenSpecGenerator:
+        def generate(self, **kwargs):
+            raise AssertionError("ValueLogicGenerator must not call spec generator before orchestrator")
+
     class Orchestrator:
         def resolve(self, **kwargs):
             events.append(("orchestrator", kwargs["query"]))
+            assert "base_spec" not in kwargs
+            assert kwargs["request"].query == "ordinary"
+            assert kwargs["context_pack"] is not None
             goal = ValueGoal(
                 goal_id="root",
                 semantic_name="ordinary",
@@ -227,7 +234,7 @@ def test_default_resource_pipeline_can_be_replaced_by_spec_orchestrator():
                 ),
             )
             return SpecOrchestrationResult(
-                base_spec=kwargs["base_spec"],
+                base_spec=ExpressionSpec(nl=kwargs["query"]),
                 root_goal=goal,
                 failed_goal_ids=["root"],
             )
@@ -236,6 +243,7 @@ def test_default_resource_pipeline_can_be_replaced_by_spec_orchestrator():
     gen = ValueLogicGenerator(
         resource_loader=ResourceLoader(),
         llm_planner=planner,
+        expression_spec_generator=ForbiddenSpecGenerator(),
         spec_orchestrator_factory=lambda loaded: Orchestrator(),
     )
 

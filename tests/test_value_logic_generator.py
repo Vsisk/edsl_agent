@@ -8,6 +8,12 @@ from agent.models import ValueLogicRequest
 from agent.naming_sql_selector import NamingSqlSelectResponse, SelectionMode
 from agent.planner.models import Plan
 from agent.resource_manager.loader.resource_loader import ResourceLoader
+from agent.resource_manager.loader.registry_models import ReturnType
+from agent.spec_orchestration.models import (
+    GoalRole,
+    SpecOrchestrationResult,
+    ValueGoal,
+)
 from agent.value_logic_generator import ExpressionSpec, ValueLogicGenerator, requires_naming_sql
 from tests.test_environment import FakeResourceFilter, sample_edsl_tree_payload
 
@@ -204,6 +210,40 @@ def test_non_naming_sql_route_does_not_construct_factory_and_regresses_ordinary_
     def fail(_): raise AssertionError("factory must not be called")
     result = generator(fail, planner).generate(request(False))
     assert result.expression == '"ok"' and planner.calls[0]["filtered_env"].naming_sql_selection is None
+
+
+def test_default_resource_pipeline_can_be_replaced_by_spec_orchestrator():
+    events = []
+
+    class Orchestrator:
+        def resolve(self, **kwargs):
+            events.append(("orchestrator", kwargs["query"]))
+            goal = ValueGoal(
+                goal_id="root",
+                semantic_name="ordinary",
+                role=GoalRole.FINAL_OUTPUT,
+                expected_type=ReturnType(
+                    data_type="basic", data_type_name="string", is_list=False
+                ),
+            )
+            return SpecOrchestrationResult(
+                base_spec=kwargs["base_spec"],
+                root_goal=goal,
+                failed_goal_ids=["root"],
+            )
+
+    planner = Planner(fetch=False)
+    gen = ValueLogicGenerator(
+        resource_loader=ResourceLoader(),
+        llm_planner=planner,
+        spec_orchestrator_factory=lambda loaded: Orchestrator(),
+    )
+
+    result = gen.generate(request(False))
+
+    assert result.expression == '"ok"'
+    assert events == [("orchestrator", "ordinary")]
+    assert planner.calls[0]["expression_spec"].nl == "ordinary"
 
 
 def test_route_factory_receives_current_loaded_resource_and_request_fields():

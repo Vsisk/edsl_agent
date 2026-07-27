@@ -43,6 +43,7 @@ from agent.naming_sql_selector import (
     validate_naming_sql_plan,
 )
 from agent.naming_sql_selector.selector import KNOWN_CONTEXT_ERROR_CODES
+from agent.naming_sql_selector.retrieval import NamingSqlCandidateRetriever
 from agent.context_pack import (
     ContextPack, ContextPackRequest, FastContextResourceRouter, ProjectContext,
     create_context_pack_manager,
@@ -53,6 +54,11 @@ from agent.planner.llm_planner import LLMPlanner
 from agent.planner.models import Plan
 from agent.planner.simple_expression_planner import SimpleExpressionPlanner
 from agent.resource_manager.loader.resource_loader import LoadedResource, ResourceLoader, resource_loader as default_resource_loader
+from agent.resource_manager.loader.registry_models import ReturnType as RegistryReturnType
+from agent.spec_orchestration.compiler import ResolutionCompiler
+from agent.spec_orchestration.orchestrator import SpecOrchestrator
+from agent.spec_orchestration.search import OrchestratorResourceSearch
+from agent.spec_orchestration.semantic import SpecSemanticGateway
 
 
 DEFAULT_CONTEXT_LIMIT = 5
@@ -104,6 +110,8 @@ class ValueLogicGenerator:
         type_registry: TypeRegistry | None = None,
         method_registry: MethodRegistry | None = None,
         generation_max_attempts: int = DEFAULT_GENERATION_MAX_ATTEMPTS,
+        spec_orchestrator_factory: Callable[[LoadedResource], Any] | None = None,
+        resolution_compiler: Any | None = None,
     ):
         if (
             not isinstance(generation_max_attempts, int)
@@ -117,6 +125,20 @@ class ValueLogicGenerator:
         self.llm_planner = llm_planner or SimpleExpressionPlanner()
         self.expression_spec_generator = expression_spec_generator or ExpressionSpecGenerator()
         self.resource_filter_target_generator = resource_filter_target_generator or ResourceFilterTargetGenerator()
+        self._legacy_resource_pipeline = (
+            spec_orchestrator_factory is None
+            and (
+                llm_resource_filter is not None
+                or llm_difficulty_router is not None
+                or expression_spec_generator is not None
+                or resource_filter_target_generator is not None
+                or naming_sql_selector_factory is not None
+            )
+        )
+        self.spec_orchestrator_factory = (
+            spec_orchestrator_factory or _default_spec_orchestrator_factory
+        )
+        self.resolution_compiler = resolution_compiler or ResolutionCompiler()
         self.enable_legacy_filter_fallback = enable_legacy_filter_fallback
         self.naming_sql_selector_factory = naming_sql_selector_factory or _default_naming_sql_selector_factory
         self.context_pack_manager = context_pack_manager or create_context_pack_manager()
@@ -328,74 +350,44 @@ class ValueLogicGenerator:
         retry_feedback: dict[str, Any] | None,
     ) -> ValueLogicResult:
         node_info = self._to_node_def(request.node, request.node_path)
-        resource_limits = _default_resource_limits()
-        try:
-            expression_spec = _call_with_retry_feedback(
-                self.expression_spec_generator.generate,
-                retry_feedback,
-                request=request,
-                node_info=node_info,
-                context_pack=ctx.context_pack,
-            )
-        except Exception as exc:
-            raise _GenerationAttemptError("spec", exc) from exc
-        try:
-            targets = _call_with_retry_feedback(
-                self.resource_filter_target_generator.generate,
-                retry_feedback,
-                query=expression_spec.nl,
-                domain_registry=ctx.resources.loaded.domain_registry,
-                resource_count_summary=_resource_count_summary(ctx.resources.loaded),
-            )
-        except Exception as exc:
-            raise _GenerationAttemptError("resource_filter", exc) from exc
-        try:
-            filtered_env = filter_resources(
-                targets=targets,
+        if not self._legacy_resource_pipeline:
+            try:
+                base_spec = _call_with_retry_feedback(
+                    self.expression_spec_generator.generate,
+                    retry_feedback,
+                    request=request,
+                    node_info=node_info,
+                    context_pack=ctx.context_pack,
+                )
+                orchestration = self.spec_orchestrator_factory(
+                    ctx.resources.loaded
+                ).resolve(
+                    node_info=node_info.model_dump(mode="json"),
+                    query=request.query,
+                    expected_type=_requested_goal_return_type(request),
+                    base_spec=base_spec,
+                    node_path=request.node_path,
+                )
+                compiled = self.resolution_compiler.compile(orchestration)
+                expression_spec = compiled.expression_spec
+                filtered_env = compiled.filtered_environment
+            except Exception as exc:
+                raise _GenerationAttemptError("spec_orchestrator", exc) from exc
+            filtered_env = preserve_structural_local_context(
+                filtered_env,
                 loaded_resource=ctx.resources.loaded,
-                resource_limits=resource_limits,
+                node_path=request.node_path,
             )
-        except Exception as exc:
-            raise _GenerationAttemptError("resource_filter", exc) from exc
-        if not targets and self.enable_legacy_filter_fallback:
-            route = self._route_resources(node_info, expression_spec.nl)
-            legacy_limits = _resource_limits_from_route(route)
-            filtered_env = build_filtered_environment(
-                node_info=node_info,
-                user_query=expression_spec.nl,
-                registry=ctx.resources.loaded,
-                llm_resource_filter=self.llm_resource_filter,
-                **legacy_limits,
+            naming_sql_selection = filtered_env.naming_sql_selection
+        else:
+            expression_spec, filtered_env, naming_sql_selection = (
+                self._run_legacy_resource_pipeline(
+                    request=request,
+                    ctx=ctx,
+                    node_info=node_info,
+                    retry_feedback=retry_feedback,
+                )
             )
-        filtered_env = preserve_structural_local_context(
-            filtered_env,
-            loaded_resource=ctx.resources.loaded,
-            node_path=request.node_path,
-        )
-        naming_sql_selection = None
-        if requires_naming_sql(
-            request.structured_spec, request.query, expression_spec.nl, request.node, request.parent_node
-        ):
-            selection_request = NamingSqlSelectRequest(
-                site_id=request.site_id,
-                project_id=request.project_id,
-                query=request.query or expression_spec.nl,
-                node=request.node,
-                json_path=request.node_path,
-                context_pack=ctx.context_pack,
-                target_bo_name=self._requested_bo_name(request),
-                parent_bo_hint=self._extract_parent_sql_bo_name(request.parent_node),
-                target_logic_area_id_list=_string_list(request.node.get("reference_logic_area_id_list")),
-                top_k=DEFAULT_RESOURCE_LIMIT,
-            )
-            selector_result = self.naming_sql_selector_factory(ctx.resources.loaded).select(selection_request)
-            if not selector_result.success:
-                failure_reason = selector_result.failure_reason
-                if failure_reason in KNOWN_CONTEXT_ERROR_CODES:
-                    raise ValueError(failure_reason)
-                raise ValueError("NAMING_SQL_SELECTION_FAILED")
-            naming_sql_selection = selector_result.model_copy(deep=True)
-            filtered_env.naming_sql_selection = naming_sql_selection.model_copy(deep=True)
         typed_context = self.typed_expression_context_builder.build(
             TypedExpressionContextBuildInput(
                 query=expression_spec.nl,
@@ -472,6 +464,84 @@ class ValueLogicGenerator:
             source=ValueLogicSource(source_type="plan"),
             debug_info=debug_info,
         )
+
+    def _run_legacy_resource_pipeline(
+        self,
+        *,
+        request: ValueLogicRequest,
+        ctx: GenerationContext,
+        node_info: NodeDef,
+        retry_feedback: dict[str, Any] | None,
+    ):
+        resource_limits = _default_resource_limits()
+        try:
+            expression_spec = _call_with_retry_feedback(
+                self.expression_spec_generator.generate,
+                retry_feedback,
+                request=request,
+                node_info=node_info,
+                context_pack=ctx.context_pack,
+            )
+        except Exception as exc:
+            raise _GenerationAttemptError("spec", exc) from exc
+        try:
+            targets = _call_with_retry_feedback(
+                self.resource_filter_target_generator.generate,
+                retry_feedback,
+                query=expression_spec.nl,
+                domain_registry=ctx.resources.loaded.domain_registry,
+                resource_count_summary=_resource_count_summary(ctx.resources.loaded),
+            )
+        except Exception as exc:
+            raise _GenerationAttemptError("resource_filter", exc) from exc
+        try:
+            filtered_env = filter_resources(
+                targets=targets,
+                loaded_resource=ctx.resources.loaded,
+                resource_limits=resource_limits,
+            )
+        except Exception as exc:
+            raise _GenerationAttemptError("resource_filter", exc) from exc
+        if not targets and self.enable_legacy_filter_fallback:
+            route = self._route_resources(node_info, expression_spec.nl)
+            legacy_limits = _resource_limits_from_route(route)
+            filtered_env = build_filtered_environment(
+                node_info=node_info,
+                user_query=expression_spec.nl,
+                registry=ctx.resources.loaded,
+                llm_resource_filter=self.llm_resource_filter,
+                **legacy_limits,
+            )
+        filtered_env = preserve_structural_local_context(
+            filtered_env,
+            loaded_resource=ctx.resources.loaded,
+            node_path=request.node_path,
+        )
+        naming_sql_selection = None
+        if requires_naming_sql(
+            request.structured_spec, request.query, expression_spec.nl, request.node, request.parent_node
+        ):
+            selection_request = NamingSqlSelectRequest(
+                site_id=request.site_id,
+                project_id=request.project_id,
+                query=request.query or expression_spec.nl,
+                node=request.node,
+                json_path=request.node_path,
+                context_pack=ctx.context_pack,
+                target_bo_name=self._requested_bo_name(request),
+                parent_bo_hint=self._extract_parent_sql_bo_name(request.parent_node),
+                target_logic_area_id_list=_string_list(request.node.get("reference_logic_area_id_list")),
+                top_k=DEFAULT_RESOURCE_LIMIT,
+            )
+            selector_result = self.naming_sql_selector_factory(ctx.resources.loaded).select(selection_request)
+            if not selector_result.success:
+                failure_reason = selector_result.failure_reason
+                if failure_reason in KNOWN_CONTEXT_ERROR_CODES:
+                    raise ValueError(failure_reason)
+                raise ValueError("NAMING_SQL_SELECTION_FAILED")
+            naming_sql_selection = selector_result.model_copy(deep=True)
+            filtered_env.naming_sql_selection = naming_sql_selection.model_copy(deep=True)
+        return expression_spec, filtered_env, naming_sql_selection
 
     def _simple_plan_failure(self, request, typed_context, plan, error_type, error, parsed_plan=None):
         message = " ".join(str(error).split())[:2000]
@@ -772,6 +842,44 @@ def _resource_count_summary(loaded_resource: LoadedResource) -> dict[str, int]:
 def _default_naming_sql_selector_factory(loaded_resource: LoadedResource) -> NamingSqlSelector:
     """Build request-scoped selector dependencies around the current resource snapshot."""
     return NamingSqlSelector(loaded_resource)
+
+
+def _default_spec_orchestrator_factory(
+    loaded_resource: LoadedResource,
+) -> SpecOrchestrator:
+    return SpecOrchestrator(
+        semantic=SpecSemanticGateway(),
+        search=OrchestratorResourceSearch(
+            loaded_resource,
+            naming_sql_retriever=NamingSqlCandidateRetriever(),
+        ),
+    )
+
+
+def _requested_goal_return_type(request: ValueLogicRequest) -> RegistryReturnType:
+    candidates = [
+        request.structured_spec.get("return_type"),
+        request.node.get("return_type"),
+        request.node.get("data_type_config"),
+    ]
+    for value in candidates:
+        if not isinstance(value, dict):
+            continue
+        nested = value.get("return_type")
+        raw = nested if isinstance(nested, dict) else value
+        data_type_name = raw.get("data_type_name") or raw.get("type_name")
+        data_type = raw.get("data_type") or raw.get("type")
+        if data_type_name:
+            return RegistryReturnType(
+                data_type=str(data_type or "basic"),
+                data_type_name=str(data_type_name),
+                is_list=bool(raw.get("is_list", False)),
+            )
+    return RegistryReturnType(
+        data_type="basic",
+        data_type_name="string",
+        is_list=False,
+    )
 
 
 def _parse_rendered_type(value: str) -> TypeRef:

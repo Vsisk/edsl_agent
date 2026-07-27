@@ -18,8 +18,7 @@
 当前表达式生成链路在 `ValueLogicGenerator` 中依次执行：
 
 ```text
-ExpressionSpecGenerator
-  -> ResourceFilterTargetGenerator
+ResourceFilterTargetGenerator
   -> filter_resources / build_filtered_environment
   -> NamingSqlSelector
   -> TypedExpressionContextBuilder
@@ -102,13 +101,14 @@ ExpressionSpecGenerator
 普通表达式生成路径中的以下职责由 `SpecOrchestrator` 统一替换：
 
 ```text
-ExpressionSpecGenerator 的自由 Spec 生成职责
 ResourceFilterTargetGenerator 的一次性资源意图生成职责
 filter_resources / build_filtered_environment 的最终资源决策职责
 NamingSqlSelector 的最终链路决策职责
 ```
 
-`ExpressionSpecGenerator` 中现有的作用域识别和表达式技能召回能力保留。Orchestrator 可以先取得基础 `ExpressionSpec`，保留其 `scope_context` 和 `skill_instructions`，再用已闭合取值链生成的自然语言逻辑替换 `nl`。
+`ExpressionSpecGenerator` 从主链和代码库中移除。Orchestrator 直接保存原始 query 与闭合后的取值链，`ResolutionCompiler` 据此生成最终 `ExpressionSpec.nl`；`ExpressionSpec` 仅作为下游 Planner 的稳定数据模型保留。
+
+`request` 与 `context_pack` 仍由 `ValueLogicGenerator` 直接传入 Orchestrator，并作为不可信背景信息注入 Goal、关键词和 coverage 判断 prompt。它们只补充节点、树和上下文语义，不得改变由代码确定的搜索层级、资源类型、候选集合或分支提交规则。
 
 `NamingSqlSelector` 的底层候选构造、混合召回、可选 LLM 重排和 Canonical 校验继续复用，但在 Orchestrator 路径中只作为 NamingSQL 搜索适配器。最终候选提交权归 Orchestrator。提交后仍构造现有 `NamingSqlSelectResponse`，供 Planner 摘要和本地 Validator 使用。
 
@@ -442,7 +442,6 @@ flowchart LR
 普通表达式尝试中的原有中段：
 
 ```text
-ExpressionSpecGenerator
 ResourceFilterTargetGenerator
 filter_resources
 legacy resource fallback

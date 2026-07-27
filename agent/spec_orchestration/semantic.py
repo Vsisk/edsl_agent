@@ -52,6 +52,23 @@ class SpecSemanticGateway:
         decision_fn: Callable[..., Any] = generate_by_llm,
     ) -> None:
         self.decision_fn = decision_fn
+        self.request_json = "{}"
+        self.context_pack_json = "{}"
+
+    def configure_background(
+        self,
+        *,
+        request: Any,
+        context_pack: Any,
+    ) -> None:
+        self.request_json = _dump(_model_dump(request))
+        self.context_pack_json = _dump(_model_dump(context_pack))
+
+    def _background(self) -> dict[str, str]:
+        return {
+            "request_json": self.request_json,
+            "context_pack_json": self.context_pack_json,
+        }
 
     def generate_goal(
         self,
@@ -68,6 +85,7 @@ class SpecSemanticGateway:
             lang="zh",
             node_info_json=_dump(node_info),
             user_requirement=str(query or "")[:4000],
+            **self._background(),
         )
         response = _GoalSemanticResponse.model_validate(raw)
         return ValueGoal(
@@ -93,6 +111,7 @@ class SpecSemanticGateway:
             goal_json=_dump(goal.model_dump(mode="json")),
             resource_tier=tier.value,
             user_requirement=str(query or "")[:4000],
+            **self._background(),
         )
         # The tier is code-owned. Ignore any tier/tool fields returned by the model.
         allowed = {
@@ -129,6 +148,7 @@ class SpecSemanticGateway:
             resource_tier=tier.value,
             candidates_json=_dump([_candidate_summary(item) for item in candidates]),
             user_requirement=str(query or "")[:4000],
+            **self._background(),
         )
         try:
             decision = CoverageDecision.model_validate(raw)
@@ -176,3 +196,9 @@ def _bounded_strings(values: list[str]) -> list[str]:
 
 def _dump(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, default=str, separators=(",", ":"))[:12000]
+
+
+def _model_dump(value: Any) -> Any:
+    if hasattr(value, "model_dump"):
+        return value.model_dump(mode="json")
+    return value

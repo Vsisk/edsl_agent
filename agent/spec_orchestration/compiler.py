@@ -29,7 +29,7 @@ class ResolutionCompiler:
         environment = FilteredEnvironment(selection_trace=list(result.resolution_trace))
         if resolution is None:
             return CompiledResolution(
-                expression_spec=result.base_spec,
+                expression_spec=ExpressionSpec(nl=result.query),
                 filtered_environment=environment,
             )
 
@@ -90,11 +90,7 @@ class ResolutionCompiler:
             environment.naming_sql_selection = _naming_selection(naming_resolutions)
 
         spec_text = _render_resolution(resolution)
-        expression_spec = ExpressionSpec(
-            nl=spec_text,
-            scope_context=result.base_spec.scope_context,
-            skill_instructions=list(result.base_spec.skill_instructions),
-        )
+        expression_spec = ExpressionSpec(nl=spec_text)
         return CompiledResolution(
             expression_spec=expression_spec,
             filtered_environment=environment,

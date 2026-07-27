@@ -1,7 +1,3 @@
-from agent.expression_generation.expression_spec import (
-    ExpressionScopeContext,
-    ExpressionSpec,
-)
 from agent.resource_manager.loader.registry_models import (
     BoRegistry,
     ContextRegistry,
@@ -34,7 +30,7 @@ def _goal(goal_id, name, type_name="string"):
     )
 
 
-def test_compiler_preserves_scope_and_includes_only_committed_context():
+def test_compiler_builds_spec_and_includes_only_committed_context():
     context = ContextRegistry(
         resource_id="ctx.name",
         context_name="$ctx$.customer.name",
@@ -55,10 +51,7 @@ def test_compiler_preserves_scope_and_includes_only_committed_context():
         ),
     )
     orchestration = SpecOrchestrationResult(
-        base_spec=ExpressionSpec(
-            nl="old",
-            scope_context=ExpressionScopeContext(inside_parent_list=True),
-        ),
+        query="生成客户名称",
         root_goal=goal,
         root_resolution=resolution,
         execution_order=["root"],
@@ -66,7 +59,7 @@ def test_compiler_preserves_scope_and_includes_only_committed_context():
 
     compiled = ResolutionCompiler().compile(orchestration)
 
-    assert compiled.expression_spec.scope_context.inside_parent_list is True
+    assert compiled.expression_spec.scope_context.inside_parent_list is False
     assert "$ctx$.customer.name" in compiled.expression_spec.nl
     assert compiled.filtered_environment.selected_global_context_ids == ["ctx.name"]
     assert compiled.filtered_environment.selected_bos == []
@@ -140,7 +133,7 @@ def test_compiler_builds_compatible_naming_sql_selection_and_trimmed_bo():
         bindings={"INVOICE_ID": dependency_goal.goal_id},
     )
     orchestration = SpecOrchestrationResult(
-        base_spec=ExpressionSpec(nl="old"),
+        query="查询账单客户组",
         root_goal=root,
         root_resolution=resolution,
         execution_order=[dependency_goal.goal_id, root.goal_id],

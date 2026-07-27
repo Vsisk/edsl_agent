@@ -6,7 +6,6 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from agent.resource_manager.loader.registry_models import ReturnType
-from agent.expression_generation.expression_spec import ExpressionSpec
 
 
 class GoalRole(str, Enum):
@@ -131,7 +130,7 @@ class ResolvedGoal(BaseModel):
 class SpecOrchestrationResult(BaseModel):
     model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
 
-    base_spec: ExpressionSpec
+    query: str
     root_goal: ValueGoal
     root_resolution: ResolvedGoal | None = None
     execution_order: list[str] = Field(default_factory=list)

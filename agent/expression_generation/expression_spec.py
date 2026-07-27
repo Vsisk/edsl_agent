@@ -5,13 +5,6 @@ from pathlib import Path
 import re
 from typing import Any
 
-from agent.context_pack.models import ContextPack
-from agent.models import NodeDef, ValueLogicRequest
-from agent.resource_manager.loader.local_context_loader import (
-    load_visible_local_context_registry,
-)
-
-
 DEFAULT_EXPRESSION_SKILL_PATH = (
     Path(__file__).resolve().parent / "resources" / "expression_skill.md"
 )
@@ -119,60 +112,6 @@ class ExpressionSkillLibrary:
         return result
 
 
-class ExpressionSpecGenerator:
-    def __init__(self, skill_library: ExpressionSkillLibrary | None = None) -> None:
-        self.skill_library = skill_library or ExpressionSkillLibrary()
-
-    def generate(
-        self,
-        *,
-        request: ValueLogicRequest,
-        node_info: NodeDef,
-        context_pack: ContextPack | None = None,
-        retry_feedback: dict[str, Any] | None = None,
-    ) -> ExpressionSpec:
-        del context_pack, retry_feedback
-        visible = load_visible_local_context_registry(
-            request.edsl_tree or {},
-            request.node_path,
-        )
-        iterator = next(
-            (item for item in visible if item.context_name == "$iter$"),
-            None,
-        )
-        scope = ExpressionScopeContext()
-        if iterator is not None and iterator.return_type is not None:
-            scope = ExpressionScopeContext(
-                inside_parent_list=True,
-                parent_list_path=_parent_list_path(iterator.source_path),
-                iter_path=iterator.context_name,
-                iter_return_type=iterator.return_type.model_dump(mode="json"),
-            )
-        nl = str(request.query or "").strip()
-        recall_text = " ".join(
-            value
-            for value in (
-                nl,
-                node_info.node_name,
-                node_info.description,
-            )
-            if value
-        )
-        return ExpressionSpec(
-            nl=nl,
-            scope_context=scope,
-            skill_instructions=self.skill_library.recall(
-                text=recall_text,
-                inside_parent_list=scope.inside_parent_list,
-            ),
-        )
-
-
 def _metadata_value(markdown: str, name: str) -> str:
     match = re.search(rf"(?m)^{re.escape(name)}:\s*(.+?)\s*$", markdown)
     return match.group(1).strip() if match else ""
-
-
-def _parent_list_path(source_path: str) -> str | None:
-    suffix = ".data_source"
-    return source_path[: -len(suffix)] if source_path.endswith(suffix) else None

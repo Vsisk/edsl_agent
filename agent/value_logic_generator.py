@@ -31,10 +31,7 @@ from agent.expression_generation.typed_context import (
     TypedExpressionContextBuilder,
 )
 from agent.expression_generation.expression_type_validation import SimpleExpressionPlan
-from agent.expression_generation.expression_spec import (
-    ExpressionSpec,
-    ExpressionSpecGenerator,
-)
+from agent.expression_generation.expression_spec import ExpressionSpec
 from agent.expression_generation.edsl_expression_parser import EDSLExpressionParser
 from agent.models import NodeDef, ValueLogicRequest, ValueLogicResult, ValueLogicSource, ValueReturnType
 from agent.naming_sql_selector import (
@@ -98,7 +95,6 @@ class ValueLogicGenerator:
         llm_resource_filter: Any | None = None,
         llm_difficulty_router: Any | None = None,
         llm_planner: LLMPlanner | None = None,
-        expression_spec_generator: Any | None = None,
         resource_filter_target_generator: Any | None = None,
         enable_legacy_filter_fallback: bool = False,
         naming_sql_selector_factory: Callable[[LoadedResource], NamingSqlSelector] | None = None,
@@ -123,14 +119,12 @@ class ValueLogicGenerator:
         self.llm_resource_filter = llm_resource_filter or LLMResourceFilter()
         self.llm_difficulty_router = llm_difficulty_router or LLMDifficultyRouter()
         self.llm_planner = llm_planner or SimpleExpressionPlanner()
-        self.expression_spec_generator = expression_spec_generator or ExpressionSpecGenerator()
         self.resource_filter_target_generator = resource_filter_target_generator or ResourceFilterTargetGenerator()
         self._legacy_resource_pipeline = (
             spec_orchestrator_factory is None
             and (
                 llm_resource_filter is not None
                 or llm_difficulty_router is not None
-                or expression_spec_generator is not None
                 or resource_filter_target_generator is not None
                 or naming_sql_selector_factory is not None
             )
@@ -468,16 +462,7 @@ class ValueLogicGenerator:
         retry_feedback: dict[str, Any] | None,
     ):
         resource_limits = _default_resource_limits()
-        try:
-            expression_spec = _call_with_retry_feedback(
-                self.expression_spec_generator.generate,
-                retry_feedback,
-                request=request,
-                node_info=node_info,
-                context_pack=ctx.context_pack,
-            )
-        except Exception as exc:
-            raise _GenerationAttemptError("spec", exc) from exc
+        expression_spec = ExpressionSpec(nl=request.query)
         try:
             targets = _call_with_retry_feedback(
                 self.resource_filter_target_generator.generate,

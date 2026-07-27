@@ -91,7 +91,7 @@ def test_context_method_end_to_end_with_debug():
     assert result.debug_info["return_type"] == {"kind": "basic", "name": "String", "element_type": None, "key_type": None, "value_type": None, "nullable": True}
 
 
-def test_list_iterator_field_end_to_end_uses_structural_type_and_skill():
+def test_list_iterator_field_end_to_end_uses_typed_context_without_generated_spec_skill():
     tree = {
         "mapping_content": {
             "node_id": "customers",
@@ -146,8 +146,9 @@ def test_list_iterator_field_end_to_end_uses_structural_type_and_skill():
     iterator = next(root for root in typed_context.root_values if root.expr == "$iter$")
     assert any(field.access == "$iter$.ID" for field in iterator.fields)
     spec = planner.calls[0]["expression_spec"]
-    assert spec.scope_context.inside_parent_list is True
-    assert [item.skill_id for item in spec.skill_instructions] == ["list-current-element"]
+    assert spec.nl == request_value.query
+    assert spec.scope_context.inside_parent_list is False
+    assert spec.skill_instructions == []
 
 
 @pytest.mark.parametrize(("name", "fetch", "return_type", "return_expr", "expected"), [

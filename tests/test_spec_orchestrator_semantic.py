@@ -57,6 +57,29 @@ def test_generate_goal_keeps_code_authoritative_expected_type():
     assert goal.target_bo_name == "BB_DIC_CUSTGRP"
 
 
+def test_request_and_context_pack_are_injected_as_prompt_background():
+    calls = []
+
+    def decide(**kwargs):
+        calls.append(kwargs)
+        return {"keywords": [], "aliases": [], "negative_keywords": []}
+
+    gateway = SpecSemanticGateway(decision_fn=decide)
+    gateway.configure_background(
+        request={"site_id": "site-1", "query": "生成名称"},
+        context_pack={"status": "complete", "current_node": {"node_id": "name"}},
+    )
+
+    gateway.generate_keywords(
+        goal=_goal(),
+        tier=ResourceTier.VISIBLE_VALUE,
+        query="生成名称",
+    )
+
+    assert '"site_id":"site-1"' in calls[0]["request_json"]
+    assert '"status":"complete"' in calls[0]["context_pack_json"]
+
+
 def test_generate_keywords_cannot_change_code_selected_tier():
     def decide(**kwargs):
         assert kwargs["prompt_template"] == "spec_orchestrator_keywords"

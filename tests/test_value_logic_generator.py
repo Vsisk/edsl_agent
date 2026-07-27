@@ -1,3 +1,5 @@
+import inspect
+
 import pytest
 
 from agent.context_manager.models import NamingSqlCandidate
@@ -14,19 +16,12 @@ from agent.spec_orchestration.models import (
     SpecOrchestrationResult,
     ValueGoal,
 )
-from agent.value_logic_generator import ExpressionSpec, ValueLogicGenerator, requires_naming_sql
+from agent.value_logic_generator import ValueLogicGenerator, requires_naming_sql
 from tests.test_environment import FakeResourceFilter, sample_edsl_tree_payload
 
 
 class Targets:
     def generate(self, **kwargs): return []
-
-
-class Specs:
-    def __init__(self, events=None): self.events = events
-    def generate(self, *, request, node_info, context_pack=None):
-        if self.events is not None: self.events.append(("spec", context_pack))
-        return ExpressionSpec(nl=request.query)
 
 
 class Planner:
@@ -84,25 +79,17 @@ def request(route=True):
         structured_spec={"requires_naming_sql": route, "bo_name": "BB_BAK_TRANS"}, edsl_tree=sample_edsl_tree_payload())
 
 
-def generator(factory, planner, context_pack_manager=None, context_resource_router=None, specs=None):
+def generator(factory, planner, context_pack_manager=None, context_resource_router=None):
     return ValueLogicGenerator(resource_loader=ResourceLoader(), llm_planner=planner,
-        naming_sql_selector_factory=factory, expression_spec_generator=specs or Specs(),
+        naming_sql_selector_factory=factory,
         resource_filter_target_generator=Targets(), context_pack_manager=context_pack_manager,
         context_resource_router=context_resource_router)
 
 
-@pytest.mark.parametrize("failing_stage", ["spec", "resource_filter", "planner"])
+@pytest.mark.parametrize("failing_stage", ["resource_filter", "planner"])
 def test_expression_pipeline_retries_transient_stage_errors(monkeypatch, failing_stage):
-    calls = {"spec": 0, "resource_filter": 0, "planner": 0}
-    feedback_seen = {"spec": [], "resource_filter": [], "planner": []}
-
-    class FlakySpecs(Specs):
-        def generate(self, **kwargs):
-            calls["spec"] += 1
-            feedback_seen["spec"].append(kwargs.pop("retry_feedback", None))
-            if failing_stage == "spec" and calls["spec"] == 1:
-                raise RuntimeError("transient spec error")
-            return super().generate(**kwargs)
+    calls = {"resource_filter": 0, "planner": 0}
+    feedback_seen = {"resource_filter": [], "planner": []}
 
     class FlakyTargets(Targets):
         def generate(self, **kwargs):
@@ -125,7 +112,6 @@ def test_expression_pipeline_retries_transient_stage_errors(monkeypatch, failing
         resource_loader=ResourceLoader(),
         llm_planner=planner,
         naming_sql_selector_factory=lambda loaded: (_ for _ in ()).throw(AssertionError()),
-        expression_spec_generator=FlakySpecs(),
         resource_filter_target_generator=FlakyTargets(),
     )
 
@@ -133,37 +119,13 @@ def test_expression_pipeline_retries_transient_stage_errors(monkeypatch, failing
 
     assert result.expression == '"ok"'
     assert calls[failing_stage] == 2
-    assert feedback_seen["spec"][0] is None
     assert feedback_seen[failing_stage][1]["stage"] == failing_stage
     assert feedback_seen[failing_stage][1]["error_type"] == "RuntimeError"
     expected_message = {
-        "spec": "transient spec error",
         "resource_filter": "transient filter error",
         "planner": "transient planner error",
     }[failing_stage]
     assert expected_message in feedback_seen[failing_stage][1]["message"]
-
-
-def test_expression_pipeline_raises_last_error_after_retry_exhaustion():
-    class AlwaysFailingSpecs:
-        def __init__(self):
-            self.calls = 0
-
-        def generate(self, **kwargs):
-            self.calls += 1
-            raise RuntimeError(f"spec error {self.calls}")
-
-    specs = AlwaysFailingSpecs()
-    gen = ValueLogicGenerator(
-        resource_loader=ResourceLoader(),
-        expression_spec_generator=specs,
-        generation_max_attempts=3,
-    )
-
-    with pytest.raises(RuntimeError, match="spec error 3"):
-        gen.generate(request(False))
-
-    assert specs.calls == 3
 
 
 class ContextRoute:
@@ -181,15 +143,14 @@ class CapturingPacks:
         return self.pack
 
 
-def test_context_pack_is_built_once_before_spec_and_fixed_resources_are_always_used():
-    events, packs = [], CapturingPacks()
+def test_context_pack_is_built_once_and_fixed_resources_are_always_used():
+    packs = CapturingPacks()
     route = ContextRoute(False)
     planner = Planner(fetch=False)
     generator(lambda loaded: (_ for _ in ()).throw(AssertionError()), planner,
-              packs, route, Specs(events)).generate(request(False))
+              packs, route).generate(request(False))
     assert len(packs.calls) == 1
     assert packs.calls[0][0].resource_names == ["dev_skill", "ootb_edsl"]
-    assert events == [("spec", packs.pack)]
     assert packs.pack is not None
     assert planner.calls[0]["context_pack"] is packs.pack
 
@@ -215,10 +176,6 @@ def test_non_naming_sql_route_does_not_construct_factory_and_regresses_ordinary_
 def test_default_resource_pipeline_can_be_replaced_by_spec_orchestrator():
     events = []
 
-    class ForbiddenSpecGenerator:
-        def generate(self, **kwargs):
-            raise AssertionError("ValueLogicGenerator must not call spec generator before orchestrator")
-
     class Orchestrator:
         def resolve(self, **kwargs):
             events.append(("orchestrator", kwargs["query"]))
@@ -234,7 +191,7 @@ def test_default_resource_pipeline_can_be_replaced_by_spec_orchestrator():
                 ),
             )
             return SpecOrchestrationResult(
-                base_spec=ExpressionSpec(nl=kwargs["query"]),
+                query=kwargs["query"],
                 root_goal=goal,
                 failed_goal_ids=["root"],
             )
@@ -243,7 +200,6 @@ def test_default_resource_pipeline_can_be_replaced_by_spec_orchestrator():
     gen = ValueLogicGenerator(
         resource_loader=ResourceLoader(),
         llm_planner=planner,
-        expression_spec_generator=ForbiddenSpecGenerator(),
         spec_orchestrator_factory=lambda loaded: Orchestrator(),
     )
 
@@ -252,6 +208,13 @@ def test_default_resource_pipeline_can_be_replaced_by_spec_orchestrator():
     assert result.expression == '"ok"'
     assert events == [("orchestrator", "ordinary")]
     assert planner.calls[0]["expression_spec"].nl == "ordinary"
+
+
+def test_value_logic_generator_no_longer_exposes_expression_spec_generator():
+    assert (
+        "expression_spec_generator"
+        not in inspect.signature(ValueLogicGenerator.__init__).parameters
+    )
 
 
 def test_route_factory_receives_current_loaded_resource_and_request_fields():
@@ -319,7 +282,6 @@ def test_generator_builds_typed_context_after_filtering_and_passes_it_to_planner
     gen = ValueLogicGenerator(
         resource_loader=ResourceLoader(),
         llm_planner=planner,
-        expression_spec_generator=Specs(),
         resource_filter_target_generator=Targets(),
         typed_expression_context_builder=builder,
     )
@@ -377,7 +339,7 @@ def test_default_filter_path_uses_expression_spec_text():
     targets, planner = CapturingTargets(), Planner(fetch=False)
     gen = ValueLogicGenerator(resource_loader=ResourceLoader(), llm_planner=planner,
         naming_sql_selector_factory=lambda loaded: (_ for _ in ()).throw(AssertionError()),
-        expression_spec_generator=Specs(), resource_filter_target_generator=targets)
+        resource_filter_target_generator=targets)
     gen.generate(request(False))
     assert targets.calls[0]["query"] == "ordinary"
 
@@ -416,7 +378,7 @@ def _legacy_generator(route, result, planner=None):
     gen = ValueLogicGenerator(resource_loader=ResourceLoader(), llm_resource_filter=resource_filter,
         llm_difficulty_router=Router(route), llm_planner=planner,
         naming_sql_selector_factory=lambda loaded: (_ for _ in ()).throw(AssertionError()),
-        expression_spec_generator=Specs(), resource_filter_target_generator=Targets(),
+        resource_filter_target_generator=Targets(),
         enable_legacy_filter_fallback=True)
     return gen, resource_filter, planner
 

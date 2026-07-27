@@ -1,4 +1,3 @@
-from agent.expression_generation.expression_spec import ExpressionSpec
 from agent.resource_manager.loader.registry_models import ReturnType
 from agent.spec_orchestration.models import (
     CoverageDecision,
@@ -86,7 +85,6 @@ def test_context_cover_stops_lower_priority_search():
         node_info={"node_name": "客户名称"},
         query="生成客户名称",
         expected_type=_goal("x").expected_type,
-        base_spec=ExpressionSpec(nl="生成客户名称"),
     )
 
     assert result.root_resolution.candidate.candidate_id == "ctx.name"
@@ -149,7 +147,6 @@ def test_naming_sql_is_committed_only_after_parameter_goal_resolves():
         node_info={"node_name": "账单客户组"},
         query="查询账单客户组",
         expected_type=root.expected_type,
-        base_spec=ExpressionSpec(nl="查询账单客户组"),
     )
 
     assert result.root_resolution.candidate.candidate_id == naming_sql.candidate_id
@@ -171,7 +168,6 @@ def test_candidate_with_incompatible_type_is_not_sent_to_coverage_llm():
         node_info={"node_name": "客户名称"},
         query="生成客户名称",
         expected_type=_goal("x").expected_type,
-        base_spec=ExpressionSpec(nl="生成客户名称"),
     )
 
     assert result.root_resolution is None
@@ -219,7 +215,6 @@ def test_failed_candidate_dependency_rolls_back_and_tries_next_candidate():
         node_info={"node_name": "客户名称"},
         query="生成客户名称",
         expected_type=_goal("x").expected_type,
-        base_spec=ExpressionSpec(nl="生成客户名称"),
     )
 
     assert result.root_resolution.candidate.candidate_id == "fn.good"
@@ -272,7 +267,6 @@ def test_bo_field_creates_bo_access_dependency_before_commit():
         node_info={"node_name": "客户名称"},
         query="生成客户名称",
         expected_type=_goal("x").expected_type,
-        base_spec=ExpressionSpec(nl="生成客户名称"),
     )
 
     assert result.root_resolution.candidate.candidate_id == field.candidate_id

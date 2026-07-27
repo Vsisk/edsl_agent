@@ -242,7 +242,7 @@ def _resolve_field_type(
         return None
     if owner_type.kind == "list":
         raise ValueError(f"field access on list requires element method before field: {field_name}")
-    if owner_type.kind == "basic":
+    if owner_type.kind in {"basic", "key"}:
         raise ValueError(f"field access on basic type {owner_type.kind}.{owner_type.name}: {field_name}")
     field_type = state.context.type_registry.resolve_field(owner_type, field_name)
     if field_type is None:

@@ -395,7 +395,7 @@ class TypedExpressionContextBuilder:
 
 
 def render_type(type_ref: TypeRef) -> str:
-    if type_ref.kind in {"basic", "bo", "logic", "extattr"}:
+    if type_ref.kind in {"basic", "key", "bo", "logic", "extattr"}:
         return f"{type_ref.kind}.{type_ref.name}"
     if type_ref.kind == "list" and type_ref.element_type is not None:
         return f"List<{render_type(type_ref.element_type)}>"

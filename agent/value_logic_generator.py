@@ -789,7 +789,7 @@ def _parse_rendered_type(value: str) -> TypeRef:
             )
     if "." in text:
         kind, name = text.split(".", 1)
-        if kind in {"basic", "bo", "logic", "extattr"} and name:
+        if kind in {"basic", "key", "bo", "logic", "extattr"} and name:
             return TypeRef(kind=kind, name=name)
     if text in {"void", "unknown"}:
         return TypeRef(kind=text)

@@ -338,6 +338,26 @@ def test_value_result_return_type_defaults_to_basic_string_when_static_inference
     }
 
 
+def test_key_return_type_is_preserved_in_value_result():
+    context = TypedExpressionContext(
+        root_values=[
+            TypedRootValue(
+                expr="$ctx$.customerId",
+                source_type="context",
+                return_type="key.String",
+            )
+        ]
+    )
+
+    result, _ = run(SimpleExpressionPlan(return_expr="$ctx$.customerId"), context)
+
+    assert result.return_type.model_dump() == {
+        "is_list": False,
+        "data_type": "key",
+        "data_type_name": "String",
+    }
+
+
 def test_unclosed_native_function_call_returns_parse_failed():
     context = TypedExpressionContext(root_values=[
         TypedRootValue(expr="Text.mask", source_type="function", return_type="basic.String"),

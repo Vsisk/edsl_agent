@@ -107,6 +107,30 @@ def test_builder_expands_context_object_to_basic_field_with_methods():
     assert "dateValue(basic.String format): basic.Date" in addr1.methods
 
 
+def test_builder_renders_key_root_and_injects_basic_methods():
+    key_context = ContextRegistry(
+        resource_id="ctx.key",
+        context_name="$ctx$.customerId",
+        return_type=ReturnType(
+            data_type="key", data_type_name="String", is_list=False
+        ),
+        property_type="system",
+        annotation="customer key",
+    )
+    context = TypedExpressionContextBuilder().build(
+        build_input(
+            filtered_env=FilteredEnvironment(
+                selected_global_contexts=[key_context]
+            ),
+            loaded=loaded_resource(contexts=[key_context]),
+        )
+    )
+
+    root = context.root_values[0]
+    assert root.return_type == "key.String"
+    assert "length(): basic.int" in root.methods
+
+
 def test_builder_registers_iterator_bo_and_expands_fields_without_selected_bo():
     bo = charge_bo()
     iterator = LocalContextRegistry(

@@ -159,7 +159,7 @@ class ExpressionTypeResolver:
                 return None
         for token in tokens:
             if token.token_type == "field":
-                if current.kind == "basic":
+                if current.kind in {"basic", "key"}:
                     self._error("FIELD_ACCESS_ON_BASIC_TYPE", expr, token.raw, "cannot access a field on a basic type", owner=current)
                     return None
                 if current.kind == "list":
@@ -289,7 +289,7 @@ def _find_binary(expr: str) -> tuple[str, str, str] | None:
 
 
 def _numeric(type_ref: TypeRef) -> bool:
-    return type_ref.kind == "basic" and (type_ref.name or "").lower() in {"int", "int32", "long", "int64", "decimal", "double", "float"}
+    return type_ref.kind in {"basic", "key"} and (type_ref.name or "").lower() in {"int", "int32", "long", "int64", "decimal", "double", "float"}
 
 
 def _numeric_rank(type_ref: TypeRef) -> int:

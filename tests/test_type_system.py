@@ -25,6 +25,10 @@ from agent.resource_manager.loader.registry_models import ReturnType
             TypeRef(kind="basic", name="int"),
         ),
         (
+            {"data_type": "key", "data_type_name": "String", "is_list": False},
+            TypeRef(kind="key", name="String"),
+        ),
+        (
             {"data_type": "bo", "data_type_name": "BB_BILL_CHARGE", "is_list": False},
             TypeRef(kind="bo", name="BB_BILL_CHARGE"),
         ),
@@ -127,6 +131,20 @@ def test_builtin_method_registry_matches_signatures(
     registry = create_builtin_method_registry()
 
     assert registry.match(owner, method_name, arg_types) == expected
+
+
+def test_key_type_uses_same_builtin_methods_as_basic_type():
+    registry = create_builtin_method_registry()
+    key_string = TypeRef(kind="key", name="String")
+
+    assert registry.match(key_string, "length", []) == INT
+    assert registry.match(key_string, "replace", [key_string, STRING]) == STRING
+    assert [method.name for method in registry.methods_for(key_string)] == [
+        "length",
+        "substr",
+        "dateValue",
+        "replace",
+    ]
 
 
 def test_method_registry_returns_none_for_non_matching_signature():

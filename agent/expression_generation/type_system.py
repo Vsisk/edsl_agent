@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 class TypeRef(BaseModel):
     kind: Literal[
         "basic",
+        "key",
         "bo",
         "logic",
         "extattr",
@@ -54,6 +55,7 @@ class TypeRegistry:
 class TypePattern(BaseModel):
     kind: Literal[
         "basic",
+        "key",
         "bo",
         "logic",
         "extattr",
@@ -239,7 +241,7 @@ def normalize_return_type(raw_return_type: Any) -> TypeRef:
     name = data_type_name.strip() if isinstance(data_type_name, str) else None
     if kind == "void" or (name is not None and name.lower() == "void"):
         return TypeRef(kind="void")
-    if kind not in {"basic", "bo", "logic", "extattr"} or not name:
+    if kind not in {"basic", "key", "bo", "logic", "extattr"} or not name:
         return TypeRef(kind="unknown")
 
     normalized = TypeRef(kind=kind, name=name)
@@ -285,8 +287,11 @@ def _match_pattern(
             return True
         return bound == actual
 
+    compatible_kind = pattern.kind == actual.kind or (
+        {pattern.kind, actual.kind} == {"basic", "key"}
+    )
     if (
-        pattern.kind != actual.kind
+        not compatible_kind
         or pattern.name != actual.name
         or pattern.nullable != actual.nullable
     ):

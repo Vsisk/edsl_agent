@@ -34,6 +34,7 @@ class AstValidationContext:
     context_registry: Mapping[str, Any] = field(default_factory=dict)
     context_types: Mapping[str, TypeRef] = field(default_factory=dict)
     function_types: Mapping[str, TypeRef] = field(default_factory=dict)
+    bo_types: Mapping[str, TypeRef] = field(default_factory=dict)
     fetch_return_types: Mapping[str, TypeRef] = field(default_factory=dict)
     type_registry: TypeRegistry | None = None
     method_registry: MethodRegistry | None = None
@@ -120,7 +121,12 @@ def _validate_node(node, state: _ValidationState | None = None) -> TypeRef | Non
             arg_types.append(_validate_node(arg, state))
         if node.lambda_expr is not None:
             lambda_state = state
-            if receiver_type is not None and receiver_type.kind == "list" and receiver_type.element_type is not None:
+            if (
+                receiver_type is not None
+                and receiver_type.kind == "list"
+                and receiver_type.element_type is not None
+                and receiver_type.element_type.kind != "unknown"
+            ):
                 lambda_state = _ValidationState(
                     context=state.context,
                     variable_types={**state.variable_types, "it": receiver_type.element_type},
@@ -160,13 +166,21 @@ def _validate_node(node, state: _ValidationState | None = None) -> TypeRef | Non
         if not isinstance(node.filter, (CompareNode, LogicalNode)):
             raise ValueError("select filter must be compare or logical")
         _validate_node(node.filter, state)
-        return None
+        if state.context is None:
+            return None
+        item_type = _source_item_type(state.context.bo_types.get(node.bo))
+        return _apply_collection_cardinality(item_type, isinstance(node, SelectNode))
     if isinstance(node, (FetchNode, FetchOneNode)):
         _validate_fetch_params(node.params)
         for param in node.params:
             _validate_node(param.value, state)
         if state.context is not None:
-            return state.context.fetch_return_types.get(node.name)
+            item_type = _source_item_type(
+                state.context.fetch_return_types.get(node.name)
+            )
+            return _apply_collection_cardinality(
+                item_type, isinstance(node, FetchNode)
+            )
         return None
     if isinstance(node, ReturnNode):
         if node.value is None:
@@ -187,6 +201,22 @@ def _infer_literal_type(value: Any) -> TypeRef:
     if value is None:
         return TypeRef(kind="void")
     return TypeRef(kind="unknown")
+
+
+def _source_item_type(type_ref: TypeRef | None) -> TypeRef | None:
+    if type_ref is not None and type_ref.kind == "list":
+        return type_ref.element_type
+    return type_ref
+
+
+def _apply_collection_cardinality(
+    item_type: TypeRef | None, is_collection: bool
+) -> TypeRef | None:
+    if item_type is None:
+        return None
+    if is_collection:
+        return TypeRef(kind="list", element_type=item_type)
+    return item_type
 
 
 def _infer_if_call_type(node: CallNode, arg_types: list[TypeRef | None]) -> TypeRef | None:

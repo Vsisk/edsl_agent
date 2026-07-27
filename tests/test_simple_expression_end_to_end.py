@@ -162,6 +162,29 @@ def test_query_variable_and_list_find_end_to_end(name, fetch, return_type, retur
     assert result.expression == expected
 
 
+def test_fetch_cardinality_comes_from_call_not_typed_context_template():
+    context = TypedExpressionContext(
+        var_templates=[
+            TypedVarTemplate(
+                var_name="it",
+                definition_expr="fetch_one(E_QUERY_CHARGE)",
+                return_type="bo.BB_BILL_CHARGE",
+            )
+        ]
+    )
+
+    result, _ = run(
+        SimpleExpressionPlan(return_expr="fetch(E_QUERY_CHARGE)"),
+        context,
+    )
+
+    assert result.return_type.model_dump() == {
+        "is_list": True,
+        "data_type": "bo",
+        "data_type_name": "BB_BILL_CHARGE",
+    }
+
+
 def test_ast_validation_failure_returns_structured_error(monkeypatch):
     context = TypedExpressionContext(root_values=[TypedRootValue(expr="$ctx$.name", source_type="context", return_type="basic.String")])
     def fail_validation(*_args, **_kwargs): raise ValueError("invalid ast")

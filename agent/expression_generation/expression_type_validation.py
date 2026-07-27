@@ -135,8 +135,18 @@ class ExpressionTypeResolver:
         kind, name = match.group(1), match.group(2).strip()
         for template in self.input.typed_context.var_templates:
             candidate = re.match(r"^(fetch_one|fetch)\s*\(\s*([^,\)]+)", template.definition_expr)
-            if candidate and candidate.group(1) == kind and candidate.group(2).strip() == name:
-                return parse_type_text(template.return_type)
+            if candidate and candidate.group(2).strip() == name:
+                source_type = parse_type_text(template.return_type)
+                item_type = (
+                    source_type.element_type
+                    if source_type.kind == "list"
+                    else source_type
+                )
+                if item_type is None:
+                    return None
+                if kind == "fetch":
+                    return TypeRef(kind="list", element_type=item_type)
+                return item_type
         self._error("UNKNOWN_ROOT", expr, match.group(0), f"unknown {kind} source")
         return None
 
@@ -171,7 +181,11 @@ class ExpressionTypeResolver:
                     return None
                 current = field_type
             elif token.token_type == "lambda_method_call":
-                if current.kind != "list" or current.element_type is None:
+                if (
+                    current.kind != "list"
+                    or current.element_type is None
+                    or current.element_type.kind == "unknown"
+                ):
                     self._error("LAMBDA_IT_TYPE_NOT_FOUND", expr, token.raw, "lambda it type is unavailable", owner=current)
                     return None
                 child = TypeScope(scope); child.bind("it", current.element_type)

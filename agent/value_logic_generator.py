@@ -575,6 +575,10 @@ class ValueLogicGenerator:
         )
         context_types = {}
         function_types = {}
+        bo_types = {
+            bo_name: TypeRef(kind="bo", name=bo_name)
+            for bo_name in loaded_resource.bo_registry
+        }
         fetch_return_types = {}
         if typed_context is not None:
             context_types = {
@@ -588,7 +592,9 @@ class ValueLogicGenerator:
                 if root.source_type == "function"
             }
             fetch_return_types = {
-                _extract_fetch_name(template.definition_expr): _parse_rendered_type(template.return_type)
+                _extract_fetch_name(template.definition_expr): _source_item_type(
+                    _parse_rendered_type(template.return_type)
+                )
                 for template in typed_context.var_templates
                 if _extract_fetch_name(template.definition_expr)
             }
@@ -596,6 +602,7 @@ class ValueLogicGenerator:
             context_registry=context_registry,
             context_types=context_types,
             function_types=function_types,
+            bo_types=bo_types,
             fetch_return_types=fetch_return_types,
             type_registry=self.type_registry,
             method_registry=self.method_registry,
@@ -921,6 +928,12 @@ def _type_ref_to_value_return_type(type_ref: TypeRef | None) -> ValueReturnType:
         data_type=type_ref.kind,
         data_type_name=type_ref.name or "",
     )
+
+
+def _source_item_type(type_ref: TypeRef) -> TypeRef:
+    if type_ref.kind == "list" and type_ref.element_type is not None:
+        return type_ref.element_type
+    return type_ref
 
 
 def _default_value_return_type() -> ValueReturnType:

@@ -29,6 +29,56 @@ from agent.resource_manager.loader.registry_models import ContextRegistry, Retur
 
 
 class ExpressionValidatorTest(unittest.TestCase):
+    def test_collection_and_single_source_nodes_infer_cardinality_from_operation(self):
+        charge = TypeRef(kind="bo", name="BB_BILL_CHARGE")
+        context = AstValidationContext(
+            bo_types={"BB_BILL_CHARGE": charge},
+            fetch_return_types={"E_QUERY_CHARGE": charge},
+        )
+        cases = [
+            (
+                {
+                    "type": "select",
+                    "bo": "BB_BILL_CHARGE",
+                    "filter": {
+                        "type": "compare",
+                        "op": ">",
+                        "left": {"type": "literal", "value": 1},
+                        "right": {"type": "literal", "value": 0},
+                    },
+                },
+                TypeRef(kind="list", element_type=charge),
+            ),
+            (
+                {
+                    "type": "select_one",
+                    "bo": "BB_BILL_CHARGE",
+                    "filter": {
+                        "type": "compare",
+                        "op": ">",
+                        "left": {"type": "literal", "value": 1},
+                        "right": {"type": "literal", "value": 0},
+                    },
+                },
+                charge,
+            ),
+            (
+                {"type": "fetch", "name": "E_QUERY_CHARGE", "params": []},
+                TypeRef(kind="list", element_type=charge),
+            ),
+            (
+                {"type": "fetch_one", "name": "E_QUERY_CHARGE", "params": []},
+                charge,
+            ),
+        ]
+
+        for expression, expected in cases:
+            with self.subTest(node_type=expression["type"]):
+                ast = build_ast(
+                    {"nodes": [{"type": "return", "value": expression}]}
+                )
+                self.assertEqual(infer_ast_return_type(ast, context), expected)
+
     def test_validate_accepts_basic_program(self):
         ast = build_ast(
             {

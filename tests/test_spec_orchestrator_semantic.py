@@ -72,7 +72,6 @@ def test_request_and_context_pack_are_injected_as_prompt_background():
 
     gateway.generate_keywords(
         goal=_goal(),
-        tier=ResourceTier.VISIBLE_VALUE,
         query="生成名称",
     )
 
@@ -80,10 +79,10 @@ def test_request_and_context_pack_are_injected_as_prompt_background():
     assert '"status":"complete"' in calls[0]["context_pack_json"]
 
 
-def test_generate_keywords_cannot_change_code_selected_tier():
+def test_generate_keywords_ignores_model_resource_tier():
     def decide(**kwargs):
         assert kwargs["prompt_template"] == "spec_orchestrator_keywords"
-        assert kwargs["resource_tier"] == ResourceTier.VISIBLE_VALUE.value
+        assert "resource_tier" not in kwargs
         return {
             "keywords": ["custGrpName"],
             "aliases": ["客户组名称"],
@@ -93,12 +92,10 @@ def test_generate_keywords_cannot_change_code_selected_tier():
 
     result = SpecSemanticGateway(decision_fn=decide).generate_keywords(
         goal=_goal(),
-        tier=ResourceTier.VISIBLE_VALUE,
         query="生成客户组名称",
     )
 
     assert result.keywords == ["custGrpName"]
-    assert result.tier == ResourceTier.VISIBLE_VALUE
 
 
 def test_unknown_candidate_id_degrades_to_not_cover():

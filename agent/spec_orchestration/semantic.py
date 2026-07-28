@@ -21,7 +21,6 @@ from .models import (
 class KeywordDecision(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    tier: ResourceTier
     keywords: list[str] = Field(default_factory=list)
     aliases: list[str] = Field(default_factory=list)
     negative_keywords: list[str] = Field(default_factory=list)
@@ -101,7 +100,6 @@ class SpecSemanticGateway:
         self,
         *,
         goal: ValueGoal,
-        tier: ResourceTier,
         query: str,
     ) -> KeywordDecision:
         raw = self.decision_fn(
@@ -109,7 +107,6 @@ class SpecSemanticGateway:
             llm_name="base",
             lang="zh",
             goal_json=_dump(goal.model_dump(mode="json")),
-            resource_tier=tier.value,
             user_requirement=str(query or "")[:4000],
             **self._background(),
         )
@@ -124,7 +121,6 @@ class SpecSemanticGateway:
         except ValidationError:
             response = _KeywordResponse()
         return KeywordDecision(
-            tier=tier,
             keywords=_bounded_strings(response.keywords),
             aliases=_bounded_strings(response.aliases),
             negative_keywords=_bounded_strings(response.negative_keywords),

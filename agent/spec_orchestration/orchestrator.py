@@ -97,11 +97,11 @@ class SpecOrchestrator:
         state.goal_count += 1
         goal.status = GoalStatus.SEARCHING
         next_stack = (*stack, signature)
+        keyword_decision = self.semantic.generate_keywords(
+            goal=goal, query=query
+        )
         for tier in RESOURCE_TIER_ORDER:
             goal.current_tier = tier
-            keyword_decision = self.semantic.generate_keywords(
-                goal=goal, tier=tier, query=query
-            )
             request = GoalSearchRequest(
                 goal=goal,
                 tier=tier,
@@ -109,6 +109,7 @@ class SpecOrchestrator:
                 aliases=keyword_decision.aliases,
                 negative_keywords=keyword_decision.negative_keywords,
                 target_bo_name=goal.target_bo_name,
+                target_field_name=goal.target_field_name,
                 node_path=node_path,
             )
             recalled = self.search.search(request)
@@ -208,6 +209,7 @@ class SpecOrchestrator:
                     is_list=False,
                 ),
                 target_bo_name=candidate.bo_name,
+                target_field_name=candidate.field_name,
             )
             resolved_bo = self._resolve_goal(
                 bo_goal,

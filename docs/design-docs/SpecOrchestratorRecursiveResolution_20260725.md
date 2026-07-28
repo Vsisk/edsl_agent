@@ -4,7 +4,7 @@
 
 本设计将当前 Value Logic 生成链路中的“一次性 Spec 生成、资源目标生成、资源过滤和独立 NamingSQL 选择”替换为 `SpecOrchestrator` 驱动的递归求解流程。
 
-`SpecOrchestrator` 根据当前 `node_info` 和用户 `query` 创建根目标，按照代码固定的资源优先级逐层搜索。每一层搜索中，LLM 负责生成适用于当前资源类型的关键词，并判断合法候选是否能够覆盖当前 Goal；代码负责状态机、搜索触发、候选真实性校验、类型校验、依赖展开、循环检测和最终提交。
+`SpecOrchestrator` 根据当前 `node_info` 和用户 `query` 创建根目标，为每个 Goal 一次性生成可跨资源类型复用的关键词，再按照代码固定的资源优先级逐层搜索。LLM 判断合法候选是否能够覆盖当前 Goal；代码负责状态机、搜索触发、候选真实性校验、类型校验、依赖展开、循环检测和最终提交。
 
 递归求解完成后，Orchestrator 从唯一的已提交取值链生成：
 
@@ -40,7 +40,7 @@ ResourceFilterTargetGenerator
 
 1. 根据 `node_info` 和 `query` 生成一个可校验的 Root Goal。
 2. 由代码控制资源搜索顺序、资源类型和搜索工具触发。
-3. 由 LLM 为当前 Goal 和当前资源类型生成搜索关键词、别名及语义提示。
+3. 由 LLM 为每个 Goal 一次性生成搜索关键词、别名及语义提示，并在所有资源层复用。
 4. 由 LLM 判断当前合法候选是否在业务语义上覆盖 Goal，以及是否应继续向下一优先级搜索。
 5. 对 LLM 的 Goal、关键词、候选引用和覆盖结论执行代码级强校验。
 6. 对 NamingSQL、Function、BO 主键等未绑定输入创建 Dependency Goal，并递归求解。
@@ -116,7 +116,7 @@ NamingSqlSelector 的最终链路决策职责
 
 1. Orchestrator 是代码驱动的分层状态机，不是一个自由执行工具的 LLM Agent。
 2. 资源优先级和搜索工具触发完全由代码决定。
-3. LLM 负责 Goal 语义、当前层关键词和覆盖判断，但不能跳转层级或直接调用搜索工具。
+3. LLM 负责 Goal 语义、Goal 级关键词和覆盖判断，但不能跳转层级或直接调用搜索工具。
 4. LLM 只接收有界候选摘要和不透明候选 ID。
 5. 任何提交都必须同时通过 LLM 语义判断和代码确定性校验。
 6. LLM 失败时，对“资源提交”采取 fail-closed，对“继续搜索”采取 fail-open。
@@ -175,7 +175,7 @@ evidence
 
 职责：
 
-- 只针对代码指定的当前资源类型生成关键词；
+- 针对当前 Goal 一次性生成可跨资源类型复用的关键词；
 - 综合 Goal、父级 Resolution、用户 Query、节点名称、Annotation 和已解析路径；
 - 生成关键词、别名、负向关键词和可选 BO Hint。
 
@@ -362,7 +362,7 @@ failed
 
 ```text
 pending
-  -> 生成当前层关键词
+  -> 生成一次 Goal 关键词
   -> searching
   -> 搜索并校验候选
        -> direct_cover 且校验通过 -> resolved
@@ -508,6 +508,8 @@ legacy resource fallback
 
 目标：得到能够读取目标字段的 BO 记录。
 
+从 P1 进入 P2 时，BO 字段候选的 `bo_name` 与 `field_name` 必须分别写入依赖 Goal 的 `target_bo_name`、`target_field_name`，并原样传给 BO access 搜索请求。NamingSQL 召回同时使用这两个定位信息，不能只按 BO 名搜索。
+
 #### P3：直接生成目标值的 Function
 
 范围：
@@ -534,7 +536,7 @@ legacy resource fallback
 
 ```text
 1. 代码确定当前资源类型和允许访问的 Registry。
-2. LLM为该资源类型生成关键词。
+2. LLM为该 Goal 生成一次关键词，后续资源层直接复用。
 3. 代码清洗并校验关键词。
 4. 代码调用对应搜索适配器。
 5. 代码移除不存在、类型明显冲突或超出作用域的候选。
@@ -691,8 +693,8 @@ Planner 不接收 Goal Graph，也不接收未提交资源。
 
 ### 关键词生成失败
 
-- 当前层可使用节点名、Goal 名、字段 Hint 等确定性关键词作为最小搜索输入；
-- 若没有任何有效关键词，当前层视为无合法候选并继续下一优先级；
+- 可使用节点名、Goal 名、字段 Hint 等确定性关键词作为该 Goal 的最小搜索输入；
+- 若没有任何有效关键词，各资源层仍可使用 Goal 名和字段 Hint 执行有界搜索；
 - 不允许扩大为全 Registry 无界 Prompt。
 
 ### 覆盖判断失败
@@ -719,7 +721,7 @@ Orchestrator 必须有界运行，至少限制：
 
 - 最大递归深度；
 - 最大 Goal 数量；
-- 每层最大关键词数；
+- 每个 Goal 最大关键词数；
 - 每层最大候选数；
 - 每个 Goal 最大候选尝试数；
 - LLM 调用次数；
@@ -830,7 +832,7 @@ EDSL Renderer
 
 #### 关键词
 
-- LLM只为代码指定的资源类型生成关键词；
+- LLM只为当前 Goal 生成一次关键词，所有代码指定的资源层复用；
 - 关键词去重、裁剪和归一化；
 - 非法 BO Hint 和资源 ID 被丢弃；
 - 关键词生成失败时使用有界确定性输入或进入下一层；
@@ -898,7 +900,7 @@ $ctx$.billInvoice.invoiceId
 
 - Context 搜索先执行；
 - 每次进入下一层均由代码触发；
-- 每层关键词由 LLM 生成；
+- 每个 Goal 的关键词由 LLM 一次性生成；
 - LLM 只能引用当前候选 ID；
 - NamingSQL 参数形成 Dependency Goal；
 - `data_type=key` 正确识别主键；
@@ -923,7 +925,7 @@ $ctx$.billInvoice.invoiceId
 
 1. Value Logic 普通表达式主链由 `SpecOrchestrator` 完成递归 Spec 求解。
 2. 代码固定资源搜索优先级并负责每次搜索工具触发。
-3. LLM只负责 Goal、当前层关键词和覆盖判断。
+3. LLM只负责 Goal、Goal 级关键词和覆盖判断。
 4. 任意 LLM 覆盖结论在提交前均经过代码真实性、类型、基数、参数和依赖校验。
 5. NamingSQL 和 Function 的未绑定参数能够递归生成 Dependency Goal。
 6. BO 的 `data_type=key` 字段能够作为主键参与 BO 定位和跨 BO 键值生产者搜索。

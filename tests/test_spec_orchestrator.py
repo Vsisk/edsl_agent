@@ -17,13 +17,15 @@ class FakeSemantic:
         self.root_goal = root_goal
         self.decisions = decisions
         self.coverage_calls = []
+        self.keyword_calls = []
 
     def generate_goal(self, **_):
         return self.root_goal.model_copy(deep=True)
 
-    def generate_keywords(self, *, goal, tier, query):
+    def generate_keywords(self, *, goal, query):
         del query
-        return KeywordDecision(tier=tier, keywords=[goal.semantic_name])
+        self.keyword_calls.append(goal.goal_id)
+        return KeywordDecision(keywords=[goal.semantic_name])
 
     def decide_coverage(self, *, goal, tier, candidates, query):
         del query
@@ -38,8 +40,10 @@ class FakeSearch:
     def __init__(self, candidates):
         self.candidates = candidates
         self.calls = []
+        self.requests = []
 
     def search(self, request):
+        self.requests.append(request.model_copy(deep=True))
         self.calls.append((request.goal.semantic_name, request.tier))
         return list(self.candidates.get((request.goal.semantic_name, request.tier), []))
 
@@ -172,6 +176,7 @@ def test_candidate_with_incompatible_type_is_not_sent_to_coverage_llm():
 
     assert result.root_resolution is None
     assert semantic.coverage_calls == []
+    assert semantic.keyword_calls == ["root"]
     assert result.failed_goal_ids == ["root"]
 
 
@@ -271,3 +276,10 @@ def test_bo_field_creates_bo_access_dependency_before_commit():
 
     assert result.root_resolution.candidate.candidate_id == field.candidate_id
     assert result.root_resolution.dependencies[0].goal.target_bo_name == "BO_CUSTOMER"
+    bo_access_request = next(
+        request for request in search.requests
+        if request.goal.semantic_name == "BO_CUSTOMER"
+        and request.tier == ResourceTier.BO_ACCESS
+    )
+    assert bo_access_request.target_bo_name == "BO_CUSTOMER"
+    assert bo_access_request.target_field_name == "NAME"

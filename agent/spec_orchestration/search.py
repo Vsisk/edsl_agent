@@ -154,8 +154,15 @@ class OrchestratorResourceSearch:
             return []
         sql_defs = list(bo.naming_sql_list)
         if self.naming_sql_retriever is not None and sql_defs:
-            query = " ".join([*request.keywords, *request.aliases])
-            context = NamingSqlSelectionContext(query_terms=request.keywords)
+            query_terms = [
+                *request.keywords,
+                *request.aliases,
+                request.target_field_name or "",
+            ]
+            query = " ".join(item for item in query_terms if item)
+            context = NamingSqlSelectionContext(
+                query_terms=[item for item in query_terms if item]
+            )
             retrieval = self.naming_sql_retriever.retrieve(
                 query=query,
                 context=context,

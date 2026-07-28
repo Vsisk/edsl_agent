@@ -95,6 +95,7 @@ class GoalSearchRequest(BaseModel):
     aliases: list[str] = Field(default_factory=list)
     negative_keywords: list[str] = Field(default_factory=list)
     target_bo_name: str | None = None
+    target_field_name: str | None = None
     node_path: str = ""
     limit: int = Field(default=10, ge=1, le=30)
 

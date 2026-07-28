@@ -182,9 +182,26 @@ def _summarize_typed_context_json(
 ) -> str:
     context = typed_context or TypedExpressionContext()
     value = {
-        "Root Values": context.root_values,
-        "Suggested Vars": context.var_templates,
-        "Available Methods by Type": context.method_catalog,
+        "Root Values": [
+            root.model_dump(
+                mode="json",
+                exclude={
+                    "methods": True,
+                    "fields": {"__all__": {"methods"}},
+                },
+            )
+            for root in context.root_values
+        ],
+        "Suggested Vars": [
+            template.model_dump(
+                mode="json",
+                exclude={
+                    "available_fields": {"__all__": {"methods"}},
+                },
+            )
+            for template in context.var_templates
+        ],
+        "Available Methods by Type": _prompt_method_catalog(context),
         "Expression Patterns": context.expression_patterns,
         "Warnings": context.warnings,
     }
@@ -192,6 +209,33 @@ def _summarize_typed_context_json(
     if len(rendered) > MAX_TYPED_CONTEXT_JSON_CHARS:
         raise ValueError("TYPED_EXPRESSION_CONTEXT_TOO_LARGE")
     return rendered
+
+
+def _prompt_method_catalog(context: TypedExpressionContext) -> list[dict[str, Any]]:
+    methods_by_type: dict[str, list[str]] = {}
+
+    def add(owner_type: str, methods: list[str]) -> None:
+        if not methods:
+            return
+        collected = methods_by_type.setdefault(owner_type, [])
+        for method in methods:
+            if method not in collected:
+                collected.append(method)
+
+    for view in context.method_catalog:
+        add(view.owner_type, view.methods)
+    for root in context.root_values:
+        add(root.return_type, root.methods)
+        for field in root.fields:
+            add(field.return_type, field.methods)
+    for template in context.var_templates:
+        for field in template.available_fields:
+            add(field.return_type, field.methods)
+
+    return [
+        {"owner_type": owner_type, "methods": methods}
+        for owner_type, methods in methods_by_type.items()
+    ]
 
 
 def _summarize_expression_scope_json(

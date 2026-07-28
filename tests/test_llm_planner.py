@@ -118,7 +118,12 @@ class LLMPlannerTest(unittest.TestCase):
                             access="$ctx$.address.addr1",
                             return_type="basic.String",
                             methods=["length(): basic.int"],
-                        )
+                        ),
+                        TypedAccessView(
+                            access="$ctx$.address.addr2",
+                            return_type="basic.String",
+                            methods=["length(): basic.int"],
+                        ),
                     ],
                 )
             ],
@@ -127,14 +132,17 @@ class LLMPlannerTest(unittest.TestCase):
                     var_name="it",
                     definition_expr="fetch_one(E_QUERY_CHARGE)",
                     return_type="bo.BB_BILL_CHARGE",
+                    available_fields=[
+                        TypedAccessView(
+                            access="it.DESCRIPTION",
+                            return_type="basic.String",
+                            methods=["length(): basic.int"],
+                        )
+                    ],
                 )
             ],
-            method_catalog=[
-                TypedMethodView(
-                    owner_type="basic.String",
-                    methods=["length(): basic.int"],
-                )
-            ],
+            # Simulate max_items retaining fields but trimming the catalog.
+            method_catalog=[],
             expression_patterns=[
                 TypedExpressionPattern(
                     name="naming_sql_fetch_one",
@@ -157,6 +165,10 @@ class LLMPlannerTest(unittest.TestCase):
         self.assertIn('"Available Methods by Type"', prompt)
         self.assertIn('"Expression Patterns"', prompt)
         self.assertIn("$ctx$.address.addr1", prompt)
+        self.assertIn("$ctx$.address.addr2", prompt)
+        self.assertIn("it.DESCRIPTION", prompt)
+        self.assertIn('"owner_type":"basic.String"', prompt)
+        self.assertEqual(prompt.count("length(): basic.int"), 1)
 
     def test_plan_and_repair_prompts_preserve_expression_scope_and_skills(self):
         client = FakeClient(

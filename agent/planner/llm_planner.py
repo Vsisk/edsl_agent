@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import asdict
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from pydantic import ValidationError
 
@@ -14,10 +14,6 @@ from agent.llm.generate_by_llm import generate_by_llm
 from agent.llm.llm_client import LLMClient
 from agent.models import NodeDef
 from agent.planner.models import LEGACY_PLAN_SCHEMA, Plan
-from agent.naming_sql_selector.plan_validator import validate_naming_sql_plan
-
-if TYPE_CHECKING:
-    from agent.naming_sql_selector.models import NamingSqlSelectResponse
 
 MAX_SUMMARY_TEXT = 512
 MAX_SUMMARY_ITEMS = 100
@@ -84,8 +80,6 @@ class LLMPlanner:
                 retry_feedback_json=_dump_json(retry_feedback or {}),
             )
             plan = Plan.model_validate(response)
-            if filtered_env.naming_sql_selection is not None:
-                validate_naming_sql_plan(plan, filtered_env.naming_sql_selection)
             return plan
         except (ValueError, ValidationError) as exc:
             invalid_plan_json = _invalid_plan_diagnostic(locals().get("response", {}))
@@ -117,7 +111,7 @@ class LLMPlanner:
         plan_schema_json: str,
         invalid_plan_json: str,
         error_message: str,
-        naming_sql_selection: NamingSqlSelectResponse | None,
+        naming_sql_selection: list[Any],
         retry_feedback_json: str,
     ) -> Plan:
         response = generate_by_llm(
@@ -137,8 +131,6 @@ class LLMPlanner:
             retry_feedback_json=retry_feedback_json,
         )
         plan = Plan.model_validate(response)
-        if naming_sql_selection is not None:
-            validate_naming_sql_plan(plan, naming_sql_selection)
         return plan
 
 
@@ -159,7 +151,7 @@ def _summarize_filtered_environment(filtered_env: FilteredEnvironment) -> dict[s
         "function": [],
     }
     selection = filtered_env.naming_sql_selection
-    if selection is not None:
+    if selection:
         summary["naming_sql_selection"] = _summarize_naming_sql_selection(selection)
         if len(_dump_json(summary)) > MAX_RESOURCES_JSON_CHARS:
             raise ValueError("NAMING_SQL_SELECTION_TOO_LARGE")
@@ -173,7 +165,7 @@ def _summarize_filtered_environment(filtered_env: FilteredEnvironment) -> dict[s
     for group_name, resources, summarize in groups:
         for resource in resources[:MAX_SUMMARY_ITEMS]:
             item = summarize(resource)
-            if selection is not None and group_name == "bo":
+            if selection and group_name == "bo":
                 item.pop("naming_sql", None)
             summary[group_name].append(item)
             if len(_dump_json(summary)) > MAX_RESOURCES_JSON_CHARS:
@@ -247,46 +239,23 @@ def _bounded_typed_value(value: Any, depth: int = 0) -> Any:
 
 
 def _summarize_naming_sql_selection(selection: Any) -> dict[str, Any]:
-    if not selection.success:
-        raise ValueError("NAMING_SQL_SELECTION_FAILED")
-    candidates = []
-    for candidate in selection.candidates[:20]:
-        candidates.append({
-            "bo": _selection_text(candidate.bo_name, MAX_SELECTION_BO_NAME),
-            "id": _selection_text(candidate.naming_sql_id, MAX_SELECTION_SQL_NAME),
-            "name": _selection_text(candidate.naming_sql_name, MAX_SELECTION_SQL_NAME),
-            "rank": candidate.rank,
-            "params": [
-                {
-                    "name": _selection_text(item.get("param_name") or item.get("name"), MAX_SELECTION_PARAM_NAME),
-                    "type": _selection_text(item.get("data_type_name") or item.get("data_type"), MAX_SELECTION_PARAM_NAME),
-                }
-                for item in candidate.param_list[:MAX_SUMMARY_ITEMS] if isinstance(item, dict)
-            ],
-            "return_type": _bounded_json_value(candidate.return_type),
-            "evidence": [_selection_text(item, MAX_SUMMARY_TEXT) for item in candidate.evidence[:10]],
-        })
-    hints = [{
-        "semantic_name": _selection_text(hint.semantic_name, MAX_SUMMARY_TEXT),
-        "expected_data_type": _selection_text(hint.expected_data_type, MAX_SUMMARY_TEXT),
-        "expected_data_type_name": _selection_text(hint.expected_data_type_name, MAX_SUMMARY_TEXT),
-        "source_hint": _selection_text(hint.source_hint, MAX_SUMMARY_TEXT),
-        "candidate_context_paths": [_selection_text(path, MAX_SELECTION_SOURCE_REF) for path in hint.candidate_context_paths[:20]],
-    } for hint in selection.context_requirements_hint[:MAX_SUMMARY_ITEMS]]
-    constraints = selection.selection_constraints
     return {
-        "candidates": candidates,
-        "hints": hints,
-        "constraints": None if constraints is None else {
-            "allowed_bo_names": [_selection_text(value, MAX_SELECTION_BO_NAME) for value in constraints.allowed_bo_names[:20]],
-            "allowed_naming_sql_ids": [_selection_text(value, MAX_SELECTION_SQL_NAME) for value in constraints.allowed_naming_sql_ids[:20]],
-            "max_candidates": constraints.max_candidates,
-        },
-        "evidence_trace": [{
-            "source": _safe_evidence_text(item.source, MAX_SELECTION_EVIDENCE_SOURCE),
-            "action": _safe_evidence_text(item.action, MAX_SELECTION_EVIDENCE_ACTION),
-            "evidence": _safe_evidence_text(item.evidence, MAX_SELECTION_EVIDENCE_TEXT),
-        } for item in selection.evidence_trace[:MAX_SELECTION_EVIDENCE_ITEMS]],
+        "candidates": [
+            {
+                "bo": _selection_text(profile.bo_name, MAX_SELECTION_BO_NAME),
+                "name": _selection_text(profile.namingsql_name, MAX_SELECTION_SQL_NAME),
+                "where_conditions": [
+                    _selection_text(value, MAX_SUMMARY_TEXT)
+                    for value in profile.where_conditions
+                ],
+                "return_fields": [
+                    _selection_text(value, MAX_SELECTION_PARAM_NAME)
+                    for value in profile.return_fields
+                ],
+                "performance_optimized": profile.performance_optimized,
+            }
+            for profile in selection[:20]
+        ]
     }
 
 

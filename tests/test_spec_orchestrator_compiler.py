@@ -143,7 +143,7 @@ def test_compiler_builds_compatible_naming_sql_selection_and_trimmed_bo():
 
     selection = compiled.filtered_environment.naming_sql_selection
     assert selection is not None
-    assert selection.candidates[0].naming_sql_id == "sql.by_invoice"
+    assert selection[0].namingsql_name == "QUERY_BY_INVOICE"
     assert compiled.filtered_environment.selected_bos[0].naming_sql_list == [sql]
     assert compiled.filtered_environment.selected_bos[0].property_list == []
     assert "INVOICE_ID" in compiled.expression_spec.nl

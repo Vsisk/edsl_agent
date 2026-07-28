@@ -1,4 +1,3 @@
-from agent.context_manager.models import NamingSqlCandidate
 from agent.context_pack.models import ContextPack
 from agent.environment.environment import FilteredEnvironment
 from agent.expression_generation.type_system import (
@@ -12,7 +11,7 @@ from agent.expression_generation.typed_context import (
     TypedExpressionContextBuilder,
 )
 from agent.models import NodeDef
-from agent.naming_sql_selector.models import NamingSqlSelectResponse, SelectionMode
+from agent.naming_sql_selector import NamingSqlProfile
 from agent.resource_manager.loader.registry_models import (
     BoRegistry,
     ContextRegistry,
@@ -195,17 +194,14 @@ def test_builder_expands_context_logic_and_extattr_data_type_defs():
 
 def test_builder_uses_it_for_naming_sql_owning_bo_fields():
     bo = charge_bo()
-    candidate = NamingSqlCandidate(
-        candidate_id="candidate.charge",
+    candidate = NamingSqlProfile(
         bo_name=bo.bo_name,
-        naming_sql_id="E_QUERY_CHARGE",
-        naming_sql_name="E_QUERY_CHARGE",
-        return_type={"data_type": "bo", "data_type_name": bo.bo_name, "is_list": False},
-        source="resource_registry",
-        rank=0,
+        namingsql_name="E_QUERY_CHARGE",
+        return_fields=["CHARGE_AMT"],
+        where_conditions=[],
+        performance_optimized=False,
     )
-    selection = NamingSqlSelectResponse(success=True, selection_mode=SelectionMode.DETERMINISTIC_FALLBACK,
-                                        candidates=[candidate])
+    selection = [candidate]
     context = TypedExpressionContextBuilder().build(
         build_input(
             filtered_env=FilteredEnvironment(selected_bos=[bo], naming_sql_selection=selection),
@@ -221,7 +217,7 @@ def test_builder_uses_it_for_naming_sql_owning_bo_fields():
     assert charge_amount.methods == ["long2str(): basic.String"]
 
 
-def test_builder_binds_naming_sql_condition_from_owning_bo_field():
+def test_builder_does_not_bind_naming_sql_parameters():
     bo = charge_bo()
     context_value = ContextRegistry(
         resource_id="ctx.charge_amount",
@@ -230,18 +226,14 @@ def test_builder_binds_naming_sql_condition_from_owning_bo_field():
         property_type="system",
         annotation="charge amount",
     )
-    candidate = NamingSqlCandidate(
-        candidate_id="candidate.bound",
+    candidate = NamingSqlProfile(
         bo_name=bo.bo_name,
-        naming_sql_id="E_QUERY_CHARGE",
-        naming_sql_name="E_QUERY_CHARGE",
-        param_list=[{"param_name": "CHARGE_AMT", "data_type_name": "long"}],
-        return_type={"data_type": "bo", "data_type_name": bo.bo_name, "is_list": False},
-        source="resource_registry",
-        rank=0,
+        namingsql_name="E_QUERY_CHARGE",
+        return_fields=["CHARGE_AMT"],
+        where_conditions=["CHARGE_AMT = :amount"],
+        performance_optimized=False,
     )
-    selection = NamingSqlSelectResponse(success=True, selection_mode=SelectionMode.DETERMINISTIC_FALLBACK,
-                                        candidates=[candidate])
+    selection = [candidate]
 
     result = TypedExpressionContextBuilder().build(
         build_input(
@@ -254,9 +246,7 @@ def test_builder_binds_naming_sql_condition_from_owning_bo_field():
         )
     )
 
-    assert result.var_templates[0].definition_expr == (
-        "fetch_one(E_QUERY_CHARGE, pair(it.CHARGE_AMT, $ctx$.chargeAmt))"
-    )
+    assert result.var_templates[0].definition_expr == "fetch_one(E_QUERY_CHARGE)"
 
 
 def test_builder_warns_and_skips_context_without_return_type():

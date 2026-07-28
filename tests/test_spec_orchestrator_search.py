@@ -1,4 +1,4 @@
-from agent.naming_sql_selector.retrieval import NamingSqlCandidateRetriever
+from agent.naming_sql_selector import NamingSqlSelector
 from agent.resource_manager.loader.registry_models import (
     BoRegistry,
     ContextRegistry,
@@ -159,7 +159,7 @@ def test_relation_search_uses_key_name_and_type_compatibility():
 def test_naming_sql_and_function_candidates_expose_real_inputs():
     loaded = _loaded_resource()
     search = OrchestratorResourceSearch(
-        loaded, naming_sql_retriever=NamingSqlCandidateRetriever()
+        loaded, naming_sql_retriever=NamingSqlSelector()
     )
     sql_request = GoalSearchRequest(
         goal=_goal("账单客户组", "BB_BILL_CUSTGRP"),

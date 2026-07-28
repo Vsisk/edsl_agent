@@ -15,7 +15,6 @@ from agent.expression_generation.type_system import (
     normalize_return_type,
 )
 from agent.models import NodeDef
-from agent.naming_sql_selector.models import NamingSqlSelectResponse
 from agent.resource_manager.loader.registry_models import BoRegistry
 from agent.resource_manager.loader.resource_loader import LoadedResource
 
@@ -72,11 +71,6 @@ class TypedExpressionContextBuildInput(BaseModel):
     max_items: int = Field(default=80, ge=1)
 
 
-TypedExpressionContextBuildInput.model_rebuild(
-    _types_namespace={"NamingSqlSelectResponse": NamingSqlSelectResponse}
-)
-
-
 class TypedExpressionContextBuilder:
     def build(self, build_input: TypedExpressionContextBuildInput) -> TypedExpressionContext:
         self._input = build_input
@@ -125,9 +119,9 @@ class TypedExpressionContextBuilder:
             if bo is not None:
                 bos[bo.bo_name] = bo
         selection = self._input.filtered_env.naming_sql_selection
-        if selection is not None:
-            for candidate in selection.candidates:
-                bo = self._resolve_bo(candidate.bo_name)
+        if selection:
+            for profile in selection:
+                bo = self._resolve_bo(profile.bo_name)
                 if bo is not None:
                     bos[bo.bo_name] = bo
         for bo in bos.values():
@@ -244,72 +238,34 @@ class TypedExpressionContextBuilder:
 
     def _build_naming_sql_templates(self) -> list[TypedVarTemplate]:
         selection = self._input.filtered_env.naming_sql_selection
-        if selection is None:
+        if not selection:
             return []
         templates: list[TypedVarTemplate] = []
-        for candidate in selection.candidates:
-            bo = self._resolve_bo(candidate.bo_name)
-            type_ref = normalize_return_type(candidate.return_type)
-            if bo is None or type_ref.kind == "unknown":
-                self._warnings.append(
-                    f"missing return_type for naming_sql {candidate.naming_sql_id}"
-                )
+        for profile in selection:
+            bo = self._resolve_bo(profile.bo_name)
+            if bo is None:
+                self._warnings.append(f"missing BO for naming_sql {profile.namingsql_name}")
                 continue
-            definition_name = candidate.naming_sql_name or candidate.naming_sql_id
-            definition_expr = self._naming_sql_definition(candidate, bo, definition_name)
+            type_ref = TypeRef(kind="bo", name=bo.bo_name)
+            definition_name = profile.namingsql_name
+            definition_expr = f"fetch_one({definition_name})"
             templates.append(
                 TypedVarTemplate(
                     var_name="it",
                     definition_expr=definition_expr,
                     return_type=render_type(type_ref),
-                    available_fields=self._expand_fields("it", type_ref, set()),
+                    available_fields=[
+                        TypedAccessView(
+                            access=f"it.{field.field_name}",
+                            return_type=render_type(normalize_return_type(field)),
+                            methods=self._methods(normalize_return_type(field)),
+                        )
+                        for field in bo.property_list
+                        if field.field_name in profile.return_fields
+                    ],
                 )
             )
         return templates
-
-    def _naming_sql_definition(
-        self,
-        candidate: Any,
-        bo: BoRegistry,
-        definition_name: str,
-    ) -> str:
-        pairs: list[str] = []
-        bo_fields = {
-            _normalized_name(prop.field_name): prop.field_name
-            for prop in bo.property_list
-        }
-        context_paths = [
-            resource.context_name
-            for resource in [
-                *self._input.filtered_env.selected_global_contexts,
-                *self._input.filtered_env.visible_local_context,
-            ]
-        ]
-        contexts_by_name = {
-            _normalized_name(path.rsplit(".", 1)[-1]): path
-            for path in context_paths
-        }
-        for parameter in candidate.param_list:
-            if not isinstance(parameter, dict):
-                continue
-            param_name = str(parameter.get("param_name") or parameter.get("name") or "")
-            normalized = _normalized_name(param_name)
-            bo_field = bo_fields.get(normalized)
-            if bo_field is None:
-                self._warnings.append(
-                    f"unbound naming_sql BO field {candidate.naming_sql_id}.{param_name}"
-                )
-                continue
-            context_path = contexts_by_name.get(normalized)
-            if context_path is None:
-                self._warnings.append(
-                    f"unbound naming_sql context {candidate.naming_sql_id}.{param_name}"
-                )
-                continue
-            pairs.append(f"pair(it.{bo_field}, {context_path})")
-        if not pairs:
-            return f"fetch_one({definition_name})"
-        return f"fetch_one({definition_name}, {', '.join(pairs)})"
 
     def _build_patterns(
         self,

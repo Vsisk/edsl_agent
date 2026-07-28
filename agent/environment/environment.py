@@ -2,10 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from difflib import SequenceMatcher
-from typing import TYPE_CHECKING, Any, List
-
-if TYPE_CHECKING:
-    from agent.naming_sql_selector.models import NamingSqlSelectResponse
+from typing import Any, List
 
 from agent.environment.resource_filter import BOFilter, ContextFilter, FunctionFilter, LLMResourceFilter, NamingSQLFilter
 from agent.environment.resource_search_tool import ResourceKeywordSearchTool
@@ -20,6 +17,8 @@ from agent.resource_manager.loader.registry_models import (
     LocalContextRegistry,
     SourceType,
 )
+from agent.naming_sql_selector.namingsql_profile_loader import NamingSqlProfile, NamingSqlProfileLoader
+from agent.naming_sql_selector.namingsql_seletor import NamingSqlSelector
 
 
 @dataclass(slots=True)
@@ -33,7 +32,7 @@ class FilteredEnvironment:
     selected_bos: List[BoRegistry] = field(default_factory=list)
     selected_functions: List[FunctionRegistry] = field(default_factory=list)
     selection_trace: list[dict[str, Any]] = field(default_factory=list)
-    naming_sql_selection: NamingSqlSelectResponse | None = None
+    naming_sql_selection: list[NamingSqlProfile] = field(default_factory=list)
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,6 +57,9 @@ def filter_resources(
     targets: list[FilterTarget],
     loaded_resource: LoadedResource,
     resource_limits: dict[str, int],
+    query: str = "",
+    select_namingsql: bool = False,
+    namingsql_selector: NamingSqlSelector | None = None,
 ) -> FilteredEnvironment:
     if not targets:
         return FilteredEnvironment(selection_trace=[{"reason": "FILTER_TARGET_EMPTY"}])
@@ -106,7 +108,7 @@ def filter_resources(
         for target in targets
     ]
 
-    return FilteredEnvironment(
+    environment = FilteredEnvironment(
         selected_global_context_ids=[context.resource_id for context in context_resources],
         selected_bo_ids=[bo.resource_id for bo in selected_bos],
         selected_function_ids=[function.resource_id for function in function_resources],
@@ -115,6 +117,65 @@ def filter_resources(
         selected_functions=function_resources,
         selection_trace=selection_trace,
     )
+    if select_namingsql or namingsql_targets:
+        apply_namingsql_selection(
+            environment,
+            query=query,
+            loaded_resource=loaded_resource,
+            top_k=resource_limits.get("namingsql_count", resource_limits.get("top_bo", 5)),
+            selector=namingsql_selector,
+        )
+    return environment
+
+
+def apply_namingsql_selection(
+    environment: FilteredEnvironment,
+    *,
+    query: str,
+    loaded_resource: LoadedResource,
+    top_k: int = 5,
+    selector: NamingSqlSelector | None = None,
+) -> FilteredEnvironment:
+    profiles = NamingSqlProfileLoader().load(loaded_resource.bo_registry)
+    selected_profiles = (selector or NamingSqlSelector()).select(
+        query=query,
+        profiles=profiles,
+        top_k=top_k,
+    )
+    environment.naming_sql_selection = selected_profiles
+    environment.selected_bos = _bos_for_namingsql_profiles(
+        environment.selected_bos,
+        loaded_resource,
+        selected_profiles,
+    )
+    environment.selected_bo_ids = [bo.resource_id for bo in environment.selected_bos]
+    return environment
+
+
+def _bos_for_namingsql_profiles(
+    selected_bos: list[BoRegistry],
+    loaded_resource: LoadedResource,
+    profiles: list[NamingSqlProfile],
+) -> list[BoRegistry]:
+    by_name = {bo.bo_name: bo for bo in selected_bos}
+    names_by_bo: dict[str, set[str]] = {}
+    for profile in profiles:
+        names_by_bo.setdefault(profile.bo_name, set()).add(profile.namingsql_name)
+    for bo_name, sql_names in names_by_bo.items():
+        source = loaded_resource.bo_registry.get(bo_name)
+        if source is None:
+            continue
+        existing = by_name.get(bo_name, source)
+        by_name[bo_name] = existing.model_copy(
+            update={
+                "property_list": list(source.property_list),
+                "naming_sql_list": [
+                    item for item in source.naming_sql_list if item.sql_name in sql_names
+                ],
+            },
+            deep=True,
+        )
+    return list(by_name.values())
 
 
 def preserve_structural_local_context(

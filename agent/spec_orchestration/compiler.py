@@ -3,10 +3,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from agent.context_manager.models import NamingSqlCandidate
 from agent.environment.environment import FilteredEnvironment
 from agent.expression_generation.expression_spec import ExpressionSpec
-from agent.naming_sql_selector.models import NamingSqlSelectResponse, SelectionMode
+from agent.naming_sql_selector.namingsql_profile_loader import NamingSqlProfileLoader
 from agent.resource_manager.loader.registry_models import (
     BoRegistry,
     ContextRegistry,
@@ -165,26 +164,18 @@ def _context_path(resource: Any) -> str:
     return "context"
 
 
-def _naming_selection(resolutions: list[ResolvedGoal]) -> NamingSqlSelectResponse:
-    candidates = []
-    for rank, item in enumerate(resolutions, start=1):
+def _naming_selection(resolutions: list[ResolvedGoal]) -> list:
+    profiles = []
+    loader = NamingSqlProfileLoader()
+    seen = set()
+    for item in resolutions:
         sql = item.candidate.resource
-        candidates.append(
-            NamingSqlCandidate(
-                candidate_id=item.candidate.candidate_id,
-                bo_name=item.candidate.bo_name or "",
-                naming_sql_id=sql.naming_sql_id,
-                naming_sql_name=sql.sql_name,
-                annotation=sql.sql_description or "",
-                param_list=[param.model_dump(mode="json") for param in sql.param_list],
-                return_type=item.candidate.return_type.model_dump(mode="json"),
-                source="resource_registry",
-                rank=rank,
-                evidence=list(item.candidate.evidence),
-            )
-        )
-    return NamingSqlSelectResponse(
-        success=True,
-        selection_mode=SelectionMode.DETERMINISTIC_FALLBACK,
-        candidates=candidates,
-    )
+        bo = item.candidate.metadata.get("bo")
+        if not isinstance(bo, BoRegistry):
+            continue
+        for profile in loader.load_bo(bo):
+            key = (profile.bo_name, profile.namingsql_name)
+            if profile.namingsql_name == sql.sql_name and key not in seen:
+                seen.add(key)
+                profiles.append(profile)
+    return profiles

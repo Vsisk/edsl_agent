@@ -8,6 +8,7 @@ from collections.abc import Callable
 from typing import Any
 
 from agent.environment.environment import (
+    apply_namingsql_selection,
     build_filtered_environment,
     filter_resources,
     preserve_structural_local_context,
@@ -34,13 +35,7 @@ from agent.expression_generation.expression_type_validation import SimpleExpress
 from agent.expression_generation.expression_spec import ExpressionSpec
 from agent.expression_generation.edsl_expression_parser import EDSLExpressionParser
 from agent.models import NodeDef, ValueLogicRequest, ValueLogicResult, ValueLogicSource, ValueReturnType
-from agent.naming_sql_selector import (
-    NamingSqlSelectRequest,
-    NamingSqlSelector,
-    validate_naming_sql_plan,
-)
-from agent.naming_sql_selector.selector import KNOWN_CONTEXT_ERROR_CODES
-from agent.naming_sql_selector.retrieval import NamingSqlCandidateRetriever
+from agent.naming_sql_selector.namingsql_seletor import NamingSqlSelector
 from agent.context_pack import (
     ContextPack, ContextPackRequest, FastContextResourceRouter, ProjectContext,
     create_context_pack_manager,
@@ -407,8 +402,6 @@ class ValueLogicGenerator:
                 parsed_plan = EDSLExpressionParser(typed_context).parse_plan(plan)
             except (ValueError, TypeError) as exc:
                 return self._simple_plan_failure(request, typed_context, plan, "PARSE_FAILED", exc)
-            if naming_sql_selection is not None:
-                validate_naming_sql_plan(parsed_plan, naming_sql_selection)
             try:
                 ast = build_ast(parsed_plan)
             except (ValueError, TypeError) as exc:
@@ -438,8 +431,6 @@ class ValueLogicGenerator:
                 }
             expression = generate_expression(ast)
         else:
-            if naming_sql_selection is not None:
-                validate_naming_sql_plan(plan, naming_sql_selection)
             ast = build_ast(plan)
             validate_ast(ast)
             expression = generate_expression(ast)
@@ -496,30 +487,17 @@ class ValueLogicGenerator:
             loaded_resource=ctx.resources.loaded,
             node_path=request.node_path,
         )
-        naming_sql_selection = None
         if requires_naming_sql(
             request.structured_spec, request.query, expression_spec.nl, request.node, request.parent_node
         ):
-            selection_request = NamingSqlSelectRequest(
-                site_id=request.site_id,
-                project_id=request.project_id,
+            apply_namingsql_selection(
+                filtered_env,
                 query=request.query or expression_spec.nl,
-                node=request.node,
-                json_path=request.node_path,
-                context_pack=ctx.context_pack,
-                target_bo_name=self._requested_bo_name(request),
-                parent_bo_hint=self._extract_parent_sql_bo_name(request.parent_node),
-                target_logic_area_id_list=_string_list(request.node.get("reference_logic_area_id_list")),
+                loaded_resource=ctx.resources.loaded,
                 top_k=DEFAULT_RESOURCE_LIMIT,
+                selector=self.naming_sql_selector_factory(ctx.resources.loaded),
             )
-            selector_result = self.naming_sql_selector_factory(ctx.resources.loaded).select(selection_request)
-            if not selector_result.success:
-                failure_reason = selector_result.failure_reason
-                if failure_reason in KNOWN_CONTEXT_ERROR_CODES:
-                    raise ValueError(failure_reason)
-                raise ValueError("NAMING_SQL_SELECTION_FAILED")
-            naming_sql_selection = selector_result.model_copy(deep=True)
-            filtered_env.naming_sql_selection = naming_sql_selection.model_copy(deep=True)
+        naming_sql_selection = filtered_env.naming_sql_selection or None
         return expression_spec, filtered_env, naming_sql_selection
 
     def _simple_plan_failure(self, request, typed_context, plan, error_type, error, parsed_plan=None):
@@ -826,8 +804,7 @@ def _resource_count_summary(loaded_resource: LoadedResource) -> dict[str, int]:
 
 
 def _default_naming_sql_selector_factory(loaded_resource: LoadedResource) -> NamingSqlSelector:
-    """Build request-scoped selector dependencies around the current resource snapshot."""
-    return NamingSqlSelector(loaded_resource)
+    return NamingSqlSelector()
 
 
 def _default_spec_orchestrator_factory(
@@ -837,7 +814,7 @@ def _default_spec_orchestrator_factory(
         semantic=SpecSemanticGateway(),
         search=OrchestratorResourceSearch(
             loaded_resource,
-            naming_sql_retriever=NamingSqlCandidateRetriever(),
+            naming_sql_retriever=NamingSqlSelector(),
         ),
     )
 

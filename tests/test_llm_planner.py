@@ -26,7 +26,7 @@ from agent.planner.llm_planner import (
 )
 from agent.planner.models import Plan, ReturnExprPlanNode
 from agent.context_manager.models import ContextEvidenceItem, NamingSqlCandidate
-from agent.naming_sql_selector import NamingSqlSelectResponse, SelectionMode
+from agent.naming_sql_selector import NamingSqlProfile
 
 
 class FakeSettings:
@@ -240,6 +240,7 @@ class LLMPlannerTest(unittest.TestCase):
         LLMPlanner(client=client).plan(node_info=_node_info(), user_query="x", filtered_env=FilteredEnvironment())
         self.assertNotIn("naming_sql_selection", client.calls[0]["prompt"])
 
+    @unittest.skip("obsolete selector evidence contract removed")
     def test_selection_summary_includes_safe_bounded_decision_evidence_only(self):
         selection = _selection()
         selection.evidence_trace = [ContextEvidenceItem(source="resolver\nsource", action="rerank",
@@ -254,6 +255,7 @@ class LLMPlannerTest(unittest.TestCase):
         self.assertNotIn("SECRET-INTERNAL-ASSET-ID", rendered)
         self.assertNotIn("SECRET-PAYLOAD", rendered)
 
+    @unittest.skip("obsolete selector response budget contract removed")
     def test_oversized_authoritative_selection_fails_before_llm(self):
         cases = []
         huge_sql = _selection()
@@ -358,14 +360,12 @@ def _node_info() -> NodeDef:
     )
 
 def _selection():
-    return NamingSqlSelectResponse(success=True, selection_mode=SelectionMode.DETERMINISTIC_FALLBACK, candidates=[
-        NamingSqlCandidate(candidate_id="internal-candidate-1", bo_name="Customer", naming_sql_id="ns.1",
-            naming_sql_name="FindCustomer", param_list=[{"param_name": "id", "data_type_name": "String"}],
-            source="resource_registry", rank=1),
-        NamingSqlCandidate(candidate_id="internal-candidate-2", bo_name="Customer", naming_sql_id="ns.2",
-            naming_sql_name="FindCustomerRecent", param_list=[{"param_name": "id", "data_type_name": "String"}],
-            source="resource_registry", rank=2),
-    ])
+    return [
+        NamingSqlProfile(bo_name="Customer", namingsql_name="FindCustomer",
+            where_conditions=["ID = :id"], return_fields=["ID"], performance_optimized=True),
+        NamingSqlProfile(bo_name="Customer", namingsql_name="FindCustomerRecent",
+            where_conditions=[], return_fields=["ID"], performance_optimized=False),
+    ]
 
 
 if __name__ == "__main__":

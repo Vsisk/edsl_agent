@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from agent.naming_sql_selector.context_adapter import NamingSqlSelectionContext
+from agent.naming_sql_selector.namingsql_profile_loader import NamingSqlProfileLoader
 from agent.resource_manager.loader.registry_models import (
     DataTypeEnum,
     ReturnType,
@@ -160,18 +160,14 @@ class OrchestratorResourceSearch:
                 request.target_field_name or "",
             ]
             query = " ".join(item for item in query_terms if item)
-            context = NamingSqlSelectionContext(
-                query_terms=[item for item in query_terms if item]
-            )
-            retrieval = self.naming_sql_retriever.retrieve(
+            profiles = NamingSqlProfileLoader().load_bo(bo)
+            selected = self.naming_sql_retriever.select(
                 query=query,
-                context=context,
-                loaded_resource=self.loaded_resource,
-                target_bo_name=target_bo_name,
+                profiles=profiles,
                 top_k=request.limit,
             )
-            selected_ids = {item.naming_sql_id for item in retrieval.candidates}
-            sql_defs = [item for item in sql_defs if item.naming_sql_id in selected_ids]
+            selected_names = {item.namingsql_name for item in selected}
+            sql_defs = [item for item in sql_defs if item.sql_name in selected_names]
         result = []
         for sql in sql_defs:
             text = " ".join(

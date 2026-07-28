@@ -283,3 +283,114 @@ def test_bo_field_creates_bo_access_dependency_before_commit():
     )
     assert bo_access_request.target_bo_name == "BO_CUSTOMER"
     assert bo_access_request.target_field_name == "NAME"
+    assert not any(
+        request.tier == ResourceTier.BO_SELECT
+        for request in search.requests
+    )
+
+
+def test_bo_field_falls_back_to_select_one_and_recursively_resolves_key():
+    field = ResourceCandidate(
+        candidate_id="bo.customer:field:NAME",
+        kind="bo_field",
+        resource={"bo": "BO_CUSTOMER"},
+        bo_name="BO_CUSTOMER",
+        field_name="NAME",
+        return_type=ReturnType(
+            data_type="basic", data_type_name="string", is_list=False
+        ),
+    )
+    select_one = ResourceCandidate(
+        candidate_id="select_one:BO_CUSTOMER:CUSTOMER_ID",
+        kind="bo_select",
+        resource={"bo": "BO_CUSTOMER"},
+        bo_name="BO_CUSTOMER",
+        field_name="NAME",
+        return_type=ReturnType(
+            data_type="bo", data_type_name="BO_CUSTOMER", is_list=False
+        ),
+        required_inputs=[
+            ResourceInput(
+                name="CUSTOMER_ID",
+                return_type=ReturnType(
+                    data_type="key", data_type_name="long", is_list=False
+                ),
+            )
+        ],
+        metadata={
+            "operation": "select_one",
+            "condition_fields": ["CUSTOMER_ID"],
+        },
+    )
+    unsuitable_sql = ResourceCandidate(
+        candidate_id="naming_sql:BO_CUSTOMER:by_status",
+        kind="naming_sql",
+        resource={"sql_name": "QUERY_BY_STATUS"},
+        bo_name="BO_CUSTOMER",
+        return_type=ReturnType(
+            data_type="bo", data_type_name="BO_CUSTOMER", is_list=False
+        ),
+    )
+    key_context = _candidate(
+        "ctx.customer_id",
+        kind="context",
+        type_name="long",
+    )
+    semantic = FakeSemantic(
+        _goal("客户名称"),
+        {
+            ("客户名称", ResourceTier.BO_FIELD): CoverageDecision(
+                kind=CoverageKind.DIRECT_COVER,
+                selected_candidate_id=field.candidate_id,
+                reason="target field",
+            ),
+            ("BO_CUSTOMER", ResourceTier.BO_ACCESS): CoverageDecision(
+                kind=CoverageKind.NOT_COVER,
+                continue_search=True,
+                reason="NamingSQL conditions do not match query",
+            ),
+            ("BO_CUSTOMER", ResourceTier.BO_SELECT): CoverageDecision(
+                kind=CoverageKind.DEPENDENCY_COVER,
+                selected_candidate_id=select_one.candidate_id,
+                missing_inputs=["CUSTOMER_ID"],
+                reason="fallback by primary key",
+            ),
+            ("CUSTOMER_ID", ResourceTier.VISIBLE_VALUE): CoverageDecision(
+                kind=CoverageKind.DIRECT_COVER,
+                selected_candidate_id=key_context.candidate_id,
+                reason="context provides primary key",
+            ),
+        },
+    )
+    search = FakeSearch(
+        {
+            ("客户名称", ResourceTier.BO_FIELD): [field],
+            ("BO_CUSTOMER", ResourceTier.BO_ACCESS): [unsuitable_sql],
+            ("BO_CUSTOMER", ResourceTier.BO_SELECT): [select_one],
+            ("CUSTOMER_ID", ResourceTier.VISIBLE_VALUE): [key_context],
+        }
+    )
+
+    result = SpecOrchestrator(semantic=semantic, search=search).resolve(
+        node_info={"node_name": "客户名称"},
+        query="生成客户名称",
+        expected_type=_goal("x").expected_type,
+    )
+
+    bo_resolution = result.root_resolution.dependencies[0]
+    assert bo_resolution.candidate.kind == "bo_select"
+    assert bo_resolution.candidate.metadata["operation"] == "select_one"
+    assert bo_resolution.dependencies[0].candidate.candidate_id == "ctx.customer_id"
+    assert bo_resolution.dependencies[0].goal.role == GoalRole.FILTER_VALUE
+    assert (
+        bo_resolution.bindings["CUSTOMER_ID"]
+        == bo_resolution.dependencies[0].goal.goal_id
+    )
+    bo_tiers = [
+        request.tier
+        for request in search.requests
+        if request.goal.semantic_name == "BO_CUSTOMER"
+    ]
+    assert bo_tiers.index(ResourceTier.BO_ACCESS) < bo_tiers.index(
+        ResourceTier.BO_SELECT
+    )

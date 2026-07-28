@@ -29,6 +29,7 @@ class ResourceTier(str, Enum):
     VISIBLE_VALUE = "visible_value"
     BO_FIELD = "bo_field"
     BO_ACCESS = "bo_access"
+    BO_SELECT = "bo_select"
     FUNCTION = "function"
     FALLBACK = "fallback"
 
@@ -37,6 +38,7 @@ RESOURCE_TIER_ORDER = (
     ResourceTier.VISIBLE_VALUE,
     ResourceTier.BO_FIELD,
     ResourceTier.BO_ACCESS,
+    ResourceTier.BO_SELECT,
     ResourceTier.FUNCTION,
     ResourceTier.FALLBACK,
 )
@@ -96,6 +98,7 @@ class GoalSearchRequest(BaseModel):
     negative_keywords: list[str] = Field(default_factory=list)
     target_bo_name: str | None = None
     target_field_name: str | None = None
+    query: str = ""
     node_path: str = ""
     limit: int = Field(default=10, ge=1, le=30)
 

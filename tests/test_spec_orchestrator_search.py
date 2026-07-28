@@ -48,6 +48,12 @@ def _loaded_resource():
                         data_type=DataTypeEnum.basic,
                         data_type_name="string",
                     ),
+                    PropertyTerm(
+                        field_name="REGION_CODE",
+                        description="区域编码",
+                        data_type=DataTypeEnum.basic,
+                        data_type_name="string",
+                    ),
                 ],
             ),
             "BB_BILL_CUSTGRP": BoRegistry(
@@ -139,7 +145,7 @@ def test_bo_field_search_marks_key_and_returns_matching_field():
     assert candidates[0].is_key is False
 
 
-def test_relation_search_uses_key_name_and_type_compatibility():
+def test_bo_access_search_does_not_mix_relation_with_naming_sql():
     search = OrchestratorResourceSearch(_loaded_resource())
     request = GoalSearchRequest(
         goal=_goal("客户组ID", "long"),
@@ -150,10 +156,69 @@ def test_relation_search_uses_key_name_and_type_compatibility():
 
     candidates = search.search(request)
 
-    relation = next(item for item in candidates if item.kind == "relation")
-    assert relation.bo_name == "BB_BILL_CUSTGRP"
-    assert relation.field_name == "CUST_GRP_ID"
-    assert relation.metadata["target_key_field"] == "CUST_GRP_ID"
+    assert candidates == []
+
+
+def test_bo_select_fallback_uses_primary_key_when_query_has_no_condition():
+    search = OrchestratorResourceSearch(_loaded_resource())
+    request = GoalSearchRequest(
+        goal=ValueGoal(
+            goal_id="root::__bo__:BB_DIC_CUSTGRP",
+            semantic_name="BB_DIC_CUSTGRP",
+            role=GoalRole.INTERMEDIATE_VALUE,
+            expected_type=ReturnType(
+                data_type="bo",
+                data_type_name="BB_DIC_CUSTGRP",
+                is_list=False,
+            ),
+            target_bo_name="BB_DIC_CUSTGRP",
+            target_field_name="CUST_GRP_NAME",
+        ),
+        tier=ResourceTier.BO_SELECT,
+        keywords=["客户组名称"],
+        target_bo_name="BB_DIC_CUSTGRP",
+        target_field_name="CUST_GRP_NAME",
+        query="获取客户组名称",
+    )
+
+    candidates = search.search(request)
+
+    assert len(candidates) == 1
+    assert candidates[0].kind == "bo_select"
+    assert candidates[0].metadata["operation"] == "select_one"
+    assert [item.name for item in candidates[0].required_inputs] == [
+        "CUST_GRP_ID"
+    ]
+    assert candidates[0].required_inputs[0].return_type.data_type == "key"
+
+
+def test_bo_select_uses_condition_field_explicitly_named_in_query():
+    search = OrchestratorResourceSearch(_loaded_resource())
+    request = GoalSearchRequest(
+        goal=ValueGoal(
+            goal_id="root::__bo__:BB_DIC_CUSTGRP",
+            semantic_name="BB_DIC_CUSTGRP",
+            role=GoalRole.INTERMEDIATE_VALUE,
+            expected_type=ReturnType(
+                data_type="bo",
+                data_type_name="BB_DIC_CUSTGRP",
+                is_list=False,
+            ),
+            target_bo_name="BB_DIC_CUSTGRP",
+            target_field_name="CUST_GRP_NAME",
+        ),
+        tier=ResourceTier.BO_SELECT,
+        target_bo_name="BB_DIC_CUSTGRP",
+        target_field_name="CUST_GRP_NAME",
+        query="根据 REGION_CODE 获取客户组名称",
+    )
+
+    candidates = search.search(request)
+
+    assert [item.name for item in candidates[0].required_inputs] == [
+        "REGION_CODE"
+    ]
+    assert candidates[0].evidence == ["query condition field match"]
 
 
 def test_naming_sql_and_function_candidates_expose_real_inputs():

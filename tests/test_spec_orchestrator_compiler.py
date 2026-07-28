@@ -148,3 +148,101 @@ def test_compiler_builds_compatible_naming_sql_selection_and_trimmed_bo():
     assert compiled.filtered_environment.selected_bos[0].property_list == []
     assert "INVOICE_ID" in compiled.expression_spec.nl
     assert "$ctx$.invoice.id" in compiled.expression_spec.nl
+
+
+def test_compiler_projects_bo_select_target_and_condition_fields():
+    bo = BoRegistry(
+        resource_id="bo.customer",
+        bo_name="BO_CUSTOMER",
+        bo_desc="客户",
+        property_list=[
+            PropertyTerm(
+                field_name="CUSTOMER_ID",
+                data_type=DataTypeEnum.key,
+                data_type_name="long",
+            ),
+            PropertyTerm(
+                field_name="NAME",
+                data_type=DataTypeEnum.basic,
+                data_type_name="string",
+            ),
+            PropertyTerm(
+                field_name="UNUSED",
+                data_type=DataTypeEnum.basic,
+                data_type_name="string",
+            ),
+        ],
+    )
+    key_goal = _goal("root::__bo__:BO_CUSTOMER::CUSTOMER_ID", "CUSTOMER_ID", "long")
+    key_resolution = ResolvedGoal(
+        goal=key_goal,
+        candidate=ResourceCandidate(
+            candidate_id="ctx.customer_id",
+            kind="context",
+            resource=ContextRegistry(
+                resource_id="ctx.customer_id",
+                context_name="$ctx$.customer.id",
+                return_type=ReturnType(
+                    data_type="basic", data_type_name="long", is_list=False
+                ),
+                property_type=PropertyTypeEnum.system,
+                annotation="客户ID",
+            ),
+            return_type=ReturnType(
+                data_type="basic", data_type_name="long", is_list=False
+            ),
+        ),
+    )
+    bo_goal = ValueGoal(
+        goal_id="root::__bo__:BO_CUSTOMER",
+        semantic_name="BO_CUSTOMER",
+        role=GoalRole.INTERMEDIATE_VALUE,
+        expected_type=ReturnType(
+            data_type="bo", data_type_name="BO_CUSTOMER", is_list=False
+        ),
+        target_bo_name="BO_CUSTOMER",
+        target_field_name="NAME",
+    )
+    resolution = ResolvedGoal(
+        goal=bo_goal,
+        candidate=ResourceCandidate(
+            candidate_id="select_one:BO_CUSTOMER:CUSTOMER_ID",
+            kind="bo_select",
+            resource=bo,
+            bo_name="BO_CUSTOMER",
+            field_name="NAME",
+            return_type=bo_goal.expected_type,
+            required_inputs=[
+                ResourceInput(
+                    name="CUSTOMER_ID",
+                    return_type=ReturnType(
+                        data_type="key", data_type_name="long", is_list=False
+                    ),
+                )
+            ],
+            metadata={
+                "bo": bo,
+                "operation": "select_one",
+                "target_field_name": "NAME",
+                "condition_fields": ["CUSTOMER_ID"],
+            },
+        ),
+        dependencies=[key_resolution],
+        bindings={"CUSTOMER_ID": key_goal.goal_id},
+    )
+    orchestration = SpecOrchestrationResult(
+        query="获取客户名称",
+        root_goal=bo_goal,
+        root_resolution=resolution,
+        execution_order=[key_goal.goal_id, bo_goal.goal_id],
+    )
+
+    compiled = ResolutionCompiler().compile(orchestration)
+
+    assert [
+        field.field_name
+        for field in compiled.filtered_environment.selected_bos[0].property_list
+    ] == ["NAME", "CUSTOMER_ID"]
+    assert "select_one" in compiled.expression_spec.nl
+    assert "CUSTOMER_ID" in compiled.expression_spec.nl
+    assert "$ctx$.customer.id" in compiled.expression_spec.nl

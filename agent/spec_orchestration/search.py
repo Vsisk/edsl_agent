@@ -35,6 +35,8 @@ class OrchestratorResourceSearch:
             return self._search_bo_fields(request)
         if request.tier == ResourceTier.BO_ACCESS:
             return self._search_bo_access(request)
+        if request.tier == ResourceTier.BO_SELECT:
+            return self._search_bo_select(request)
         if request.tier == ResourceTier.FUNCTION:
             return self._search_functions(request)
         return []
@@ -106,44 +108,71 @@ class OrchestratorResourceSearch:
         return result[: request.limit]
 
     def _search_bo_access(self, request: GoalSearchRequest) -> list[ResourceCandidate]:
-        result = [*self._search_naming_sql(request)]
+        return self._search_naming_sql(request)[: request.limit]
+
+    def _search_bo_select(self, request: GoalSearchRequest) -> list[ResourceCandidate]:
         target_bo = self.loaded_resource.bo_registry.get(request.target_bo_name or "")
         if target_bo is None:
-            return result[: request.limit]
-        target_keys = [
+            return []
+        selectable_fields = [
+            field
+            for field in target_bo.property_list
+            if not field.is_list and field.field_name != request.target_field_name
+        ]
+        explicit_fields = [
+            field
+            for field in selectable_fields
+            if _field_is_explicit_in_query(field, request.query)
+        ]
+        condition_fields = explicit_fields or [
             field for field in target_bo.property_list
             if field.data_type == DataTypeEnum.key and not field.is_list
         ]
-        for target_key in target_keys:
-            for bo in self.loaded_resource.bo_registry.values():
-                if bo.bo_name == target_bo.bo_name:
-                    continue
-                for field in bo.property_list:
-                    if (
-                        _normalize(field.field_name) != _normalize(target_key.field_name)
-                        or field.data_type_name != target_key.data_type_name
-                        or field.is_list != target_key.is_list
-                    ):
-                        continue
-                    result.append(
-                        ResourceCandidate(
-                            candidate_id=(
-                                f"relation:{bo.bo_name}:{field.field_name}"
-                                f"->{target_bo.bo_name}:{target_key.field_name}"
-                            ),
-                            kind="relation",
-                            resource=bo,
-                            bo_name=bo.bo_name,
-                            field_name=field.field_name,
-                            return_type=_property_return_type(field),
-                            evidence=["same key name", "compatible key type"],
-                            metadata={
-                                "target_bo_name": target_bo.bo_name,
-                                "target_key_field": target_key.field_name,
-                            },
-                        )
+        if not condition_fields:
+            return []
+        operation = "select" if request.goal.expected_type.is_list else "select_one"
+        condition_names = [field.field_name for field in condition_fields]
+        return [
+            ResourceCandidate(
+                candidate_id=(
+                    f"{operation}:{target_bo.bo_name}:"
+                    f"{','.join(condition_names)}"
+                ),
+                kind="bo_select",
+                resource=target_bo,
+                bo_name=target_bo.bo_name,
+                field_name=request.target_field_name,
+                return_type=ReturnType(
+                    data_type="bo",
+                    data_type_name=target_bo.bo_name,
+                    is_list=request.goal.expected_type.is_list,
+                ),
+                required_inputs=[
+                    ResourceInput(
+                        name=field.field_name,
+                        return_type=ReturnType(
+                            data_type=field.data_type.value,
+                            data_type_name=field.data_type_name,
+                            is_list=False,
+                        ),
                     )
-        return result[: request.limit]
+                    for field in condition_fields
+                ],
+                evidence=[
+                    (
+                        "query condition field match"
+                        if explicit_fields
+                        else "primary key fallback"
+                    )
+                ],
+                metadata={
+                    "bo": target_bo,
+                    "operation": operation,
+                    "target_field_name": request.target_field_name,
+                    "condition_fields": condition_names,
+                },
+            )
+        ]
 
     def _search_naming_sql(self, request: GoalSearchRequest) -> list[ResourceCandidate]:
         target_bo_name = request.target_bo_name
@@ -281,6 +310,16 @@ def _tokens(value: str) -> list[str]:
     normalized = _normalize(value)
     parts = re.findall(r"[a-z0-9_]+|[\u4e00-\u9fff]+", normalized)
     return [item for item in [normalized, *parts] if len(item) >= 2]
+
+
+def _field_is_explicit_in_query(field: Any, query: str) -> bool:
+    haystack = _normalize(query)
+    field_name = _normalize(field.field_name)
+    description = _normalize(field.description or "")
+    return bool(
+        (field_name and field_name in haystack)
+        or (description and description in haystack)
+    )
 
 
 def _normalize(value: str) -> str:

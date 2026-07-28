@@ -48,10 +48,27 @@ class ResolutionCompiler:
                 global_contexts[resource.resource_id] = resource
             elif isinstance(resource, FunctionRegistry):
                 functions[resource.resource_id] = resource
-            if candidate.kind in {"bo_field", "relation"}:
+            if candidate.kind in {"bo_field", "relation", "bo_select"}:
                 bo = resource if isinstance(resource, BoRegistry) else candidate.metadata.get("bo")
                 if isinstance(bo, BoRegistry):
                     part = bo_parts.setdefault(bo.bo_name, {"bo": bo, "fields": {}, "sql": {}})
+                    if candidate.kind == "bo_select":
+                        selected_field_names = [
+                            candidate.metadata.get("target_field_name"),
+                            *candidate.metadata.get("condition_fields", []),
+                        ]
+                        for field_name in selected_field_names:
+                            field = next(
+                                (
+                                    value
+                                    for value in bo.property_list
+                                    if value.field_name == field_name
+                                ),
+                                None,
+                            )
+                            if field is not None:
+                                part["fields"][field.field_name] = field
+                        continue
                     field = candidate.metadata.get("field")
                     if field is None and candidate.field_name:
                         field = next(
@@ -132,6 +149,22 @@ def _render_resolution(root: ResolvedGoal) -> str:
             )
         elif candidate.kind == "function":
             lines.append(f"调用函数 {_candidate_label(item)} 生成“{item.goal.semantic_name}”。")
+        elif candidate.kind == "bo_select":
+            bindings = []
+            by_goal_id = {dep.goal.goal_id: dep for dep in item.dependencies}
+            for field_name, goal_id in item.bindings.items():
+                dependency = by_goal_id.get(goal_id)
+                bindings.append(
+                    f"{field_name} == {_candidate_label(dependency)}"
+                    if dependency is not None
+                    else f"{field_name} 绑定到依赖 {goal_id}"
+                )
+            operation = candidate.metadata.get("operation", "select_one")
+            target_field = candidate.metadata.get("target_field_name")
+            lines.append(
+                f"使用 {operation}({candidate.bo_name})，按"
+                f"{'，'.join(bindings)} 筛选记录并读取 {target_field}。"
+            )
         elif candidate.kind in {"bo_field", "relation"}:
             lines.append(
                 f"读取 {candidate.bo_name}.{candidate.field_name} 得到"
@@ -151,6 +184,11 @@ def _candidate_label(value: ResolvedGoal | None) -> str:
         return str(candidate.resource.sql_name)
     if candidate.kind == "function":
         return str(candidate.resource.func_name)
+    if candidate.kind == "bo_select":
+        return (
+            f"{candidate.metadata.get('operation', 'select_one')}"
+            f"({candidate.bo_name})"
+        )
     if candidate.bo_name and candidate.field_name:
         return f"{candidate.bo_name}.{candidate.field_name}"
     return candidate.candidate_id

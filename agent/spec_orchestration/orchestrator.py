@@ -110,6 +110,7 @@ class SpecOrchestrator:
                 negative_keywords=keyword_decision.negative_keywords,
                 target_bo_name=goal.target_bo_name,
                 target_field_name=goal.target_field_name,
+                query=query,
                 node_path=node_path,
             )
             recalled = self.search.search(request)
@@ -238,6 +239,8 @@ class SpecOrchestrator:
                 role=(
                     GoalRole.QUERY_PARAM
                     if candidate.kind == "naming_sql"
+                    else GoalRole.FILTER_VALUE
+                    if candidate.kind == "bo_select"
                     else GoalRole.FUNCTION_PARAM
                 ),
                 expected_type=item.return_type.model_copy(deep=True),

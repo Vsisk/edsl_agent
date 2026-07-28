@@ -498,13 +498,20 @@ legacy resource fallback
 
 #### P2：目标 BO 获取方式
 
-范围：
+P2 是代码强制的有序子分支，不是混合候选池：
 
-- 已存在的目标 BO 对象；
-- 目标 BO 下的 NamingSQL；
-- 基于全部主键字段的单记录查询；
-- 由 RelationSearch 找到的键值生产者；
-- 已确认的跨 BO 字段绑定。
+```text
+P2.1 BO_ACCESS：只搜索目标 BO 下的 NamingSQL
+  -> 合适且全部参数 Goal 闭合：提交 NamingSQL
+  -> 无候选、全部 not_cover 或参数 Goal 失败：进入 P2.2
+
+P2.2 BO_SELECT：构造 select/select_one
+  -> query 明确出现 BO 条件字段：使用这些字段
+  -> query 未明确提供条件字段：使用该 BO 全部 data_type=key 字段
+  -> 每个条件值创建 FILTER_VALUE Goal
+  -> FILTER_VALUE Goal 从 P0 开始执行普通递归求解
+  -> 全部条件闭合后提交 BO Select
+```
 
 目标：得到能够读取目标字段的 BO 记录。
 
@@ -589,7 +596,7 @@ AND 深度、Goal 数量和候选预算未超限
 7. 任一必要依赖失败时回滚当前候选的临时资源；
 8. 继续尝试当前层下一候选；候选耗尽后进入下一优先级。
 
-### BO 主键与跨 BO 关联
+### BO Select 条件与主键
 
 主键识别：
 
@@ -599,22 +606,9 @@ field.data_type == "key"
 
 若一个 BO 有多个 `key` 字段，必须把它们作为联合主键整体绑定。
 
-键值生产者候选满足：
+Select 条件字段由代码从 canonical BO Registry 校验。query 中明确出现字段名或完整字段描述时使用显式条件；否则使用全部主键字段。不得因为部分中文词片段重合而误判为显式条件。
 
-- 字段名归一化后一致；
-- `data_type_name` 一致或可由现有类型系统证明兼容；
-- `is_list` 与目标基数兼容；
-- 来源资源在当前 Registry 或可见上下文中真实存在。
-
-该推导关系必须记录：
-
-- 目标 BO 和主键字段；
-- 来源资源及字段；
-- 名称匹配证据；
-- 类型匹配证据；
-- 基数匹配证据。
-
-如果候选来源是 NamingSQL 返回 BO 的字段，必须先闭合该 NamingSQL 的全部参数。
+`select` 或 `select_one` 由目标 BO Goal 的返回基数决定。每个条件字段的值都不是直接猜测，而是创建普通 Goal，复用 Context、BO field、NamingSQL、Select、Function 的完整递归路线。
 
 ### NamingSQL 处理
 
@@ -636,6 +630,16 @@ NamingSQL 候选只从当前请求的 `LoadedResource.bo_registry` 构造。
 ```
 
 Planner 只能看到和使用最终提交的 NamingSQL。原有 NamingSQL Plan Validator 保持最终防线。
+
+如果 NamingSQL 分支没有可提交结果，代码才进入 BO Select：
+
+```text
+确定 select/select_one
+  -> 确定显式条件字段或全部主键字段
+  -> 为每个条件值递归求解
+  -> 生成自然语言条件绑定
+  -> 将目标字段和条件字段投影到 FilteredEnvironment
+```
 
 ### Function 处理
 

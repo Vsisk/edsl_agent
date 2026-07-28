@@ -28,6 +28,7 @@
 - 验证：`tests/test_spec_orchestrator_search.py`
 - 功能：NamingSQL 始终先于 Select，跨 BO relation 不再与 NamingSQL 混选。
 - 实现说明：保留 `BO_ACCESS` 表示 NamingSQL 层，新增紧随其后的 `BO_SELECT` 层。
+- 实现说明：BO field 创建的 BO 依赖 Goal 使用受限层级 `[BO_ACCESS, BO_SELECT]`，不得重新搜索 Context 或 BO field；其参数/条件子 Goal 仍使用完整层级。
 - 预期验证结果：有可闭合 NamingSQL 时不搜索 Select；NamingSQL 无候选或全部失败时才搜索 Select。
 
 ## Phase #2: Select 条件递归求解

@@ -31,16 +31,19 @@ class ResourceTier(str, Enum):
     BO_ACCESS = "bo_access"
     BO_SELECT = "bo_select"
     FUNCTION = "function"
-    FALLBACK = "fallback"
+    LITERAL = "literal"
 
 
-RESOURCE_TIER_ORDER = (
+VALUE_GOAL_TIER_ORDER = (
     ResourceTier.VISIBLE_VALUE,
     ResourceTier.BO_FIELD,
+    ResourceTier.FUNCTION,
+    ResourceTier.LITERAL,
+)
+
+BO_ACCESS_TIER_ORDER = (
     ResourceTier.BO_ACCESS,
     ResourceTier.BO_SELECT,
-    ResourceTier.FUNCTION,
-    ResourceTier.FALLBACK,
 )
 
 

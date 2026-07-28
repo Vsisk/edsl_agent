@@ -5,15 +5,16 @@ from typing import Any
 from agent.resource_manager.loader.registry_models import ReturnType
 
 from .models import (
+    BO_ACCESS_TIER_ORDER,
     CoverageKind,
     GoalRole,
     GoalSearchRequest,
     GoalStatus,
-    RESOURCE_TIER_ORDER,
     ResolvedGoal,
     ResourceCandidate,
     ResourceTier,
     SpecOrchestrationResult,
+    VALUE_GOAL_TIER_ORDER,
     ValueGoal,
 )
 
@@ -62,6 +63,7 @@ class SpecOrchestrator:
             depth=0,
             stack=(),
             state=state,
+            tiers=VALUE_GOAL_TIER_ORDER,
         )
         if resolution is None:
             root.status = GoalStatus.FAILED
@@ -84,6 +86,7 @@ class SpecOrchestrator:
         depth: int,
         stack: tuple[tuple[str, str, bool], ...],
         state: "_ResolutionState",
+        tiers: tuple[ResourceTier, ...],
     ) -> ResolvedGoal | None:
         signature = _goal_signature(goal)
         if (
@@ -100,7 +103,7 @@ class SpecOrchestrator:
         keyword_decision = self.semantic.generate_keywords(
             goal=goal, query=query
         )
-        for tier in RESOURCE_TIER_ORDER:
+        for tier in tiers:
             goal.current_tier = tier
             request = GoalSearchRequest(
                 goal=goal,
@@ -219,6 +222,7 @@ class SpecOrchestrator:
                 depth=depth + 1,
                 stack=stack,
                 state=state,
+                tiers=BO_ACCESS_TIER_ORDER,
             )
             if resolved_bo is None:
                 return None
@@ -253,6 +257,7 @@ class SpecOrchestrator:
                 depth=depth + 1,
                 stack=stack,
                 state=state,
+                tiers=VALUE_GOAL_TIER_ORDER,
             )
             if resolved is None:
                 return None

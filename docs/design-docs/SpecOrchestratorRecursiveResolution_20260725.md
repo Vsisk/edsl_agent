@@ -467,11 +467,21 @@ legacy resource fallback
 2. LLM 生成 Root Goal 语义；
 3. 代码使用权威节点事实覆盖或拒绝冲突的 LLM 字段；
 4. 校验通过后创建 Root Goal；
-5. Goal 搜索层级从最高优先级开始。
+5. 代码为 Root Goal 显式分配 Value Search Policy 后开始搜索。
 
-### 固定搜索优先级
+### 显式搜索策略
 
-代码按照以下优先级执行，LLM不能跳级或改变顺序。
+每次 Goal 求解都必须显式输入允许的资源搜索集合，不存在默认全量搜索。代码只提供两套策略，LLM不能新增、删除、跳级或改变顺序：
+
+```text
+Value Search Policy
+  = P0 Context → P1 BO field → P3 Function → P4 Literal
+
+BO Access Policy
+  = P2.1 NamingSQL → P2.2 Select
+```
+
+Root Goal、NamingSQL 参数 Goal、Function 参数 Goal和 Select 条件 Goal使用 Value Search Policy。BO field 命中后创建的 BO Goal 使用 BO Access Policy。
 
 #### P0：当前可见值
 
@@ -517,6 +527,8 @@ P2.2 BO_SELECT：构造 select/select_one
 
 从 P1 进入 P2 时，BO 字段候选的 `bo_name` 与 `field_name` 必须分别写入依赖 Goal 的 `target_bo_name`、`target_field_name`，并原样传给 BO access 搜索请求。NamingSQL 召回同时使用这两个定位信息，不能只按 BO 名搜索。
 
+该 BO 依赖 Goal 不是普通资源 Goal：它禁止重新执行 P0 Context 和 P1 BO field 搜索，只允许按 `BO_ACCESS → BO_SELECT` 运行。NamingSQL 参数 Goal 和 Select 条件值 Goal 才从 P0 开始执行完整普通 Goal 路线。
+
 #### P3：直接生成目标值的 Function
 
 范围：
@@ -527,15 +539,15 @@ P2.2 BO_SELECT：构造 select/select_one
 
 目标：当 Context 和 BO 链路不能覆盖时，通过函数直接计算目标值。
 
-#### P4：项目策略回退
+#### P4：纯字符串
 
 范围：
 
-- 项目固定值；
-- 默认空字符串；
-- `needs_review`。
+- 返回类型兼容字符串；
+- Goal 语义能够表达候选字符串；
+- LLM 在真实资源均不覆盖后确认其可直接作为目标值。
 
-该层不进行普通资源搜索，只执行项目允许的明确回退策略。
+该层是 Value Search Policy 的最后一层，不进入 FilteredEnvironment，也不能用于 BO Goal。
 
 ### 单层搜索协议
 
@@ -590,7 +602,7 @@ AND 深度、Goal 数量和候选预算未超限
 1. 代码读取资源真实输入定义；
 2. 优先从已提交 Goal、Context、中间变量中绑定；
 3. 对每个未绑定输入创建 Dependency Goal；
-4. Dependency Goal 从 P0 开始执行相同搜索流程；
+4. Dependency Goal 显式获得 Value Search Policy，并从 P0 开始执行相同搜索流程；
 5. 相互独立的参数 Goal 可以并行求解；
 6. 所有必要依赖 resolved 后提交当前候选；
 7. 任一必要依赖失败时回滚当前候选的临时资源；

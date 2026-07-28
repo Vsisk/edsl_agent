@@ -221,6 +221,21 @@ def test_bo_select_uses_condition_field_explicitly_named_in_query():
     assert candidates[0].evidence == ["query condition field match"]
 
 
+def test_literal_is_last_resort_for_string_value_goal():
+    search = OrchestratorResourceSearch(_loaded_resource())
+    request = GoalSearchRequest(
+        goal=_goal("固定文本", "string"),
+        tier=ResourceTier.LITERAL,
+        query="固定填写 已完成",
+    )
+
+    candidates = search.search(request)
+
+    assert len(candidates) == 1
+    assert candidates[0].kind == "literal"
+    assert candidates[0].metadata["value"] == "固定文本"
+
+
 def test_naming_sql_and_function_candidates_expose_real_inputs():
     loaded = _loaded_resource()
     search = OrchestratorResourceSearch(

@@ -132,6 +132,11 @@ def _render_resolution(root: ResolvedGoal) -> str:
             lines.append(
                 f"从上下文 {_context_path(candidate.resource)} 获取“{item.goal.semantic_name}”。"
             )
+        elif candidate.kind == "literal":
+            lines.append(
+                f"使用纯字符串“{candidate.metadata.get('value', candidate.resource)}”"
+                f"作为“{item.goal.semantic_name}”的值。"
+            )
         elif candidate.kind == "naming_sql":
             bindings = []
             by_goal_id = {dep.goal.goal_id: dep for dep in item.dependencies}
@@ -180,6 +185,8 @@ def _candidate_label(value: ResolvedGoal | None) -> str:
     candidate = value.candidate
     if candidate.kind == "context":
         return _context_path(candidate.resource)
+    if candidate.kind == "literal":
+        return f"纯字符串“{candidate.metadata.get('value', candidate.resource)}”"
     if candidate.kind == "naming_sql":
         return str(candidate.resource.sql_name)
     if candidate.kind == "function":

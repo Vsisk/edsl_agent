@@ -39,6 +39,8 @@ class OrchestratorResourceSearch:
             return self._search_bo_select(request)
         if request.tier == ResourceTier.FUNCTION:
             return self._search_functions(request)
+        if request.tier == ResourceTier.LITERAL:
+            return self._search_literal(request)
         return []
 
     def _search_visible(self, request: GoalSearchRequest) -> list[ResourceCandidate]:
@@ -273,6 +275,24 @@ class OrchestratorResourceSearch:
                 )
             )
         return result[: request.limit]
+
+    def _search_literal(self, request: GoalSearchRequest) -> list[ResourceCandidate]:
+        type_name = str(request.goal.expected_type.data_type_name or "").lower()
+        if type_name not in {"str", "string"} or request.goal.expected_type.is_list:
+            return []
+        value = request.goal.semantic_name.strip()
+        if not value:
+            return []
+        return [
+            ResourceCandidate(
+                candidate_id=f"literal:{request.goal.goal_id}",
+                kind="literal",
+                resource=value,
+                return_type=request.goal.expected_type.model_copy(deep=True),
+                evidence=["string literal fallback"],
+                metadata={"value": value},
+            )
+        ]
 
 
 def _property_return_type(field: Any) -> ReturnType:

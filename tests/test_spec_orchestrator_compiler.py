@@ -246,3 +246,30 @@ def test_compiler_projects_bo_select_target_and_condition_fields():
     assert "select_one" in compiled.expression_spec.nl
     assert "CUSTOMER_ID" in compiled.expression_spec.nl
     assert "$ctx$.customer.id" in compiled.expression_spec.nl
+
+
+def test_compiler_renders_literal_without_selecting_environment_resource():
+    goal = _goal("root", "完成状态")
+    resolution = ResolvedGoal(
+        goal=goal,
+        candidate=ResourceCandidate(
+            candidate_id="literal:root",
+            kind="literal",
+            resource="已完成",
+            return_type=goal.expected_type,
+            metadata={"value": "已完成"},
+        ),
+    )
+    orchestration = SpecOrchestrationResult(
+        query="固定填写已完成",
+        root_goal=goal,
+        root_resolution=resolution,
+        execution_order=["root"],
+    )
+
+    compiled = ResolutionCompiler().compile(orchestration)
+
+    assert "纯字符串“已完成”" in compiled.expression_spec.nl
+    assert compiled.filtered_environment.selected_bos == []
+    assert compiled.filtered_environment.selected_global_contexts == []
+    assert compiled.filtered_environment.selected_functions == []

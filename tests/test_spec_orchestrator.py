@@ -96,6 +96,16 @@ def test_context_cover_stops_lower_priority_search():
 
 
 def test_naming_sql_is_committed_only_after_parameter_goal_resolves():
+    field = ResourceCandidate(
+        candidate_id="bo.bill_custgrp:field:CUST_GRP_NAME",
+        kind="bo_field",
+        resource={"bo": "BB_BILL_CUSTGRP"},
+        bo_name="BB_BILL_CUSTGRP",
+        field_name="CUST_GRP_NAME",
+        return_type=ReturnType(
+            data_type="basic", data_type_name="string", is_list=False
+        ),
+    )
     invoice_input = ResourceInput(
         name="INVOICE_ID",
         return_type=ReturnType(
@@ -115,19 +125,16 @@ def test_naming_sql_is_committed_only_after_parameter_goal_resolves():
     invoice_context = _candidate(
         "ctx.invoice_id", kind="context", type_name="long"
     )
-    root = ValueGoal(
-        goal_id="root",
-        semantic_name="账单客户组",
-        role=GoalRole.INTERMEDIATE_VALUE,
-        expected_type=ReturnType(
-            data_type="bo", data_type_name="BB_BILL_CUSTGRP", is_list=False
-        ),
-        target_bo_name="BB_BILL_CUSTGRP",
-    )
+    root = _goal("账单客户组名称")
     semantic = FakeSemantic(
         root,
         {
-            ("账单客户组", ResourceTier.BO_ACCESS): CoverageDecision(
+            ("账单客户组名称", ResourceTier.BO_FIELD): CoverageDecision(
+                kind=CoverageKind.DIRECT_COVER,
+                selected_candidate_id=field.candidate_id,
+                reason="target field",
+            ),
+            ("BB_BILL_CUSTGRP", ResourceTier.BO_ACCESS): CoverageDecision(
                 kind=CoverageKind.DEPENDENCY_COVER,
                 selected_candidate_id=naming_sql.candidate_id,
                 missing_inputs=["INVOICE_ID"],
@@ -142,7 +149,8 @@ def test_naming_sql_is_committed_only_after_parameter_goal_resolves():
     )
     search = FakeSearch(
         {
-            ("账单客户组", ResourceTier.BO_ACCESS): [naming_sql],
+            ("账单客户组名称", ResourceTier.BO_FIELD): [field],
+            ("BB_BILL_CUSTGRP", ResourceTier.BO_ACCESS): [naming_sql],
             ("INVOICE_ID", ResourceTier.VISIBLE_VALUE): [invoice_context],
         }
     )
@@ -153,20 +161,37 @@ def test_naming_sql_is_committed_only_after_parameter_goal_resolves():
         expected_type=root.expected_type,
     )
 
-    assert result.root_resolution.candidate.candidate_id == naming_sql.candidate_id
-    assert [item.candidate.candidate_id for item in result.root_resolution.dependencies] == [
+    bo_resolution = result.root_resolution.dependencies[0]
+    assert bo_resolution.candidate.candidate_id == naming_sql.candidate_id
+    assert [item.candidate.candidate_id for item in bo_resolution.dependencies] == [
         "ctx.invoice_id"
     ]
     assert result.execution_order == [
-        result.root_resolution.dependencies[0].goal.goal_id,
+        bo_resolution.dependencies[0].goal.goal_id,
+        bo_resolution.goal.goal_id,
         "root",
     ]
 
 
 def test_candidate_with_incompatible_type_is_not_sent_to_coverage_llm():
     wrong = _candidate("ctx.amount", type_name="decimal")
-    semantic = FakeSemantic(_goal("客户名称"), {})
-    search = FakeSearch({("客户名称", ResourceTier.VISIBLE_VALUE): [wrong]})
+    semantic = FakeSemantic(
+        _goal("客户名称"),
+        {
+            ("客户名称", ResourceTier.LITERAL): CoverageDecision(
+                kind=CoverageKind.NOT_COVER,
+                continue_search=False,
+                reason="require a real resource",
+            )
+        },
+    )
+    literal = _candidate("literal:root", kind="literal")
+    search = FakeSearch(
+        {
+            ("客户名称", ResourceTier.VISIBLE_VALUE): [wrong],
+            ("客户名称", ResourceTier.LITERAL): [literal],
+        }
+    )
 
     result = SpecOrchestrator(semantic=semantic, search=search).resolve(
         node_info={"node_name": "客户名称"},
@@ -175,9 +200,19 @@ def test_candidate_with_incompatible_type_is_not_sent_to_coverage_llm():
     )
 
     assert result.root_resolution is None
-    assert semantic.coverage_calls == []
+    assert [
+        tier for _, tier, _ in semantic.coverage_calls
+    ] == [ResourceTier.LITERAL]
     assert semantic.keyword_calls == ["root"]
     assert result.failed_goal_ids == ["root"]
+    assert [
+        tier for goal_name, tier in search.calls if goal_name == "客户名称"
+    ] == [
+        ResourceTier.VISIBLE_VALUE,
+        ResourceTier.BO_FIELD,
+        ResourceTier.FUNCTION,
+        ResourceTier.LITERAL,
+    ]
 
 
 def test_failed_candidate_dependency_rolls_back_and_tries_next_candidate():
@@ -283,6 +318,11 @@ def test_bo_field_creates_bo_access_dependency_before_commit():
     )
     assert bo_access_request.target_bo_name == "BO_CUSTOMER"
     assert bo_access_request.target_field_name == "NAME"
+    assert [
+        request.tier
+        for request in search.requests
+        if request.goal.semantic_name == "BO_CUSTOMER"
+    ] == [ResourceTier.BO_ACCESS]
     assert not any(
         request.tier == ResourceTier.BO_SELECT
         for request in search.requests
@@ -391,6 +431,4 @@ def test_bo_field_falls_back_to_select_one_and_recursively_resolves_key():
         for request in search.requests
         if request.goal.semantic_name == "BO_CUSTOMER"
     ]
-    assert bo_tiers.index(ResourceTier.BO_ACCESS) < bo_tiers.index(
-        ResourceTier.BO_SELECT
-    )
+    assert bo_tiers == [ResourceTier.BO_ACCESS, ResourceTier.BO_SELECT]

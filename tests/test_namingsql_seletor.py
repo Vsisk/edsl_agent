@@ -52,6 +52,40 @@ def test_llm_can_choose_only_from_rule_candidates():
     assert [item.namingsql_name for item in selected] == ["fullScan", "byId"]
 
 
+def test_standard_generate_by_llm_uses_prompt_template(monkeypatch):
+    profiles = [
+        _profile("byId", ["ORDER_ID"], ["ORDER_ID = :id"], True),
+    ]
+    calls = []
+
+    class Client:
+        is_usable = True
+
+    def generate_by_llm(**kwargs):
+        calls.append(kwargs)
+        return {"namingsql_names": ["byId"]}
+
+    monkeypatch.setattr(
+        "agent.naming_sql_selector.namingsql_seletor.generate_by_llm",
+        generate_by_llm,
+    )
+
+    selected = NamingSqlSelector(client=Client()).select(
+        query="根据 ORDER_ID 查询",
+        profiles=profiles,
+    )
+
+    assert [item.namingsql_name for item in selected] == ["byId"]
+    assert calls == [{
+        "prompt_template": "namingsql_selector",
+        "llm_name": "base",
+        "lang": "zh",
+        "client": calls[0]["client"],
+        "query": "根据 ORDER_ID 查询",
+        "candidates_json": '[{"bo_name":"OrderBO","namingsql_name":"byId","where_conditions":["ORDER_ID = :id"],"return_fields":["ORDER_ID"],"performance_optimized":true}]',
+    }]
+
+
 def test_filter_environment_owns_namingsql_selection():
     bo = _bo("SELECT ORDER_ID, STATUS FROM ORDERS WHERE ORDER_ID = :id")
     loaded_resource = LoadedResource(

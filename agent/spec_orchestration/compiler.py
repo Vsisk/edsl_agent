@@ -5,7 +5,7 @@ from typing import Any
 
 from agent.environment.environment import FilteredEnvironment
 from agent.expression_generation.expression_spec import ExpressionSpec
-from agent.naming_sql_selector.namingsql_profile_loader import NamingSqlProfileLoader
+from agent.resource_manager.loader.namingsql_profile_loader import NamingSqlProfileLoader
 from agent.resource_manager.loader.registry_models import (
     BoRegistry,
     ContextRegistry,

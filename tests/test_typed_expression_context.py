@@ -11,7 +11,7 @@ from agent.expression_generation.typed_context import (
     TypedExpressionContextBuilder,
 )
 from agent.models import NodeDef
-from agent.naming_sql_selector import NamingSqlProfile
+from agent.resource_manager.loader.namingsql_profile_loader import NamingSqlProfile
 from agent.resource_manager.loader.registry_models import (
     BoRegistry,
     ContextRegistry,

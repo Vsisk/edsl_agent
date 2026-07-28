@@ -35,7 +35,7 @@ from agent.expression_generation.expression_type_validation import SimpleExpress
 from agent.expression_generation.expression_spec import ExpressionSpec
 from agent.expression_generation.edsl_expression_parser import EDSLExpressionParser
 from agent.models import NodeDef, ValueLogicRequest, ValueLogicResult, ValueLogicSource, ValueReturnType
-from agent.naming_sql_selector.namingsql_seletor import NamingSqlSelector
+from agent.environment.namingsql_seletor import NamingSqlSelector
 from agent.context_pack import (
     ContextPack, ContextPackRequest, FastContextResourceRouter, ProjectContext,
     create_context_pack_manager,

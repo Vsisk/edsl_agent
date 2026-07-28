@@ -1,5 +1,5 @@
-from agent.naming_sql_selector.namingsql_profile_loader import NamingSqlProfile
-from agent.naming_sql_selector.namingsql_seletor import NamingSqlSelector
+from agent.resource_manager.loader.namingsql_profile_loader import NamingSqlProfile
+from agent.environment.namingsql_seletor import NamingSqlSelector
 from agent.environment.environment import filter_resources
 from agent.resource_manager.loader.registry_models import FilterTarget, SourceType
 from agent.resource_manager.loader.registry_models import DomainRegistry
@@ -66,7 +66,7 @@ def test_standard_generate_by_llm_uses_prompt_template(monkeypatch):
         return {"namingsql_names": ["byId"]}
 
     monkeypatch.setattr(
-        "agent.naming_sql_selector.namingsql_seletor.generate_by_llm",
+        "agent.environment.namingsql_seletor.generate_by_llm",
         generate_by_llm,
     )
 

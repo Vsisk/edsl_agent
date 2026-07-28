@@ -17,8 +17,8 @@ from agent.resource_manager.loader.registry_models import (
     LocalContextRegistry,
     SourceType,
 )
-from agent.naming_sql_selector.namingsql_profile_loader import NamingSqlProfile, NamingSqlProfileLoader
-from agent.naming_sql_selector.namingsql_seletor import NamingSqlSelector
+from agent.resource_manager.loader.namingsql_profile_loader import NamingSqlProfile, NamingSqlProfileLoader
+from agent.environment.namingsql_seletor import NamingSqlSelector
 
 
 @dataclass(slots=True)

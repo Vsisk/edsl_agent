@@ -6,7 +6,7 @@ from collections.abc import Callable, Sequence
 
 from agent.llm.llm_client import LLMClient
 from agent.llm.generate_by_llm import generate_by_llm
-from .namingsql_profile_loader import NamingSqlProfile
+from agent.resource_manager.loader.namingsql_profile_loader import NamingSqlProfile
 
 
 class NamingSqlSelector:

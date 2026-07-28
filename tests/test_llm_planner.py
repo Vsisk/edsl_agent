@@ -26,7 +26,7 @@ from agent.planner.llm_planner import (
 )
 from agent.planner.models import Plan, ReturnExprPlanNode
 from agent.context_manager.models import ContextEvidenceItem, NamingSqlCandidate
-from agent.naming_sql_selector import NamingSqlProfile
+from agent.resource_manager.loader.namingsql_profile_loader import NamingSqlProfile
 
 
 class FakeSettings:

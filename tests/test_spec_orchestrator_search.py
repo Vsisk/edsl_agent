@@ -1,4 +1,4 @@
-from agent.naming_sql_selector import NamingSqlSelector
+from agent.environment.namingsql_seletor import NamingSqlSelector
 from agent.resource_manager.loader.registry_models import (
     BoRegistry,
     ContextRegistry,

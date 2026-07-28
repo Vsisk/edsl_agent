@@ -6,7 +6,7 @@ from agent.context_manager.errors import NO_NAMING_SQL_CANDIDATES
 from agent.context_pack.models import ContextPack
 from agent.expression_generation.typed_context import TypedExpressionContext
 from agent.models import ValueLogicRequest
-from agent.naming_sql_selector import NamingSqlProfile
+from agent.resource_manager.loader.namingsql_profile_loader import NamingSqlProfile
 from agent.planner.models import Plan
 from agent.resource_manager.loader.resource_loader import ResourceLoader
 from agent.resource_manager.loader.registry_models import ReturnType

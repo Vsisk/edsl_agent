@@ -1,4 +1,4 @@
-from agent.naming_sql_selector.namingsql_profile_loader import NamingSqlProfileLoader
+from agent.resource_manager.loader.namingsql_profile_loader import NamingSqlProfileLoader
 from agent.resource_manager.loader.registry_models import (
     BoRegistry,
     DataTypeEnum,

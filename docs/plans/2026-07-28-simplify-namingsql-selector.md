@@ -6,7 +6,7 @@
 
 **相关设计文档：** 用户当前需求（2026-07-28）
 
-**架构：** `namingsql_profile_loader` 从 BO 注册表生成只含 BO 名、NamingSQL 名、WHERE 条件、返回字段、性能优化标记的 profile。`namingsql_seletor` 根据查询先做字段、条件和性能规则初筛，再允许 LLM 从规范候选中排序/选择；环境过滤负责调用它并保存候选结果，不再由生成器维护独立 NamingSQL 上下文与参数绑定流程。
+**架构：** Resource Manager 的 `namingsql_profile_loader` 从 BO 注册表生成只含 BO 名、NamingSQL 名、WHERE 条件、返回字段、性能优化标记的 profile。Environment 的 `namingsql_seletor` 根据查询先做字段、条件和性能规则初筛，再允许 LLM 从规范候选中排序/选择；环境过滤负责调用它并保存候选结果，不再由生成器维护独立 NamingSQL 上下文与参数绑定流程。
 
 **技术栈：** Python、Pydantic、pytest、现有 LLMClient/prompt_manager
 
@@ -21,7 +21,7 @@
 **状态：** Finished
 
 **文件：**
-- 创建：`agent/naming_sql_selector/namingsql_profile_loader.py`
+- 创建：`agent/resource_manager/loader/namingsql_profile_loader.py`
 - 创建/修改：`tests/test_namingsql_profile_loader.py`
 - 功能：从 SQL 与 BO 主键元数据提取五项 profile 信息。
 - 实现说明：解析 SELECT 字段和 WHERE 条件；主键等值过滤标记为性能优化。
@@ -32,7 +32,7 @@
 **状态：** Finished
 
 **文件：**
-- 创建：`agent/naming_sql_selector/namingsql_seletor.py`
+- 创建：`agent/environment/namingsql_seletor.py`
 - 创建/修改：`tests/test_namingsql_seletor.py`
 - 功能：按返回字段、WHERE 条件、性能优先级初筛，LLM 只能返回候选中的名称，最终返回有序候选组。
 - 实现说明：无可用 LLM 时使用确定性排序；不处理参数绑定。
@@ -59,7 +59,7 @@
 
 **文件：**
 - 删除：旧 NamingSQL selector 辅助模块与仅服务于旧管线的测试
-- 修改：`agent/naming_sql_selector/__init__.py`
+- 删除：`agent/naming_sql_selector/`
 - 功能：对外只保留 profile loader 与 selector 的最小接口。
 - 实现说明：清理旧 selector、绑定和 plan validator 依赖；不触碰无关资源过滤逻辑。
 - 预期验证结果：定向测试与完整测试集通过，包内无旧 selector 模块依赖。

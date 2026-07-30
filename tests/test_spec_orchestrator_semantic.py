@@ -90,17 +90,12 @@ def test_invalid_classification_falls_back_to_single_goal():
     assert result.kind == QueryClassificationKind.SINGLE_GOAL
 
 
-def test_decompose_multi_goal_returns_bounded_concat_plan():
+def test_decompose_multi_goal_returns_target_list_only():
     def decide(**kwargs):
         assert kwargs["prompt_template"] == "spec_orchestrator_multi_decompose"
         return {
-            "kind": "compose",
-            "operator": "concat",
-            "operands": [
-                {"kind": "resource", "semantic_name": "first name", "value": None},
-                {"kind": "literal", "semantic_name": None, "value": "_"},
-                {"kind": "resource", "semantic_name": "last name", "value": None},
-            ],
+            "kind": "multi_target",
+            "target_semantic_names": ["first name", "last name"],
             "literal_value": None,
         }
 
@@ -112,20 +107,16 @@ def test_decompose_multi_goal_returns_bounded_concat_plan():
         ),
     )
 
-    assert result.kind == QueryPlanKind.COMPOSE
-    assert [item.value or item.semantic_name for item in result.operands] == [
-        "first name",
-        "_",
-        "last name",
-    ]
+    assert result.kind == QueryPlanKind.MULTI_TARGET
+    assert result.target_semantic_names == ["first name", "last name"]
 
 
 def test_invalid_decomposition_falls_back_to_single_goal():
     gateway = SpecSemanticGateway(
         decision_fn=lambda **_: {
-            "kind": "compose",
+            "kind": "multi_target",
             "operator": "unknown",
-            "operands": [],
+            "target_semantic_names": [],
             "literal_value": None,
         }
     )
@@ -141,11 +132,11 @@ def test_invalid_decomposition_falls_back_to_single_goal():
     assert result.kind == QueryPlanKind.SINGLE
 
 
-def test_decompose_multi_goal_returns_bounded_if_plan():
+def test_decompose_multi_goal_rejects_expression_payload():
     def decide(**kwargs):
         assert kwargs["prompt_template"] == "spec_orchestrator_multi_decompose"
         return {
-            "kind": "compose",
+            "kind": "multi_target",
             "operator": "if",
             "operands": [
                 {"kind": "resource", "semantic_name": "customer is active", "value": None},
@@ -163,19 +154,14 @@ def test_decompose_multi_goal_returns_bounded_if_plan():
         ),
     )
 
-    assert result.operator == "if"
-    assert len(result.operands) == 3
+    assert result.kind == QueryPlanKind.SINGLE
 
 
-def test_if_decomposition_without_else_falls_back_to_single_goal():
+def test_multi_goal_with_too_few_targets_falls_back_to_single_goal():
     gateway = SpecSemanticGateway(
         decision_fn=lambda **_: {
-            "kind": "compose",
-            "operator": "if",
-            "operands": [
-                {"kind": "resource", "semantic_name": "customer is active", "value": None},
-                {"kind": "resource", "semantic_name": "customer name", "value": None},
-            ],
+            "kind": "multi_target",
+            "target_semantic_names": ["customer name"],
             "literal_value": None,
         }
     )

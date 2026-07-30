@@ -8,8 +8,6 @@ from agent.spec_orchestration.models import (
     ResourceCandidate,
     ResourceInput,
     ResourceTier,
-    ExpressionOperand,
-    OperandKind,
     QueryClassification,
     QueryClassificationKind,
     QueryDecomposition,
@@ -153,7 +151,7 @@ def test_fixed_string_classification_bypasses_decomposition_goal_and_search():
     assert result.execution_order == ["root"]
 
 
-def test_concat_decomposition_resolves_resource_goals_in_parallel_and_keeps_order():
+def test_multi_goal_decomposition_resolves_targets_in_parallel_and_keeps_order():
     barrier = threading.Barrier(2)
     first = _candidate("ctx.first_name")
     last = _candidate("ctx.last_name")
@@ -164,22 +162,8 @@ def test_concat_decomposition_resolves_resource_goals_in_parallel_and_keeps_orde
 
         def decompose_multi_goal(self, **_):
             return QueryDecomposition(
-                kind=QueryPlanKind.COMPOSE,
-                operator="concat",
-                operands=[
-                    ExpressionOperand(
-                        kind=OperandKind.RESOURCE,
-                        semantic_name="first name",
-                    ),
-                    ExpressionOperand(
-                        kind=OperandKind.LITERAL,
-                        value="_",
-                    ),
-                    ExpressionOperand(
-                        kind=OperandKind.RESOURCE,
-                        semantic_name="last name",
-                    ),
-                ],
+                kind=QueryPlanKind.MULTI_TARGET,
+                target_semantic_names=["first name", "last name"],
             )
 
     class ParallelSearch(FakeSearch):
@@ -216,31 +200,23 @@ def test_concat_decomposition_resolves_resource_goals_in_parallel_and_keeps_orde
         expected_type=_goal("x").expected_type,
     )
 
-    assert result.root_resolution.candidate.kind == "composition"
+    assert result.root_resolution.candidate.kind == "goal_set"
     assert [
         dependency.candidate.kind
         for dependency in result.root_resolution.dependencies
-    ] == ["context", "literal", "context"]
+    ] == ["context", "context"]
     assert [
         dependency.goal.semantic_name
         for dependency in result.root_resolution.dependencies
-    ] == ["first name", "_", "last name"]
+    ] == ["first name", "last name"]
     assert sorted(semantic.generated_goal_ids) == [
-        "root::operand:0",
-        "root::operand:2",
+        "root::target:0",
+        "root::target:1",
     ]
 
 
-def test_if_decomposition_keeps_condition_then_else_order():
-    condition = _candidate("ctx.customer_is_active").model_copy(
-        update={
-            "return_type": ReturnType(
-                data_type="basic",
-                data_type_name="boolean",
-                is_list=False,
-            )
-        }
-    )
+def test_multi_goal_decomposition_does_not_model_if_expression_parts():
+    condition = _candidate("ctx.customer_is_active")
     value = _candidate("ctx.customer_name")
 
     class IfSemantic(FakeSemantic):
@@ -249,22 +225,8 @@ def test_if_decomposition_keeps_condition_then_else_order():
 
         def decompose_multi_goal(self, **_):
             return QueryDecomposition(
-                kind=QueryPlanKind.COMPOSE,
-                operator="if",
-                operands=[
-                    ExpressionOperand(
-                        kind=OperandKind.RESOURCE,
-                        semantic_name="customer is active",
-                    ),
-                    ExpressionOperand(
-                        kind=OperandKind.RESOURCE,
-                        semantic_name="customer name",
-                    ),
-                    ExpressionOperand(
-                        kind=OperandKind.LITERAL,
-                        value="inactive",
-                    ),
-                ],
+                kind=QueryPlanKind.MULTI_TARGET,
+                target_semantic_names=["customer is active", "customer name"],
             )
 
     semantic = IfSemantic(
@@ -295,14 +257,15 @@ def test_if_decomposition_keeps_condition_then_else_order():
         expected_type=_goal("x").expected_type,
     )
 
-    assert result.root_resolution.candidate.metadata["operator"] == "if"
+    assert result.root_resolution.candidate.kind == "goal_set"
+    assert "operator" not in result.root_resolution.candidate.metadata
     assert [
         dependency.goal.semantic_name
         for dependency in result.root_resolution.dependencies
-    ] == ["customer is active", "customer name", "inactive"]
+    ] == ["customer is active", "customer name"]
     assert sorted(semantic.generated_goal_ids) == [
-        "root::operand:0",
-        "root::operand:1",
+        "root::target:0",
+        "root::target:1",
     ]
 
 

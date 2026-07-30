@@ -11,7 +11,6 @@ from .models import (
     GoalRole,
     GoalSearchRequest,
     GoalStatus,
-    OperandKind,
     QueryClassification,
     QueryClassificationKind,
     QueryDecomposition,
@@ -84,8 +83,8 @@ class SpecOrchestrator:
                 query=query,
                 expected_type=expected_type,
             )
-            if decomposition.kind == QueryPlanKind.COMPOSE:
-                return self._resolve_composition(
+            if decomposition.kind == QueryPlanKind.MULTI_TARGET:
+                return self._resolve_multi_target(
                     decomposition=decomposition,
                     node_info=node_info,
                     query=query,
@@ -121,7 +120,7 @@ class SpecOrchestrator:
             resolution_trace=state.trace,
         )
 
-    def _resolve_composition(
+    def _resolve_multi_target(
         self,
         *,
         decomposition: QueryDecomposition,
@@ -137,41 +136,19 @@ class SpecOrchestrator:
             expected_type=expected_type.model_copy(deep=True),
             status=GoalStatus.WAITING_DEPENDENCIES,
         )
-        dependencies: list[ResolvedGoal | None] = [None] * len(decomposition.operands)
+        targets = _dedupe_targets(decomposition.target_semantic_names)
+        dependencies: list[ResolvedGoal | None] = [None] * len(targets)
         branch_states: dict[int, _ResolutionState] = {}
-        resource_indexes = [
-            index
-            for index, operand in enumerate(decomposition.operands)
-            if operand.kind == OperandKind.RESOURCE
-        ]
-        for index, operand in enumerate(decomposition.operands):
-            if operand.kind == OperandKind.LITERAL:
-                operand_type = _composition_operand_type(
-                    decomposition=decomposition,
-                    index=index,
-                    result_type=expected_type,
-                )
-                _, dependencies[index] = _literal_resolution(
-                    goal_id=f"root::operand:{index}",
-                    value=operand.value or "",
-                    role=GoalRole.INTERMEDIATE_VALUE,
-                    expected_type=operand_type,
-                )
 
         def resolve_operand(index: int) -> tuple[int, ResolvedGoal | None, _ResolutionState]:
-            operand = decomposition.operands[index]
+            target = targets[index]
             state = _ResolutionState(max_goals=self.max_goals)
-            operand_type = _composition_operand_type(
-                decomposition=decomposition,
-                index=index,
-                result_type=expected_type,
-            )
             goal = self.semantic.generate_goal(
-                goal_id=f"root::operand:{index}",
+                goal_id=f"root::target:{index}",
                 node_info=node_info,
-                query=operand.semantic_name or "",
+                query=target,
                 role=GoalRole.INTERMEDIATE_VALUE,
-                expected_type=operand_type,
+                expected_type=expected_type.model_copy(deep=True),
             )
             resolution = self._resolve_goal(
                 goal,
@@ -185,9 +162,9 @@ class SpecOrchestrator:
             return index, resolution, state
 
         with ThreadPoolExecutor(
-            max_workers=min(self.max_parallel_goals, len(resource_indexes))
+            max_workers=min(self.max_parallel_goals, len(targets))
         ) as executor:
-            futures = [executor.submit(resolve_operand, index) for index in resource_indexes]
+            futures = [executor.submit(resolve_operand, index) for index in range(len(targets))]
             for future in futures:
                 index, resolution, branch_state = future.result()
                 dependencies[index] = resolution
@@ -195,7 +172,7 @@ class SpecOrchestrator:
 
         trace = []
         failed_goal_ids = []
-        for index in resource_indexes:
+        for index in range(len(targets)):
             branch_state = branch_states[index]
             trace.extend(branch_state.trace)
             failed_goal_ids.extend(branch_state.failed_goal_ids)
@@ -211,11 +188,11 @@ class SpecOrchestrator:
         committed = [item for item in dependencies if item is not None]
         root.status = GoalStatus.RESOLVED
         candidate = ResourceCandidate(
-            candidate_id="composition:root",
-            kind="composition",
-            resource={"operator": decomposition.operator},
+            candidate_id="goal_set:root",
+            kind="goal_set",
+            resource={"targets": targets},
             return_type=expected_type.model_copy(deep=True),
-            metadata={"operator": decomposition.operator},
+            metadata={"targets": targets},
         )
         root.selected_candidate_id = candidate.candidate_id
         root.candidate_resolutions = [candidate]
@@ -466,27 +443,6 @@ def _literal_resolution(
     return goal, ResolvedGoal(goal=goal, candidate=candidate)
 
 
-def _composition_operand_type(
-    *,
-    decomposition: QueryDecomposition,
-    index: int,
-    result_type: ReturnType,
-) -> ReturnType:
-    if decomposition.operator == "if":
-        if index == 0:
-            return ReturnType(
-                data_type="basic",
-                data_type_name="boolean",
-                is_list=False,
-            )
-        return result_type.model_copy(deep=True)
-    return ReturnType(
-        data_type="basic",
-        data_type_name="string",
-        is_list=False,
-    )
-
-
 def _types_compatible(expected: ReturnType, actual: ReturnType) -> bool:
     if bool(expected.is_list) != bool(actual.is_list):
         return False
@@ -517,4 +473,13 @@ def _execution_order(resolution: ResolvedGoal | None) -> list[str]:
     for dependency in resolution.dependencies:
         result.extend(_execution_order(dependency))
     result.append(resolution.goal.goal_id)
+    return result
+
+
+def _dedupe_targets(values: list[str]) -> list[str]:
+    result = []
+    for value in values:
+        normalized = str(value or "").strip()
+        if normalized and normalized not in result:
+            result.append(normalized)
     return result

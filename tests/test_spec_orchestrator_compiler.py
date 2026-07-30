@@ -275,7 +275,7 @@ def test_compiler_renders_literal_without_selecting_environment_resource():
     assert compiled.filtered_environment.selected_functions == []
 
 
-def test_compiler_renders_concat_in_operand_order_and_merges_resources():
+def test_compiler_renders_goal_set_without_expression_orchestration():
     expected = ReturnType(
         data_type="basic", data_type_name="string", is_list=False
     )
@@ -295,20 +295,13 @@ def test_compiler_renders_concat_in_operand_order_and_merges_resources():
     )
     dependencies = []
     for goal_id, semantic_name, candidate in [
-        ("root::operand:0", "first name", ResourceCandidate(
+        ("root::target:0", "first name", ResourceCandidate(
             candidate_id="ctx.first",
             kind="context",
             resource=first_context,
             return_type=expected,
         )),
-        ("root::operand:1", "_", ResourceCandidate(
-            candidate_id="literal:root::operand:1",
-            kind="literal",
-            resource="_",
-            return_type=expected,
-            metadata={"value": "_"},
-        )),
-        ("root::operand:2", "last name", ResourceCandidate(
+        ("root::target:1", "last name", ResourceCandidate(
             candidate_id="ctx.last",
             kind="context",
             resource=last_context,
@@ -325,11 +318,11 @@ def test_compiler_renders_concat_in_operand_order_and_merges_resources():
     resolution = ResolvedGoal(
         goal=root,
         candidate=ResourceCandidate(
-            candidate_id="composition:root",
-            kind="composition",
-            resource={"operator": "concat"},
+            candidate_id="goal_set:root",
+            kind="goal_set",
+            resource={"targets": ["first name", "last name"]},
             return_type=expected,
-            metadata={"operator": "concat"},
+            metadata={"targets": ["first name", "last name"]},
         ),
         dependencies=dependencies,
         bindings={
@@ -346,18 +339,17 @@ def test_compiler_renders_concat_in_operand_order_and_merges_resources():
         )
     )
 
-    assert "按顺序拼接" in compiled.expression_spec.nl
-    first_index = compiled.expression_spec.nl.index("$ctx$.person.first_name")
-    literal_index = compiled.expression_spec.nl.index("纯字符串“_”")
-    last_index = compiled.expression_spec.nl.index("$ctx$.person.last_name")
-    assert first_index < literal_index < last_index
+    assert "按顺序拼接" not in compiled.expression_spec.nl
+    assert "字符串拼接" not in compiled.expression_spec.nl
+    assert "$ctx$.person.first_name" in compiled.expression_spec.nl
+    assert "$ctx$.person.last_name" in compiled.expression_spec.nl
     assert compiled.filtered_environment.selected_global_context_ids == [
         "ctx.first",
         "ctx.last",
     ]
 
 
-def test_compiler_renders_if_condition_then_else_in_fixed_positions():
+def test_compiler_merges_multiple_goal_resources_without_if_orchestration():
     expected = ReturnType(
         data_type="basic", data_type_name="string", is_list=False
     )
@@ -377,7 +369,7 @@ def test_compiler_renders_if_condition_then_else_in_fixed_positions():
     )
     dependencies = [
         ResolvedGoal(
-            goal=_goal("root::operand:0", "customer is active"),
+            goal=_goal("root::target:0", "customer is active"),
             candidate=ResourceCandidate(
                 candidate_id="ctx.active",
                 kind="context",
@@ -386,7 +378,7 @@ def test_compiler_renders_if_condition_then_else_in_fixed_positions():
             ),
         ),
         ResolvedGoal(
-            goal=_goal("root::operand:1", "customer name"),
+            goal=_goal("root::target:1", "customer name"),
             candidate=ResourceCandidate(
                 candidate_id="ctx.name",
                 kind="context",
@@ -394,26 +386,16 @@ def test_compiler_renders_if_condition_then_else_in_fixed_positions():
                 return_type=expected,
             ),
         ),
-        ResolvedGoal(
-            goal=_goal("root::operand:2", "inactive"),
-            candidate=ResourceCandidate(
-                candidate_id="literal:inactive",
-                kind="literal",
-                resource="inactive",
-                return_type=expected,
-                metadata={"value": "inactive"},
-            ),
-        ),
     ]
     root = _goal("root", "display name")
     resolution = ResolvedGoal(
         goal=root,
         candidate=ResourceCandidate(
-            candidate_id="composition:root",
-            kind="composition",
-            resource={"operator": "if"},
+            candidate_id="goal_set:root",
+            kind="goal_set",
+            resource={"targets": ["customer is active", "customer name"]},
             return_type=expected,
-            metadata={"operator": "if"},
+            metadata={"targets": ["customer is active", "customer name"]},
         ),
         dependencies=dependencies,
     )
@@ -426,10 +408,10 @@ def test_compiler_renders_if_condition_then_else_in_fixed_positions():
         )
     )
 
-    assert (
-        "如果 $ctx$.customer.active 成立，则取 $ctx$.customer.name，"
-        "否则取纯字符串“inactive”"
-    ) in compiled.expression_spec.nl
+    assert "如果 " not in compiled.expression_spec.nl
+    assert "条件表达式" not in compiled.expression_spec.nl
+    assert "$ctx$.customer.active" in compiled.expression_spec.nl
+    assert "$ctx$.customer.name" in compiled.expression_spec.nl
     assert compiled.filtered_environment.selected_global_context_ids == [
         "ctx.active",
         "ctx.name",

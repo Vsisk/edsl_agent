@@ -154,22 +154,6 @@ def _render_resolution(root: ResolvedGoal) -> str:
             )
         elif candidate.kind == "function":
             lines.append(f"调用函数 {_candidate_label(item)} 生成“{item.goal.semantic_name}”。")
-        elif candidate.kind == "composition":
-            operator = candidate.metadata.get("operator")
-            operands = "、".join(
-                _candidate_label(dependency) for dependency in item.dependencies
-            )
-            if operator == "concat":
-                lines.append(
-                    f"按顺序拼接 {operands}，生成“{item.goal.semantic_name}”。"
-                )
-            elif operator == "if" and len(item.dependencies) == 3:
-                condition, then_value, else_value = item.dependencies
-                lines.append(
-                    f"如果 {_candidate_label(condition)} 成立，则取 "
-                    f"{_candidate_label(then_value)}，否则取"
-                    f"{_candidate_label(else_value)}，生成“{item.goal.semantic_name}”。"
-                )
         elif candidate.kind == "bo_select":
             bindings = []
             by_goal_id = {dep.goal.goal_id: dep for dep in item.dependencies}
@@ -207,10 +191,8 @@ def _candidate_label(value: ResolvedGoal | None) -> str:
         return str(candidate.resource.sql_name)
     if candidate.kind == "function":
         return str(candidate.resource.func_name)
-    if candidate.kind == "composition":
-        if candidate.metadata.get("operator") == "if":
-            return "条件表达式"
-        return "字符串拼接"
+    if candidate.kind == "goal_set":
+        return "多目标资源集合"
     if candidate.kind == "bo_select":
         return (
             f"{candidate.metadata.get('operation', 'select_one')}"

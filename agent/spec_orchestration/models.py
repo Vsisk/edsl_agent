@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import Any, Literal
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -56,7 +56,7 @@ class CoverageKind(str, Enum):
 class QueryPlanKind(str, Enum):
     SINGLE = "single"
     LITERAL = "literal"
-    COMPOSE = "compose"
+    MULTI_TARGET = "multi_target"
 
 
 class QueryClassificationKind(str, Enum):
@@ -81,52 +81,25 @@ class QueryClassification(BaseModel):
         return self
 
 
-class OperandKind(str, Enum):
-    RESOURCE = "resource"
-    LITERAL = "literal"
-
-
-class ExpressionOperand(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    kind: OperandKind
-    semantic_name: str | None = None
-    value: str | None = None
-
-    @model_validator(mode="after")
-    def validate_operand(self) -> "ExpressionOperand":
-        if self.kind == OperandKind.RESOURCE:
-            if not str(self.semantic_name or "").strip() or self.value is not None:
-                raise ValueError("resource operand requires semantic_name only")
-        elif self.value is None or self.semantic_name is not None:
-            raise ValueError("literal operand requires value only")
-        return self
-
-
 class QueryDecomposition(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     kind: QueryPlanKind
-    operator: Literal["concat", "if"] | None = None
-    operands: list[ExpressionOperand] = Field(default_factory=list)
+    target_semantic_names: list[str] = Field(default_factory=list)
     literal_value: str | None = None
 
     @model_validator(mode="after")
     def validate_shape(self) -> "QueryDecomposition":
         if self.kind == QueryPlanKind.SINGLE:
-            if self.operator is not None or self.operands or self.literal_value is not None:
-                raise ValueError("single decomposition cannot have expression fields")
+            if self.target_semantic_names or self.literal_value is not None:
+                raise ValueError("single decomposition cannot have target fields")
         elif self.kind == QueryPlanKind.LITERAL:
-            if self.literal_value is None or self.operator is not None or self.operands:
+            if self.literal_value is None or self.target_semantic_names:
                 raise ValueError("literal decomposition requires literal_value only")
-        elif self.literal_value is not None or not any(
-            item.kind == OperandKind.RESOURCE for item in self.operands
-        ):
-            raise ValueError("compose requires at least one resource operand")
-        elif self.operator == "concat" and len(self.operands) < 2:
-            raise ValueError("concat requires at least two operands")
-        elif self.operator == "if" and len(self.operands) != 3:
-            raise ValueError("if requires condition, then, and else operands")
+        elif self.literal_value is not None:
+            raise ValueError("multi_target cannot contain literal_value")
+        elif len([item for item in self.target_semantic_names if item.strip()]) < 2:
+            raise ValueError("multi_target requires at least two targets")
         return self
 
 

@@ -960,8 +960,11 @@ $ctx$.billInvoice.invoiceId
 
 `if` 的 condition 资源 Goal 由代码固定要求返回 boolean，then 与 else 资源 Goal 固定继承根目标
 返回类型。三项中的资源 Goal 可并行递归求解，固定值不触发搜索；任一必要 Goal 未闭合时整个条件
-表达式失败。编译器仅在恰好存在三个已提交依赖时，按固定位置输出“如果 condition 成立，则取
-then，否则取 else”的自然语言逻辑。
+表达式失败。
+
+concat、if 等组合信息只用于 Orchestrator 内部拆解、分支求解和资源聚合，不写入最终
+`ExpressionSpec.nl`。Spec 只描述各 Goal 已提交的资源或固定值；后续 Planner 始终接收原始
+`request.query`，由 Planner 根据原始需求完成拼接、条件选择等表达式编排。
 
 1. Value Logic 普通表达式主链由 `SpecOrchestrator` 完成递归 Spec 求解。
 2. 代码固定资源搜索优先级并负责每次搜索工具触发。
@@ -973,3 +976,15 @@ then，否则取 else”的自然语言逻辑。
 8. 自然语言 Spec 与 `FilteredEnvironment` 由同一已提交取值链生成。
 9. 最终环境不包含未提交、失败或回滚分支资源。
 10. 现有 Planner、TypedContext、NamingSQL Validator、AST 和公开 Value Logic 输出契约保持兼容。
+## 2026-07-30 Current Correction: Target-Only Decomposition
+
+The current implementation boundary is stricter than the earlier expression-decomposition notes in this document.
+Before entering recursive resolution, Orchestrator asks the LLM to classify the query as:
+
+- `fixed_string`: return the fixed value directly.
+- `single_goal`: resolve one normal root goal.
+- `multi_goal`: call the decomposer, but accept only `target_semantic_names`.
+
+For `multi_goal`, Orchestrator only creates independent resource goals from those target names and resolves them through the normal single-goal route. It must not model concat, if, separators, condition/then/else branches, literal branch values, operand order, or any expression AST. Payloads containing those expression fields are rejected by schema and fall back to `single_goal`.
+
+The root aggregate candidate is a neutral `goal_set` used only to merge committed resources. `ExpressionSpec.nl` describes the selected resources, and Planner receives the original `request.query` to perform string concatenation, conditional selection, and other expression orchestration later.

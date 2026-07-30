@@ -941,18 +941,22 @@ $ctx$.billInvoice.invoiceId
 
 ### Query 表达式分解与并行 Goal
 
-在创建 Root Goal 并进入资源搜索前，语义网关先将 query 约束为以下三种骨架之一：
+在创建 Root Goal 并进入资源搜索前，语义网关首先只对 query 分类：
 
-- `single`：沿用原有单 Goal 递归求解；
-- `literal`：直接提交纯字符串候选，不生成关键词、不调用资源搜索；
-- `compose/concat`：按原顺序生成 `resource` 与 `literal` 操作数；
-- `compose/if`：严格生成 `condition / then / else` 三个有序操作数。
+- `fixed_string`：直接提交模型返回的固定内容，不生成 Goal、关键词或资源搜索；
+- `single_goal`：不进行目标拆解，完整沿用原有 Root Goal 生成与递归求解；
+- `multi_goal`：由代码触发第二次 LLM 调用，进入受约束的多目标拆解。
 
-`concat` 中每个 `resource` 操作数形成独立 Value Goal，并使用 `ctx -> bo field -> function -> literal`
-策略并行求解。各分支拥有独立的预算、trace 和回滚状态，代码按操作数位置确定性合并结果；
+第二阶段拆解只允许输出 `compose/concat` 或 `compose/if`。前者按原顺序生成 `resource` 与
+`literal` 操作数；后者严格生成 `condition / then / else` 三个有序操作数。固定字符串和
+单目标分支不得调用第二阶段拆解器。
+
+`concat` 中每个 `resource` 操作数先独立调用与单目标相同的 Goal 生成逻辑，再使用
+`ctx -> bo field -> function -> literal` 策略并行求解。各分支拥有独立的预算、trace 和回滚状态，
+代码按操作数位置确定性合并结果；
 任一必要资源分支失败时，整个组合失败。`literal` 操作数不进入 `FilteredEnvironment`，最终资源列表
 只合并成功提交分支中的 Context、BO、NamingSQL 和 Function。当前组合操作符仅开放 `concat`，
-未知操作符或非法骨架降级到 `single`，不允许 LLM 生成任意表达式 AST 或直接指定资源。
+未知操作符或非法骨架降级到 `single_goal`，不允许 LLM 生成任意表达式 AST 或直接指定资源。
 
 `if` 的 condition 资源 Goal 由代码固定要求返回 boolean，then 与 else 资源 Goal 固定继承根目标
 返回类型。三项中的资源 Goal 可并行递归求解，固定值不触发搜索；任一必要 Goal 未闭合时整个条件

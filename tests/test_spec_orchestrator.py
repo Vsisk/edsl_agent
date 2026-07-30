@@ -10,6 +10,8 @@ from agent.spec_orchestration.models import (
     ResourceTier,
     ExpressionOperand,
     OperandKind,
+    QueryClassification,
+    QueryClassificationKind,
     QueryDecomposition,
     QueryPlanKind,
     ValueGoal,
@@ -24,9 +26,21 @@ class FakeSemantic:
         self.decisions = decisions
         self.coverage_calls = []
         self.keyword_calls = []
+        self.generated_goal_ids = []
 
-    def generate_goal(self, **_):
-        return self.root_goal.model_copy(deep=True)
+    def classify_query(self, **_):
+        return QueryClassification(kind=QueryClassificationKind.SINGLE_GOAL)
+
+    def generate_goal(self, *, goal_id, query, expected_type, role, **_):
+        self.generated_goal_ids.append(goal_id)
+        if goal_id == "root":
+            return self.root_goal.model_copy(deep=True)
+        return ValueGoal(
+            goal_id=goal_id,
+            semantic_name=query,
+            role=role,
+            expected_type=expected_type.model_copy(deep=True),
+        )
 
     def generate_keywords(self, *, goal, query):
         del query
@@ -101,16 +115,19 @@ def test_context_cover_stops_lower_priority_search():
     assert search.calls == [("客户名称", ResourceTier.VISIBLE_VALUE)]
 
 
-def test_fixed_string_decomposition_bypasses_goal_and_resource_search():
+def test_fixed_string_classification_bypasses_decomposition_goal_and_search():
     class LiteralSemantic:
         def configure_background(self, **_):
             pass
 
-        def decompose_query(self, **_):
-            return QueryDecomposition(
-                kind=QueryPlanKind.LITERAL,
-                literal_value="固定值",
+        def classify_query(self, **_):
+            return QueryClassification(
+                kind=QueryClassificationKind.FIXED_STRING,
+                fixed_value="固定值",
             )
+
+        def decompose_multi_goal(self, **_):
+            raise AssertionError("fixed string must not be decomposed")
 
         def generate_goal(self, **_):
             raise AssertionError("literal must not create a searched goal")
@@ -142,7 +159,10 @@ def test_concat_decomposition_resolves_resource_goals_in_parallel_and_keeps_orde
     last = _candidate("ctx.last_name")
 
     class ComposeSemantic(FakeSemantic):
-        def decompose_query(self, **_):
+        def classify_query(self, **_):
+            return QueryClassification(kind=QueryClassificationKind.MULTI_GOAL)
+
+        def decompose_multi_goal(self, **_):
             return QueryDecomposition(
                 kind=QueryPlanKind.COMPOSE,
                 operator="concat",
@@ -205,6 +225,10 @@ def test_concat_decomposition_resolves_resource_goals_in_parallel_and_keeps_orde
         dependency.goal.semantic_name
         for dependency in result.root_resolution.dependencies
     ] == ["first name", "_", "last name"]
+    assert sorted(semantic.generated_goal_ids) == [
+        "root::operand:0",
+        "root::operand:2",
+    ]
 
 
 def test_if_decomposition_keeps_condition_then_else_order():
@@ -220,7 +244,10 @@ def test_if_decomposition_keeps_condition_then_else_order():
     value = _candidate("ctx.customer_name")
 
     class IfSemantic(FakeSemantic):
-        def decompose_query(self, **_):
+        def classify_query(self, **_):
+            return QueryClassification(kind=QueryClassificationKind.MULTI_GOAL)
+
+        def decompose_multi_goal(self, **_):
             return QueryDecomposition(
                 kind=QueryPlanKind.COMPOSE,
                 operator="if",
@@ -273,6 +300,10 @@ def test_if_decomposition_keeps_condition_then_else_order():
         dependency.goal.semantic_name
         for dependency in result.root_resolution.dependencies
     ] == ["customer is active", "customer name", "inactive"]
+    assert sorted(semantic.generated_goal_ids) == [
+        "root::operand:0",
+        "root::operand:1",
+    ]
 
 
 def test_naming_sql_is_committed_only_after_parameter_goal_resolves():

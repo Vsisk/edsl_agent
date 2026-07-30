@@ -4,6 +4,7 @@ from agent.spec_orchestration.models import (
     GoalRole,
     ResourceCandidate,
     ResourceTier,
+    QueryClassificationKind,
     QueryPlanKind,
     ValueGoal,
 )
@@ -58,9 +59,40 @@ def test_generate_goal_keeps_code_authoritative_expected_type():
     assert goal.target_bo_name == "BB_DIC_CUSTGRP"
 
 
-def test_decompose_query_returns_bounded_concat_plan():
+def test_classify_query_returns_fixed_string_content():
     def decide(**kwargs):
-        assert kwargs["prompt_template"] == "spec_orchestrator_decompose"
+        assert kwargs["prompt_template"] == "spec_orchestrator_classify"
+        return {"kind": "fixed_string", "fixed_value": "completed"}
+
+    result = SpecSemanticGateway(decision_fn=decide).classify_query(
+        node_info={"node_name": "status"},
+        query='固定填写"completed"',
+        expected_type=ReturnType(
+            data_type="basic", data_type_name="string", is_list=False
+        ),
+    )
+
+    assert result.kind == QueryClassificationKind.FIXED_STRING
+    assert result.fixed_value == "completed"
+
+
+def test_invalid_classification_falls_back_to_single_goal():
+    result = SpecSemanticGateway(
+        decision_fn=lambda **_: {"kind": "unknown", "fixed_value": None}
+    ).classify_query(
+        node_info={},
+        query="ordinary",
+        expected_type=ReturnType(
+            data_type="basic", data_type_name="string", is_list=False
+        ),
+    )
+
+    assert result.kind == QueryClassificationKind.SINGLE_GOAL
+
+
+def test_decompose_multi_goal_returns_bounded_concat_plan():
+    def decide(**kwargs):
+        assert kwargs["prompt_template"] == "spec_orchestrator_multi_decompose"
         return {
             "kind": "compose",
             "operator": "concat",
@@ -72,7 +104,7 @@ def test_decompose_query_returns_bounded_concat_plan():
             "literal_value": None,
         }
 
-    result = SpecSemanticGateway(decision_fn=decide).decompose_query(
+    result = SpecSemanticGateway(decision_fn=decide).decompose_multi_goal(
         node_info={"node_name": "full_name"},
         query='用"_"拼接 first name 和 last name',
         expected_type=ReturnType(
@@ -98,7 +130,7 @@ def test_invalid_decomposition_falls_back_to_single_goal():
         }
     )
 
-    result = gateway.decompose_query(
+    result = gateway.decompose_multi_goal(
         node_info={},
         query="ordinary",
         expected_type=ReturnType(
@@ -109,9 +141,9 @@ def test_invalid_decomposition_falls_back_to_single_goal():
     assert result.kind == QueryPlanKind.SINGLE
 
 
-def test_decompose_query_returns_bounded_if_plan():
+def test_decompose_multi_goal_returns_bounded_if_plan():
     def decide(**kwargs):
-        assert kwargs["prompt_template"] == "spec_orchestrator_decompose"
+        assert kwargs["prompt_template"] == "spec_orchestrator_multi_decompose"
         return {
             "kind": "compose",
             "operator": "if",
@@ -123,7 +155,7 @@ def test_decompose_query_returns_bounded_if_plan():
             "literal_value": None,
         }
 
-    result = SpecSemanticGateway(decision_fn=decide).decompose_query(
+    result = SpecSemanticGateway(decision_fn=decide).decompose_multi_goal(
         node_info={"node_name": "display_name"},
         query="如果客户有效则使用客户名称，否则填写 inactive",
         expected_type=ReturnType(
@@ -148,7 +180,7 @@ def test_if_decomposition_without_else_falls_back_to_single_goal():
         }
     )
 
-    result = gateway.decompose_query(
+    result = gateway.decompose_multi_goal(
         node_info={},
         query="如果客户有效则使用客户名称",
         expected_type=ReturnType(

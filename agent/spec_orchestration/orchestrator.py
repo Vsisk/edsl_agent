@@ -12,6 +12,8 @@ from .models import (
     GoalSearchRequest,
     GoalStatus,
     OperandKind,
+    QueryClassification,
+    QueryClassificationKind,
     QueryDecomposition,
     QueryPlanKind,
     ResolvedGoal,
@@ -54,19 +56,19 @@ class SpecOrchestrator:
                 request=request,
                 context_pack=context_pack,
             )
-        decomposition = (
-            self.semantic.decompose_query(
+        classification = (
+            self.semantic.classify_query(
                 node_info=node_info,
                 query=query,
                 expected_type=expected_type,
             )
-            if hasattr(self.semantic, "decompose_query")
-            else QueryDecomposition(kind=QueryPlanKind.SINGLE)
+            if hasattr(self.semantic, "classify_query")
+            else QueryClassification(kind=QueryClassificationKind.SINGLE_GOAL)
         )
-        if decomposition.kind == QueryPlanKind.LITERAL:
+        if classification.kind == QueryClassificationKind.FIXED_STRING:
             root, resolution = _literal_resolution(
                 goal_id="root",
-                value=decomposition.literal_value or "",
+                value=classification.fixed_value or "",
                 role=GoalRole.FINAL_OUTPUT,
                 expected_type=expected_type,
             )
@@ -76,13 +78,20 @@ class SpecOrchestrator:
                 root_resolution=resolution,
                 execution_order=["root"],
             )
-        if decomposition.kind == QueryPlanKind.COMPOSE:
-            return self._resolve_composition(
-                decomposition=decomposition,
+        if classification.kind == QueryClassificationKind.MULTI_GOAL:
+            decomposition = self.semantic.decompose_multi_goal(
+                node_info=node_info,
                 query=query,
                 expected_type=expected_type,
-                node_path=node_path,
             )
+            if decomposition.kind == QueryPlanKind.COMPOSE:
+                return self._resolve_composition(
+                    decomposition=decomposition,
+                    node_info=node_info,
+                    query=query,
+                    expected_type=expected_type,
+                    node_path=node_path,
+                )
         root = self.semantic.generate_goal(
             goal_id="root",
             node_info=node_info,
@@ -116,6 +125,7 @@ class SpecOrchestrator:
         self,
         *,
         decomposition: QueryDecomposition,
+        node_info: Any,
         query: str,
         expected_type: ReturnType,
         node_path: str,
@@ -151,15 +161,17 @@ class SpecOrchestrator:
         def resolve_operand(index: int) -> tuple[int, ResolvedGoal | None, _ResolutionState]:
             operand = decomposition.operands[index]
             state = _ResolutionState(max_goals=self.max_goals)
-            goal = ValueGoal(
+            operand_type = _composition_operand_type(
+                decomposition=decomposition,
+                index=index,
+                result_type=expected_type,
+            )
+            goal = self.semantic.generate_goal(
                 goal_id=f"root::operand:{index}",
-                semantic_name=operand.semantic_name or "",
+                node_info=node_info,
+                query=operand.semantic_name or "",
                 role=GoalRole.INTERMEDIATE_VALUE,
-                expected_type=_composition_operand_type(
-                    decomposition=decomposition,
-                    index=index,
-                    result_type=expected_type,
-                ),
+                expected_type=operand_type,
             )
             resolution = self._resolve_goal(
                 goal,

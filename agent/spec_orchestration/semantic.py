@@ -11,6 +11,8 @@ from agent.resource_manager.loader.registry_models import ReturnType
 from .models import (
     CoverageDecision,
     CoverageKind,
+    QueryClassification,
+    QueryClassificationKind,
     QueryDecomposition,
     QueryPlanKind,
     GoalRole,
@@ -98,7 +100,28 @@ class SpecSemanticGateway:
             target_field_name=response.target_field_name,
         )
 
-    def decompose_query(
+    def classify_query(
+        self,
+        *,
+        node_info: Any,
+        query: str,
+        expected_type: ReturnType,
+    ) -> QueryClassification:
+        raw = self.decision_fn(
+            prompt_template="spec_orchestrator_classify",
+            llm_name="base",
+            lang="zh",
+            node_info_json=_dump(node_info),
+            expected_type_json=_dump(expected_type.model_dump(mode="json")),
+            user_requirement=str(query or "")[:4000],
+            **self._background(),
+        )
+        try:
+            return QueryClassification.model_validate(raw)
+        except (ValidationError, TypeError, ValueError):
+            return QueryClassification(kind=QueryClassificationKind.SINGLE_GOAL)
+
+    def decompose_multi_goal(
         self,
         *,
         node_info: Any,
@@ -106,7 +129,7 @@ class SpecSemanticGateway:
         expected_type: ReturnType,
     ) -> QueryDecomposition:
         raw = self.decision_fn(
-            prompt_template="spec_orchestrator_decompose",
+            prompt_template="spec_orchestrator_multi_decompose",
             llm_name="base",
             lang="zh",
             node_info_json=_dump(node_info),

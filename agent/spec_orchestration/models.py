@@ -59,6 +59,28 @@ class QueryPlanKind(str, Enum):
     COMPOSE = "compose"
 
 
+class QueryClassificationKind(str, Enum):
+    FIXED_STRING = "fixed_string"
+    SINGLE_GOAL = "single_goal"
+    MULTI_GOAL = "multi_goal"
+
+
+class QueryClassification(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    kind: QueryClassificationKind
+    fixed_value: str | None = None
+
+    @model_validator(mode="after")
+    def validate_classification(self) -> "QueryClassification":
+        if self.kind == QueryClassificationKind.FIXED_STRING:
+            if self.fixed_value is None:
+                raise ValueError("fixed_string requires fixed_value")
+        elif self.fixed_value is not None:
+            raise ValueError("only fixed_string may contain fixed_value")
+        return self
+
+
 class OperandKind(str, Enum):
     RESOURCE = "resource"
     LITERAL = "literal"

@@ -945,13 +945,19 @@ $ctx$.billInvoice.invoiceId
 
 - `single`：沿用原有单 Goal 递归求解；
 - `literal`：直接提交纯字符串候选，不生成关键词、不调用资源搜索；
-- `compose/concat`：按原顺序生成 `resource` 与 `literal` 操作数。
+- `compose/concat`：按原顺序生成 `resource` 与 `literal` 操作数；
+- `compose/if`：严格生成 `condition / then / else` 三个有序操作数。
 
 `concat` 中每个 `resource` 操作数形成独立 Value Goal，并使用 `ctx -> bo field -> function -> literal`
 策略并行求解。各分支拥有独立的预算、trace 和回滚状态，代码按操作数位置确定性合并结果；
 任一必要资源分支失败时，整个组合失败。`literal` 操作数不进入 `FilteredEnvironment`，最终资源列表
 只合并成功提交分支中的 Context、BO、NamingSQL 和 Function。当前组合操作符仅开放 `concat`，
 未知操作符或非法骨架降级到 `single`，不允许 LLM 生成任意表达式 AST 或直接指定资源。
+
+`if` 的 condition 资源 Goal 由代码固定要求返回 boolean，then 与 else 资源 Goal 固定继承根目标
+返回类型。三项中的资源 Goal 可并行递归求解，固定值不触发搜索；任一必要 Goal 未闭合时整个条件
+表达式失败。编译器仅在恰好存在三个已提交依赖时，按固定位置输出“如果 condition 成立，则取
+then，否则取 else”的自然语言逻辑。
 
 1. Value Logic 普通表达式主链由 `SpecOrchestrator` 完成递归 Spec 求解。
 2. 代码固定资源搜索优先级并负责每次搜索工具触发。

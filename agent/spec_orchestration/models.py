@@ -85,7 +85,7 @@ class QueryDecomposition(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     kind: QueryPlanKind
-    operator: Literal["concat"] | None = None
+    operator: Literal["concat", "if"] | None = None
     operands: list[ExpressionOperand] = Field(default_factory=list)
     literal_value: str | None = None
 
@@ -97,13 +97,14 @@ class QueryDecomposition(BaseModel):
         elif self.kind == QueryPlanKind.LITERAL:
             if self.literal_value is None or self.operator is not None or self.operands:
                 raise ValueError("literal decomposition requires literal_value only")
-        elif (
-            self.operator != "concat"
-            or len(self.operands) < 2
-            or self.literal_value is not None
-            or not any(item.kind == OperandKind.RESOURCE for item in self.operands)
+        elif self.literal_value is not None or not any(
+            item.kind == OperandKind.RESOURCE for item in self.operands
         ):
-            raise ValueError("compose requires concat and at least one resource operand")
+            raise ValueError("compose requires at least one resource operand")
+        elif self.operator == "concat" and len(self.operands) < 2:
+            raise ValueError("concat requires at least two operands")
+        elif self.operator == "if" and len(self.operands) != 3:
+            raise ValueError("if requires condition, then, and else operands")
         return self
 
 

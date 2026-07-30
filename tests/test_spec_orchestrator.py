@@ -207,6 +207,74 @@ def test_concat_decomposition_resolves_resource_goals_in_parallel_and_keeps_orde
     ] == ["first name", "_", "last name"]
 
 
+def test_if_decomposition_keeps_condition_then_else_order():
+    condition = _candidate("ctx.customer_is_active").model_copy(
+        update={
+            "return_type": ReturnType(
+                data_type="basic",
+                data_type_name="boolean",
+                is_list=False,
+            )
+        }
+    )
+    value = _candidate("ctx.customer_name")
+
+    class IfSemantic(FakeSemantic):
+        def decompose_query(self, **_):
+            return QueryDecomposition(
+                kind=QueryPlanKind.COMPOSE,
+                operator="if",
+                operands=[
+                    ExpressionOperand(
+                        kind=OperandKind.RESOURCE,
+                        semantic_name="customer is active",
+                    ),
+                    ExpressionOperand(
+                        kind=OperandKind.RESOURCE,
+                        semantic_name="customer name",
+                    ),
+                    ExpressionOperand(
+                        kind=OperandKind.LITERAL,
+                        value="inactive",
+                    ),
+                ],
+            )
+
+    semantic = IfSemantic(
+        _goal("unused"),
+        {
+            ("customer is active", ResourceTier.VISIBLE_VALUE): CoverageDecision(
+                kind=CoverageKind.DIRECT_COVER,
+                selected_candidate_id=condition.candidate_id,
+                reason="condition context",
+            ),
+            ("customer name", ResourceTier.VISIBLE_VALUE): CoverageDecision(
+                kind=CoverageKind.DIRECT_COVER,
+                selected_candidate_id=value.candidate_id,
+                reason="value context",
+            ),
+        },
+    )
+    search = FakeSearch(
+        {
+            ("customer is active", ResourceTier.VISIBLE_VALUE): [condition],
+            ("customer name", ResourceTier.VISIBLE_VALUE): [value],
+        }
+    )
+
+    result = SpecOrchestrator(semantic=semantic, search=search).resolve(
+        node_info={"node_name": "display_name"},
+        query="如果客户有效则使用客户名称，否则填写 inactive",
+        expected_type=_goal("x").expected_type,
+    )
+
+    assert result.root_resolution.candidate.metadata["operator"] == "if"
+    assert [
+        dependency.goal.semantic_name
+        for dependency in result.root_resolution.dependencies
+    ] == ["customer is active", "customer name", "inactive"]
+
+
 def test_naming_sql_is_committed_only_after_parameter_goal_resolves():
     field = ResourceCandidate(
         candidate_id="bo.bill_custgrp:field:CUST_GRP_NAME",

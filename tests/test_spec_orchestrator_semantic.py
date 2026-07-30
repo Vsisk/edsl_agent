@@ -109,6 +109,56 @@ def test_invalid_decomposition_falls_back_to_single_goal():
     assert result.kind == QueryPlanKind.SINGLE
 
 
+def test_decompose_query_returns_bounded_if_plan():
+    def decide(**kwargs):
+        assert kwargs["prompt_template"] == "spec_orchestrator_decompose"
+        return {
+            "kind": "compose",
+            "operator": "if",
+            "operands": [
+                {"kind": "resource", "semantic_name": "customer is active", "value": None},
+                {"kind": "resource", "semantic_name": "customer name", "value": None},
+                {"kind": "literal", "semantic_name": None, "value": "inactive"},
+            ],
+            "literal_value": None,
+        }
+
+    result = SpecSemanticGateway(decision_fn=decide).decompose_query(
+        node_info={"node_name": "display_name"},
+        query="如果客户有效则使用客户名称，否则填写 inactive",
+        expected_type=ReturnType(
+            data_type="basic", data_type_name="string", is_list=False
+        ),
+    )
+
+    assert result.operator == "if"
+    assert len(result.operands) == 3
+
+
+def test_if_decomposition_without_else_falls_back_to_single_goal():
+    gateway = SpecSemanticGateway(
+        decision_fn=lambda **_: {
+            "kind": "compose",
+            "operator": "if",
+            "operands": [
+                {"kind": "resource", "semantic_name": "customer is active", "value": None},
+                {"kind": "resource", "semantic_name": "customer name", "value": None},
+            ],
+            "literal_value": None,
+        }
+    )
+
+    result = gateway.decompose_query(
+        node_info={},
+        query="如果客户有效则使用客户名称",
+        expected_type=ReturnType(
+            data_type="basic", data_type_name="string", is_list=False
+        ),
+    )
+
+    assert result.kind == QueryPlanKind.SINGLE
+
+
 def test_request_and_context_pack_are_injected_as_prompt_background():
     calls = []
 

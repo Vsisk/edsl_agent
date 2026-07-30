@@ -355,3 +355,82 @@ def test_compiler_renders_concat_in_operand_order_and_merges_resources():
         "ctx.first",
         "ctx.last",
     ]
+
+
+def test_compiler_renders_if_condition_then_else_in_fixed_positions():
+    expected = ReturnType(
+        data_type="basic", data_type_name="string", is_list=False
+    )
+    condition_context = ContextRegistry(
+        resource_id="ctx.active",
+        context_name="$ctx$.customer.active",
+        return_type=expected,
+        property_type=PropertyTypeEnum.system,
+        annotation="customer is active",
+    )
+    name_context = ContextRegistry(
+        resource_id="ctx.name",
+        context_name="$ctx$.customer.name",
+        return_type=expected,
+        property_type=PropertyTypeEnum.system,
+        annotation="customer name",
+    )
+    dependencies = [
+        ResolvedGoal(
+            goal=_goal("root::operand:0", "customer is active"),
+            candidate=ResourceCandidate(
+                candidate_id="ctx.active",
+                kind="context",
+                resource=condition_context,
+                return_type=expected,
+            ),
+        ),
+        ResolvedGoal(
+            goal=_goal("root::operand:1", "customer name"),
+            candidate=ResourceCandidate(
+                candidate_id="ctx.name",
+                kind="context",
+                resource=name_context,
+                return_type=expected,
+            ),
+        ),
+        ResolvedGoal(
+            goal=_goal("root::operand:2", "inactive"),
+            candidate=ResourceCandidate(
+                candidate_id="literal:inactive",
+                kind="literal",
+                resource="inactive",
+                return_type=expected,
+                metadata={"value": "inactive"},
+            ),
+        ),
+    ]
+    root = _goal("root", "display name")
+    resolution = ResolvedGoal(
+        goal=root,
+        candidate=ResourceCandidate(
+            candidate_id="composition:root",
+            kind="composition",
+            resource={"operator": "if"},
+            return_type=expected,
+            metadata={"operator": "if"},
+        ),
+        dependencies=dependencies,
+    )
+
+    compiled = ResolutionCompiler().compile(
+        SpecOrchestrationResult(
+            query="如果客户有效则使用客户名称，否则填写 inactive",
+            root_goal=root,
+            root_resolution=resolution,
+        )
+    )
+
+    assert (
+        "如果 $ctx$.customer.active 成立，则取 $ctx$.customer.name，"
+        "否则取纯字符串“inactive”"
+    ) in compiled.expression_spec.nl
+    assert compiled.filtered_environment.selected_global_context_ids == [
+        "ctx.active",
+        "ctx.name",
+    ]

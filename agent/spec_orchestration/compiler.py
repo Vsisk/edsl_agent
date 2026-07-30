@@ -163,6 +163,13 @@ def _render_resolution(root: ResolvedGoal) -> str:
                 lines.append(
                     f"按顺序拼接 {operands}，生成“{item.goal.semantic_name}”。"
                 )
+            elif operator == "if" and len(item.dependencies) == 3:
+                condition, then_value, else_value = item.dependencies
+                lines.append(
+                    f"如果 {_candidate_label(condition)} 成立，则取 "
+                    f"{_candidate_label(then_value)}，否则取"
+                    f"{_candidate_label(else_value)}，生成“{item.goal.semantic_name}”。"
+                )
         elif candidate.kind == "bo_select":
             bindings = []
             by_goal_id = {dep.goal.goal_id: dep for dep in item.dependencies}
@@ -201,6 +208,8 @@ def _candidate_label(value: ResolvedGoal | None) -> str:
     if candidate.kind == "function":
         return str(candidate.resource.func_name)
     if candidate.kind == "composition":
+        if candidate.metadata.get("operator") == "if":
+            return "条件表达式"
         return "字符串拼接"
     if candidate.kind == "bo_select":
         return (

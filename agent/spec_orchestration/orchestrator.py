@@ -136,15 +136,16 @@ class SpecOrchestrator:
         ]
         for index, operand in enumerate(decomposition.operands):
             if operand.kind == OperandKind.LITERAL:
+                operand_type = _composition_operand_type(
+                    decomposition=decomposition,
+                    index=index,
+                    result_type=expected_type,
+                )
                 _, dependencies[index] = _literal_resolution(
                     goal_id=f"root::operand:{index}",
                     value=operand.value or "",
                     role=GoalRole.INTERMEDIATE_VALUE,
-                    expected_type=ReturnType(
-                        data_type="basic",
-                        data_type_name="string",
-                        is_list=False,
-                    ),
+                    expected_type=operand_type,
                 )
 
         def resolve_operand(index: int) -> tuple[int, ResolvedGoal | None, _ResolutionState]:
@@ -154,10 +155,10 @@ class SpecOrchestrator:
                 goal_id=f"root::operand:{index}",
                 semantic_name=operand.semantic_name or "",
                 role=GoalRole.INTERMEDIATE_VALUE,
-                expected_type=ReturnType(
-                    data_type="basic",
-                    data_type_name="string",
-                    is_list=False,
+                expected_type=_composition_operand_type(
+                    decomposition=decomposition,
+                    index=index,
+                    result_type=expected_type,
                 ),
             )
             resolution = self._resolve_goal(
@@ -451,6 +452,27 @@ def _literal_resolution(
     goal.selected_candidate_id = candidate.candidate_id
     goal.candidate_resolutions = [candidate]
     return goal, ResolvedGoal(goal=goal, candidate=candidate)
+
+
+def _composition_operand_type(
+    *,
+    decomposition: QueryDecomposition,
+    index: int,
+    result_type: ReturnType,
+) -> ReturnType:
+    if decomposition.operator == "if":
+        if index == 0:
+            return ReturnType(
+                data_type="basic",
+                data_type_name="boolean",
+                is_list=False,
+            )
+        return result_type.model_copy(deep=True)
+    return ReturnType(
+        data_type="basic",
+        data_type_name="string",
+        is_list=False,
+    )
 
 
 def _types_compatible(expected: ReturnType, actual: ReturnType) -> bool:

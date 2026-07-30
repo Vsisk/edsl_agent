@@ -41,6 +41,7 @@ from agent.context_pack import (
     create_context_pack_manager,
 )
 from agent.context_pack.models import ContextTraceItem, ContextWarning
+from agent.context_manager.retrieval import EmbeddingClient
 from agent.planner.difficulty_router import LLMDifficultyRouter, ResourceRoute
 from agent.planner.llm_planner import LLMPlanner
 from agent.planner.models import Plan
@@ -815,6 +816,7 @@ def _default_spec_orchestrator_factory(
         search=OrchestratorResourceSearch(
             loaded_resource,
             naming_sql_retriever=NamingSqlSelector(),
+            embedding_client=EmbeddingClient(),
         ),
     )
 

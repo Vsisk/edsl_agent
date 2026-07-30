@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import re
 from typing import Any
 
@@ -24,9 +25,12 @@ class OrchestratorResourceSearch:
         loaded_resource: LoadedResource,
         *,
         naming_sql_retriever: Any = None,
+        embedding_client: Any = None,
     ) -> None:
         self.loaded_resource = loaded_resource
         self.naming_sql_retriever = naming_sql_retriever
+        self.embedding_client = embedding_client
+        self._resource_vector_cache: dict[str, list[float]] = {}
 
     def search(self, request: GoalSearchRequest) -> list[ResourceCandidate]:
         if request.tier == ResourceTier.VISIBLE_VALUE:
@@ -53,48 +57,63 @@ class OrchestratorResourceSearch:
             *self.loaded_resource.context_registry.values(),
             *local_resources,
         ]
-        result = []
-        for resource in resources:
+        ranked = []
+        for index, resource in enumerate(resources):
             if getattr(resource, "return_type", None) is None:
                 continue
-            text = " ".join(
-                [
-                    resource.context_name,
-                    getattr(resource, "annotation", ""),
-                    *getattr(resource, "tag", []),
-                ]
-            )
-            if not _matches(text, request):
+            text = _context_search_text(resource)
+            if _contains_negative(text, request.negative_keywords):
                 continue
-            result.append(
-                ResourceCandidate(
-                    candidate_id=resource.resource_id,
-                    kind="context",
-                    resource=resource,
-                    return_type=resource.return_type,
-                    evidence=["context keyword match"],
+            rank = _context_match_rank(
+                resource.context_name,
+                request,
+                annotation=getattr(resource, "annotation", ""),
+                tags=getattr(resource, "tag", []),
+            )
+            if rank is None:
+                continue
+            ranked.append(
+                (
+                    rank,
+                    index,
+                    ResourceCandidate(
+                        candidate_id=resource.resource_id,
+                        kind="context",
+                        resource=resource,
+                        return_type=resource.return_type,
+                        evidence=["context name/path match"],
+                    ),
                 )
             )
-        return result[: request.limit]
+        ranked.sort(key=lambda item: (item[0], item[1]))
+        return [item[2] for item in ranked[: request.limit]]
 
     def _search_bo_fields(self, request: GoalSearchRequest) -> list[ResourceCandidate]:
-        result = []
+        entries = []
         for bo in self.loaded_resource.bo_registry.values():
             if request.target_bo_name and bo.bo_name != request.target_bo_name:
                 continue
             for field in bo.property_list:
-                text = " ".join(
-                    [
-                        bo.bo_name,
-                        bo.bo_desc,
-                        field.field_name,
-                        field.description or "",
-                        *bo.tag,
-                    ]
-                )
-                if not _matches(text, request):
+                text = _bo_field_search_text(bo, field)
+                if _contains_negative(text, request.negative_keywords):
                     continue
-                result.append(
+                entries.append((bo, field, text))
+        scores = self._semantic_scores(request, [item[2] for item in entries])
+        ranked = []
+        for index, (bo, field, text) in enumerate(entries):
+            lexical_rank = _field_lexical_rank(field, request)
+            semantic_score = scores[index] if scores is not None else None
+            if (
+                lexical_rank is None
+                and semantic_score is None
+                and not _matches(text, request)
+            ):
+                continue
+            ranked.append(
+                (
+                    lexical_rank if lexical_rank is not None else 9,
+                    -(semantic_score if semantic_score is not None else -1.0),
+                    index,
                     ResourceCandidate(
                         candidate_id=f"{bo.resource_id}:field:{field.field_name}",
                         kind="bo_field",
@@ -103,11 +122,24 @@ class OrchestratorResourceSearch:
                         field_name=field.field_name,
                         is_key=field.data_type == DataTypeEnum.key,
                         return_type=_property_return_type(field),
-                        evidence=["BO field keyword match"],
-                        metadata={"field": field},
-                    )
+                        evidence=[
+                            "BO field exact/lexical match"
+                            if lexical_rank is not None
+                            else "BO field semantic match"
+                        ],
+                        metadata={
+                            "field": field,
+                            **(
+                                {"embedding_similarity": semantic_score}
+                                if semantic_score is not None
+                                else {}
+                            ),
+                        },
+                    ),
                 )
-        return result[: request.limit]
+            )
+        ranked.sort(key=lambda item: item[:3])
+        return [item[3] for item in ranked[: request.limit]]
 
     def _search_bo_access(self, request: GoalSearchRequest) -> list[ResourceCandidate]:
         return self._search_naming_sql(request)[: request.limit]
@@ -238,43 +270,93 @@ class OrchestratorResourceSearch:
         return result
 
     def _search_functions(self, request: GoalSearchRequest) -> list[ResourceCandidate]:
-        result = []
+        entries = []
         for function in self.loaded_resource.function_registry.values():
-            text = " ".join(
-                [
-                    function.func_name,
-                    function.func_desc,
-                    function.func_class,
-                    *function.tag,
-                ]
-            )
-            if not _matches(text, request):
+            if not _return_type_compatible(function.return_type, request.goal.expected_type):
                 continue
-            result.append(
-                ResourceCandidate(
-                    candidate_id=function.resource_id,
-                    kind="function",
-                    resource=function,
-                    return_type=ReturnType(
-                        data_type=function.return_type.data_type.value,
-                        data_type_name=function.return_type.data_type_name,
-                        is_list=function.return_type.is_list,
+            text = _function_search_text(function)
+            if _contains_negative(text, request.negative_keywords):
+                continue
+            entries.append((function, text))
+        scores = self._semantic_scores(request, [item[1] for item in entries])
+        ranked = []
+        for index, (function, text) in enumerate(entries):
+            lexical = _matches(text, request)
+            semantic_score = scores[index] if scores is not None else None
+            if not lexical and semantic_score is None:
+                continue
+            ranked.append(
+                (
+                    0 if lexical else 1,
+                    -(semantic_score if semantic_score is not None else -1.0),
+                    index,
+                    ResourceCandidate(
+                        candidate_id=function.resource_id,
+                        kind="function",
+                        resource=function,
+                        return_type=ReturnType(
+                            data_type=function.return_type.data_type.value,
+                            data_type_name=function.return_type.data_type_name,
+                            is_list=function.return_type.is_list,
+                        ),
+                        required_inputs=[
+                            ResourceInput(
+                                name=param.param_name,
+                                return_type=ReturnType(
+                                    data_type=param.data_type.value,
+                                    data_type_name=param.data_type_name,
+                                    is_list=param.is_list,
+                                ),
+                            )
+                            for param in function.param_list
+                        ],
+                        evidence=[
+                            "function lexical match"
+                            if lexical
+                            else "function semantic coarse match"
+                        ],
+                        metadata=(
+                            {"embedding_similarity": semantic_score}
+                            if semantic_score is not None
+                            else {}
+                        ),
                     ),
-                    required_inputs=[
-                        ResourceInput(
-                            name=param.param_name,
-                            return_type=ReturnType(
-                                data_type=param.data_type.value,
-                                data_type_name=param.data_type_name,
-                                is_list=param.is_list,
-                            ),
-                        )
-                        for param in function.param_list
-                    ],
-                    evidence=["function keyword match"],
                 )
             )
-        return result[: request.limit]
+        ranked.sort(key=lambda item: item[:3])
+        return [item[3] for item in ranked[: min(request.limit, 20)]]
+
+    def _semantic_scores(
+        self,
+        request: GoalSearchRequest,
+        documents: list[str],
+    ) -> list[float] | None:
+        queries = _unique_nonempty([*request.keywords, *request.aliases])
+        if self.embedding_client is None or not queries or not documents:
+            return None
+        try:
+            missing_documents = [
+                item
+                for item in dict.fromkeys(documents)
+                if item not in self._resource_vector_cache
+            ]
+            vectors = self.embedding_client.embed_texts([*queries, *missing_documents])
+            _validate_vectors(vectors, len(queries) + len(missing_documents))
+            query_vectors = vectors[: len(queries)]
+            for document, vector in zip(
+                missing_documents,
+                vectors[len(queries):],
+            ):
+                self._resource_vector_cache[document] = vector
+            return [
+                max(
+                    _cosine(query_vector, self._resource_vector_cache[document])
+                    for query_vector in query_vectors
+                )
+                for document in documents
+            ]
+        except Exception:
+            return None
 
     def _search_literal(self, request: GoalSearchRequest) -> list[ResourceCandidate]:
         type_name = str(request.goal.expected_type.data_type_name or "").lower()
@@ -306,6 +388,163 @@ def _property_return_type(field: Any) -> ReturnType:
         data_type_name=field.data_type_name,
         is_list=field.is_list,
     )
+
+
+def _context_search_text(resource: Any) -> str:
+    return " ".join(
+        [
+            resource.context_name,
+            getattr(resource, "annotation", ""),
+            *getattr(resource, "tag", []),
+        ]
+    )
+
+
+def _context_match_rank(
+    context_name: str,
+    request: GoalSearchRequest,
+    *,
+    annotation: str,
+    tags: list[str],
+) -> int | None:
+    name = _normalize_path(context_name)
+    stripped = _strip_context_prefix(name)
+    segments = [item for item in stripped.split(".") if item]
+    positives = _unique_nonempty(
+        [
+            *request.keywords,
+            *request.aliases,
+            request.goal.semantic_name,
+            request.goal.target_field_name or "",
+        ]
+    )
+    for value in positives:
+        query = _normalize_path(value)
+        query_stripped = _strip_context_prefix(query)
+        if query == name:
+            return 0
+        if query_stripped and query_stripped == stripped:
+            return 1
+        if query_stripped and stripped.endswith(f".{query_stripped}"):
+            return 2
+        if query_stripped and segments and query_stripped == segments[-1]:
+            return 3
+    annotation_text = " ".join([annotation, *tags])
+    if _matches(annotation_text, request):
+        return 4
+    return None
+
+
+def _bo_field_search_text(bo: Any, field: Any) -> str:
+    return (
+        f"业务对象：{bo.bo_name} 业务对象含义：{bo.bo_desc} "
+        f"字段：{field.field_name} 字段含义：{field.description or ''} "
+        f"标签：{' '.join(bo.tag)}"
+    )
+
+
+def _function_search_text(function: Any) -> str:
+    inputs = " ".join(
+        (
+            f"{param.param_name}:{param.data_type.value}/"
+            f"{param.data_type_name or ''}"
+        )
+        for param in function.param_list
+    )
+    output = (
+        f"{function.return_type.data_type.value}/"
+        f"{function.return_type.data_type_name or ''}/"
+        f"{function.return_type.is_list}"
+    )
+    return (
+        f"函数：{function.func_name} 功能：{function.func_desc} "
+        f"类别：{function.func_class} 标签：{' '.join(function.tag)} "
+        f"输入：{inputs} 输出：{output}"
+    )
+
+
+def _field_lexical_rank(field: Any, request: GoalSearchRequest) -> int | None:
+    field_name = _normalize(field.field_name)
+    description = _normalize(field.description or "")
+    positives = _unique_nonempty([*request.keywords, *request.aliases])
+    for value in positives:
+        normalized = _normalize(value)
+        if normalized and normalized == field_name:
+            return 0
+        if normalized and normalized == description:
+            return 1
+    return 2 if _matches(f"{field.field_name} {field.description or ''}", request) else None
+
+
+def _return_type_compatible(actual: Any, expected: ReturnType) -> bool:
+    if expected.is_list is not None and bool(actual.is_list) != bool(expected.is_list):
+        return False
+    actual_name = _normalize(actual.data_type_name or "")
+    expected_name = _normalize(expected.data_type_name or "")
+    if actual_name and expected_name and actual_name != expected_name:
+        return False
+    actual_type = (
+        actual.data_type.value
+        if hasattr(actual.data_type, "value")
+        else actual.data_type
+    )
+    if expected.data_type and actual_type:
+        compatible_types = {(_normalize(actual_type), _normalize(expected.data_type))}
+        if compatible_types <= {("basic", "basic"), ("key", "basic"), ("basic", "key")}:
+            return True
+        if _normalize(actual_type) != _normalize(expected.data_type):
+            return False
+    return True
+
+
+def _contains_negative(text: str, negative_keywords: list[str]) -> bool:
+    haystack = _normalize(text)
+    return any(
+        token and token in haystack
+        for value in negative_keywords
+        for token in _tokens(value)
+    )
+
+
+def _unique_nonempty(values: list[str]) -> list[str]:
+    result = []
+    for value in values:
+        normalized = str(value or "").strip()
+        if normalized and normalized not in result:
+            result.append(normalized)
+    return result
+
+
+def _validate_vectors(vectors: list[list[float]], expected_count: int) -> None:
+    if len(vectors) != expected_count or not vectors:
+        raise ValueError("embedding vector count mismatch")
+    dimension = len(vectors[0])
+    if dimension == 0 or any(len(vector) != dimension for vector in vectors):
+        raise ValueError("embedding vector dimension mismatch")
+    if any(
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(value)
+        for vector in vectors
+        for value in vector
+    ):
+        raise ValueError("embedding vector contains invalid values")
+
+
+def _cosine(left: list[float], right: list[float]) -> float:
+    left_norm = math.sqrt(sum(value * value for value in left))
+    right_norm = math.sqrt(sum(value * value for value in right))
+    if left_norm == 0 or right_norm == 0:
+        return 0.0
+    return sum(a * b for a, b in zip(left, right)) / (left_norm * right_norm)
+
+
+def _normalize_path(value: str) -> str:
+    return re.sub(r"\.+", ".", str(value or "").strip().lower()).strip(".")
+
+
+def _strip_context_prefix(value: str) -> str:
+    return re.sub(r"^\$(?:ctx|local|iter)\$\.", "", value)
 
 
 def _matches(text: str, request: GoalSearchRequest) -> bool:

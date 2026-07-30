@@ -26,10 +26,15 @@ class OrchestratorResourceSearch:
         *,
         naming_sql_retriever: Any = None,
         embedding_client: Any = None,
+        embedding_batch_size: int | None = None,
     ) -> None:
         self.loaded_resource = loaded_resource
         self.naming_sql_retriever = naming_sql_retriever
         self.embedding_client = embedding_client
+        self.embedding_batch_size = _resolve_embedding_batch_size(
+            embedding_client,
+            embedding_batch_size,
+        )
         self._resource_vector_cache: dict[str, list[float]] = {}
 
     def search(self, request: GoalSearchRequest) -> list[ResourceCandidate]:
@@ -89,32 +94,26 @@ class OrchestratorResourceSearch:
         return [item[2] for item in ranked[: request.limit]]
 
     def _search_bo_fields(self, request: GoalSearchRequest) -> list[ResourceCandidate]:
-        entries = []
+        ranked = []
+        positives = _unique_nonempty([*request.keywords, *request.aliases])
+        index = 0
         for bo in self.loaded_resource.bo_registry.values():
             if request.target_bo_name and bo.bo_name != request.target_bo_name:
                 continue
             for field in bo.property_list:
-                text = _bo_field_search_text(bo, field)
-                if _contains_negative(text, request.negative_keywords):
+                if _property_name_match_rank(
+                    field.field_name,
+                    request.negative_keywords,
+                ) is not None:
                     continue
-                entries.append((bo, field, text))
-        scores = self._semantic_scores(request, [item[2] for item in entries])
-        ranked = []
-        for index, (bo, field, text) in enumerate(entries):
-            lexical_rank = _field_lexical_rank(field, request)
-            semantic_score = scores[index] if scores is not None else None
-            if (
-                lexical_rank is None
-                and semantic_score is None
-                and not _matches(text, request)
-            ):
-                continue
-            ranked.append(
-                (
-                    lexical_rank if lexical_rank is not None else 9,
-                    -(semantic_score if semantic_score is not None else -1.0),
-                    index,
-                    ResourceCandidate(
+                match_rank = _property_name_match_rank(field.field_name, positives)
+                if match_rank is None:
+                    continue
+                ranked.append(
+                    (
+                        match_rank,
+                        index,
+                        ResourceCandidate(
                         candidate_id=f"{bo.resource_id}:field:{field.field_name}",
                         kind="bo_field",
                         resource=bo,
@@ -122,24 +121,14 @@ class OrchestratorResourceSearch:
                         field_name=field.field_name,
                         is_key=field.data_type == DataTypeEnum.key,
                         return_type=_property_return_type(field),
-                        evidence=[
-                            "BO field exact/lexical match"
-                            if lexical_rank is not None
-                            else "BO field semantic match"
-                        ],
-                        metadata={
-                            "field": field,
-                            **(
-                                {"embedding_similarity": semantic_score}
-                                if semantic_score is not None
-                                else {}
-                            ),
-                        },
-                    ),
+                            evidence=["BO property name match"],
+                            metadata={"field": field},
+                        ),
+                    )
                 )
-            )
-        ranked.sort(key=lambda item: item[:3])
-        return [item[3] for item in ranked[: request.limit]]
+                index += 1
+        ranked.sort(key=lambda item: (item[0], item[1]))
+        return [item[2] for item in ranked[: request.limit]]
 
     def _search_bo_access(self, request: GoalSearchRequest) -> list[ResourceCandidate]:
         return self._search_naming_sql(request)[: request.limit]
@@ -340,14 +329,20 @@ class OrchestratorResourceSearch:
                 for item in dict.fromkeys(documents)
                 if item not in self._resource_vector_cache
             ]
-            vectors = self.embedding_client.embed_texts([*queries, *missing_documents])
-            _validate_vectors(vectors, len(queries) + len(missing_documents))
-            query_vectors = vectors[: len(queries)]
-            for document, vector in zip(
-                missing_documents,
-                vectors[len(queries):],
-            ):
-                self._resource_vector_cache[document] = vector
+            query_vectors = self.embedding_client.embed_texts(queries)
+            _validate_vectors(query_vectors, len(queries))
+            pending_vectors: dict[str, list[float]] = {}
+            for offset in range(0, len(missing_documents), self.embedding_batch_size):
+                batch = missing_documents[offset:offset + self.embedding_batch_size]
+                batch_vectors = self.embedding_client.embed_texts(batch)
+                _validate_vectors(batch_vectors, len(batch))
+                if any(
+                    len(vector) != len(query_vectors[0])
+                    for vector in batch_vectors
+                ):
+                    raise ValueError("embedding vector dimension mismatch")
+                pending_vectors.update(zip(batch, batch_vectors))
+            self._resource_vector_cache.update(pending_vectors)
             return [
                 max(
                     _cosine(query_vector, self._resource_vector_cache[document])
@@ -435,14 +430,6 @@ def _context_match_rank(
     return None
 
 
-def _bo_field_search_text(bo: Any, field: Any) -> str:
-    return (
-        f"业务对象：{bo.bo_name} 业务对象含义：{bo.bo_desc} "
-        f"字段：{field.field_name} 字段含义：{field.description or ''} "
-        f"标签：{' '.join(bo.tag)}"
-    )
-
-
 def _function_search_text(function: Any) -> str:
     inputs = " ".join(
         (
@@ -463,17 +450,25 @@ def _function_search_text(function: Any) -> str:
     )
 
 
-def _field_lexical_rank(field: Any, request: GoalSearchRequest) -> int | None:
-    field_name = _normalize(field.field_name)
-    description = _normalize(field.description or "")
-    positives = _unique_nonempty([*request.keywords, *request.aliases])
-    for value in positives:
-        normalized = _normalize(value)
-        if normalized and normalized == field_name:
+def _property_name_match_rank(
+    field_name: str,
+    keywords: list[str],
+) -> int | None:
+    normalized_name = _normalize(field_name)
+    compact_name = normalized_name.replace("_", "")
+    for value in _unique_nonempty(keywords):
+        normalized_keyword = _normalize(value)
+        compact_keyword = normalized_keyword.replace("_", "")
+        if normalized_keyword and normalized_keyword == normalized_name:
             return 0
-        if normalized and normalized == description:
+        if compact_keyword and compact_keyword == compact_name:
             return 1
-    return 2 if _matches(f"{field.field_name} {field.description or ''}", request) else None
+        if compact_keyword and (
+            compact_name.endswith(compact_keyword)
+            or compact_keyword.endswith(compact_name)
+        ):
+            return 2
+    return None
 
 
 def _return_type_compatible(actual: Any, expected: ReturnType) -> bool:
@@ -513,6 +508,21 @@ def _unique_nonempty(values: list[str]) -> list[str]:
         if normalized and normalized not in result:
             result.append(normalized)
     return result
+
+
+def _resolve_embedding_batch_size(
+    embedding_client: Any,
+    configured_size: int | None,
+) -> int:
+    if configured_size is not None:
+        if configured_size <= 0:
+            raise ValueError("embedding_batch_size must be positive")
+        return configured_size
+    settings = getattr(embedding_client, "settings", None)
+    provider_size = getattr(settings, "local_embedding_batch_size", None)
+    if isinstance(provider_size, int) and not isinstance(provider_size, bool):
+        return provider_size if provider_size > 0 else 64
+    return 64
 
 
 def _validate_vectors(vectors: list[list[float]], expected_count: int) -> None:

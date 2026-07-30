@@ -176,92 +176,26 @@ def test_bo_field_search_marks_key_and_returns_matching_field():
     assert candidates[0].is_key is False
 
 
-def test_bo_field_semantic_score_uses_best_individual_keyword_and_returns_property():
+def test_bo_field_matches_property_name_and_never_calls_embedding():
     loaded = _loaded_resource()
-    fields = {
-        field.field_name: field
-        for bo in loaded.bo_registry.values()
-        for field in bo.property_list
-    }
-    embedding = FakeEmbeddingClient(
-        {
-            "客户": [1.0, 0.0],
-            "显示名称": [0.0, 1.0],
-            "业务对象：BB_DIC_CUSTGRP 业务对象含义：客户组字典 字段：CUST_GRP_ID 字段含义：客户组ID 标签：": [0.7, 0.7],
-            "业务对象：BB_DIC_CUSTGRP 业务对象含义：客户组字典 字段：CUST_GRP_NAME 字段含义：客户组名称 标签：": [0.0, 1.0],
-            "业务对象：BB_DIC_CUSTGRP 业务对象含义：客户组字典 字段：REGION_CODE 字段含义：区域编码 标签：": [-1.0, 0.0],
-            "业务对象：BB_BILL_CUSTGRP 业务对象含义：账单客户组 字段：CUST_GRP_ID 字段含义：客户组ID 标签：": [0.7, 0.7],
-        }
-    )
+    target_field = loaded.bo_registry["BB_DIC_CUSTGRP"].property_list[1]
+    embedding = FakeEmbeddingClient(failure=AssertionError("BO must not embed"))
     search = OrchestratorResourceSearch(loaded, embedding_client=embedding)
     request = GoalSearchRequest(
         goal=_goal("展示值"),
         tier=ResourceTier.BO_FIELD,
-        keywords=["客户"],
-        aliases=["显示名称"],
-        negative_keywords=["区域"],
-        limit=2,
+        keywords=["cust_grp_name"],
+        aliases=["CUSTGRPNAME"],
+        negative_keywords=["region_code"],
     )
 
     candidates = search.search(request)
 
-    assert candidates[0].field_name == "CUST_GRP_NAME"
-    assert candidates[0].metadata["field"] is fields["CUST_GRP_NAME"]
-    assert all(item.field_name != "REGION_CODE" for item in candidates)
-    assert embedding.calls[0][:2] == ["客户", "显示名称"]
-
-
-def test_bo_field_reuses_cached_resource_vectors_across_goals():
-    loaded = _loaded_resource()
-    documents = [
-        (
-            f"业务对象：{bo.bo_name} 业务对象含义：{bo.bo_desc} "
-            f"字段：{field.field_name} 字段含义：{field.description or ''} "
-            f"标签：{' '.join(bo.tag)}"
-        )
-        for bo in loaded.bo_registry.values()
-        for field in bo.property_list
+    assert [(item.bo_name, item.field_name) for item in candidates] == [
+        ("BB_DIC_CUSTGRP", "CUST_GRP_NAME")
     ]
-    vectors = {text: [1.0, 0.0] for text in documents}
-    vectors.update({"名称": [1.0, 0.0], "编码": [0.0, 1.0]})
-    embedding = FakeEmbeddingClient(vectors)
-    search = OrchestratorResourceSearch(loaded, embedding_client=embedding)
-
-    search.search(
-        GoalSearchRequest(
-            goal=_goal("名称"),
-            tier=ResourceTier.BO_FIELD,
-            keywords=["名称"],
-        )
-    )
-    search.search(
-        GoalSearchRequest(
-            goal=_goal("编码"),
-            tier=ResourceTier.BO_FIELD,
-            keywords=["编码"],
-        )
-    )
-
-    assert embedding.calls[0] == ["名称", *documents]
-    assert embedding.calls[1] == ["编码"]
-
-
-def test_bo_field_embedding_failure_falls_back_to_bounded_lexical_matches():
-    embedding = FakeEmbeddingClient(failure=RuntimeError("offline"))
-    search = OrchestratorResourceSearch(
-        _loaded_resource(),
-        embedding_client=embedding,
-    )
-    request = GoalSearchRequest(
-        goal=_goal("客户组名称"),
-        tier=ResourceTier.BO_FIELD,
-        keywords=["CUST_GRP_NAME"],
-        limit=1,
-    )
-
-    candidates = search.search(request)
-
-    assert [item.field_name for item in candidates] == ["CUST_GRP_NAME"]
+    assert candidates[0].metadata["field"] is target_field
+    assert embedding.calls == []
 
 
 def test_bo_access_search_does_not_mix_relation_with_naming_sql():
@@ -414,4 +348,50 @@ def test_function_filters_incompatible_return_type_before_embedding():
     candidates = search.search(request)
 
     assert [item.candidate_id for item in candidates] == ["fn.cust_group_name"]
-    assert embedding.calls == [["客户名称", compatible_text]]
+    assert embedding.calls == [["客户名称"], [compatible_text]]
+
+
+def test_function_resource_embeddings_are_computed_in_bounded_batches():
+    loaded = _loaded_resource()
+    loaded.function_registry = {}
+    documents = []
+    vectors = {"格式化": [1.0, 0.0]}
+    for index in range(5):
+        function = FunctionRegistry(
+            resource_id=f"fn.format_{index}",
+            func_name=f"FormatValue{index}",
+            func_desc=f"格式化值 {index}",
+            return_type=ReturnTypeTerm(
+                data_type=DataTypeEnum.basic,
+                data_type_name="string",
+                is_list=False,
+            ),
+        )
+        loaded.function_registry[function.func_name] = function
+        document = (
+            f"函数：{function.func_name} 功能：{function.func_desc} "
+            "类别： 标签： 输入： 输出：basic/string/False"
+        )
+        documents.append(document)
+        vectors[document] = [1.0, float(index)]
+    embedding = FakeEmbeddingClient(vectors)
+    search = OrchestratorResourceSearch(
+        loaded,
+        embedding_client=embedding,
+        embedding_batch_size=2,
+    )
+
+    search.search(
+        GoalSearchRequest(
+            goal=_goal("格式化结果"),
+            tier=ResourceTier.FUNCTION,
+            keywords=["格式化"],
+        )
+    )
+
+    assert embedding.calls == [
+        ["格式化"],
+        documents[:2],
+        documents[2:4],
+        documents[4:],
+    ]

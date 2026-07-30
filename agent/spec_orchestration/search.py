@@ -101,17 +101,19 @@ class OrchestratorResourceSearch:
             if request.target_bo_name and bo.bo_name != request.target_bo_name:
                 continue
             for field in bo.property_list:
-                if _property_name_match_rank(
+                if _property_name_match(
                     field.field_name,
                     request.negative_keywords,
                 ) is not None:
                     continue
-                match_rank = _property_name_match_rank(field.field_name, positives)
-                if match_rank is None:
+                match = _property_name_match(field.field_name, positives)
+                if match is None:
                     continue
+                match_rank, lexical_cosine = match
                 ranked.append(
                     (
                         match_rank,
+                        -lexical_cosine,
                         index,
                         ResourceCandidate(
                         candidate_id=f"{bo.resource_id}:field:{field.field_name}",
@@ -120,15 +122,18 @@ class OrchestratorResourceSearch:
                         bo_name=bo.bo_name,
                         field_name=field.field_name,
                         is_key=field.data_type == DataTypeEnum.key,
-                        return_type=_property_return_type(field),
+                            return_type=_property_return_type(field),
                             evidence=["BO property name match"],
-                            metadata={"field": field},
+                            metadata={
+                                "field": field,
+                                "lexical_cosine_similarity": lexical_cosine,
+                            },
                         ),
                     )
                 )
                 index += 1
-        ranked.sort(key=lambda item: (item[0], item[1]))
-        return [item[2] for item in ranked[: request.limit]]
+        ranked.sort(key=lambda item: (item[0], item[1], item[2]))
+        return [item[3] for item in ranked[: request.limit]]
 
     def _search_bo_access(self, request: GoalSearchRequest) -> list[ResourceCandidate]:
         return self._search_naming_sql(request)[: request.limit]
@@ -450,25 +455,71 @@ def _function_search_text(function: Any) -> str:
     )
 
 
-def _property_name_match_rank(
+def _property_name_match(
     field_name: str,
     keywords: list[str],
-) -> int | None:
+) -> tuple[int, float] | None:
     normalized_name = _normalize(field_name)
     compact_name = normalized_name.replace("_", "")
+    field_tokens = _name_tokens(field_name)
+    best_match: tuple[int, float] | None = None
     for value in _unique_nonempty(keywords):
         normalized_keyword = _normalize(value)
         compact_keyword = normalized_keyword.replace("_", "")
         if normalized_keyword and normalized_keyword == normalized_name:
-            return 0
-        if compact_keyword and compact_keyword == compact_name:
-            return 1
-        if compact_keyword and (
+            candidate = (0, 1.0)
+        elif compact_keyword and compact_keyword == compact_name:
+            candidate = (1, 1.0)
+        elif compact_keyword and (
             compact_name.endswith(compact_keyword)
             or compact_keyword.endswith(compact_name)
         ):
-            return 2
-    return None
+            candidate = (2, 1.0)
+        else:
+            similarity = _token_cosine(field_tokens, _name_tokens(value))
+            if similarity < 0.75:
+                continue
+            candidate = (3, similarity)
+        if (
+            best_match is None
+            or candidate[0] < best_match[0]
+            or (candidate[0] == best_match[0] and candidate[1] > best_match[1])
+        ):
+            best_match = candidate
+    return best_match
+
+
+def _name_tokens(value: str) -> list[str]:
+    split_acronym = re.sub(r"(?<=[A-Z])(?=[A-Z][a-z])", " ", str(value or ""))
+    split_camel = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", split_acronym)
+    return re.findall(r"[a-z0-9]+", split_camel.lower().replace("_", " "))
+
+
+def _token_cosine(left: list[str], right: list[str]) -> float:
+    if not left or not right:
+        return 0.0
+    left_score = sum(max(_token_similarity(item, other) for other in right) for item in left)
+    right_score = sum(max(_token_similarity(item, other) for other in left) for item in right)
+    numerator = (left_score + right_score) / 2.0
+    denominator = math.sqrt(len(left) * len(right))
+    return min(1.0, numerator / denominator) if denominator else 0.0
+
+
+def _token_similarity(left: str, right: str) -> float:
+    if left == right:
+        return 1.0
+    shorter, longer = sorted((left, right), key=len)
+    if len(shorter) >= 3 and _is_subsequence(shorter, longer):
+        return len(shorter) / len(longer)
+    return 0.0
+
+
+def _is_subsequence(shorter: str, longer: str) -> bool:
+    position = 0
+    for character in longer:
+        if position < len(shorter) and shorter[position] == character:
+            position += 1
+    return position == len(shorter)
 
 
 def _return_type_compatible(actual: Any, expected: ReturnType) -> bool:

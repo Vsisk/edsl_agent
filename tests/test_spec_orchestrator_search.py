@@ -198,6 +198,35 @@ def test_bo_field_matches_property_name_and_never_calls_embedding():
     assert embedding.calls == []
 
 
+def test_bo_field_tokenizes_camel_case_and_ranks_by_lexical_cosine():
+    loaded = _loaded_resource()
+    target_bo = loaded.bo_registry["BB_DIC_CUSTGRP"]
+    target_field = PropertyTerm(
+        field_name="custGrpName",
+        description="",
+        data_type=DataTypeEnum.basic,
+        data_type_name="string",
+    )
+    target_bo.property_list.append(target_field)
+    embedding = FakeEmbeddingClient(failure=AssertionError("BO must not embed"))
+    search = OrchestratorResourceSearch(loaded, embedding_client=embedding)
+    request = GoalSearchRequest(
+        goal=_goal("展示值"),
+        tier=ResourceTier.BO_FIELD,
+        keywords=["cust group name"],
+    )
+
+    candidates = search.search(request)
+
+    assert ("BB_DIC_CUSTGRP", "custGrpName") in [
+        (item.bo_name, item.field_name) for item in candidates
+    ]
+    candidate = next(item for item in candidates if item.field_name == "custGrpName")
+    assert candidate.metadata["field"] is target_field
+    assert candidate.metadata["lexical_cosine_similarity"] > 0.8
+    assert embedding.calls == []
+
+
 def test_bo_access_search_does_not_mix_relation_with_naming_sql():
     search = OrchestratorResourceSearch(_loaded_resource())
     request = GoalSearchRequest(

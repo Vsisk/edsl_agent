@@ -22,7 +22,7 @@
 
 1. Context 搜索只返回名称或 path 可确定性命中的可见 canonical 资源。
 2. BO Field 对每个字段分别召回，候选包含真实 `BoRegistry` 和 `PropertyTerm`。
-3. BO Field 仅对 Property Name 与关键词、别名做大小写、下划线归一化后的确定性匹配。
+3. BO Field 对 Property Name 与关键词、别名做大小写、下划线归一化匹配，并使用 camelCase/snake_case 分词后的词法余弦补充召回。
 4. Function 在向量召回前完成返回类型和基数过滤，向量结果只负责压缩几百个函数形成的候选池。
 5. 所有候选继续交给现有 Coverage LLM 做最终语义判断，并由代码执行 canonical、类型和依赖校验。
 6. Embedding 异常时使用有界词法召回，不向 LLM 暴露全量 Registry。
@@ -78,8 +78,11 @@ BO Field 不构造 embedding 文档。代码遍历每个 BO 的 `property_list`�
 1. 大小写归一化后完整相等；
 2. 移除下划线后完整相等；
 3. 移除下划线后互为后缀。
+4. camelCase、snake_case、空格文本分词后的软词项余弦相似度不低于 0.75。
 
-`negative_keywords` 使用相同的 Property Name 匹配规则并优先排除。BO 描述、tag、字段描述和 Goal 自由文本不参与 BO Field 召回。候选按匹配等级和 Registry 原始顺序稳定排序，`resource` 指向 canonical BO，`metadata["field"]` 指向 canonical Property。BO Field 搜索不得调用 embedding client。
+软词项余弦对完全相同 token 计 1.0；长度不少于 3 的有序缩写按长度比例计分，例如 `grp` 可与 `group` 匹配。候选先按匹配等级、再按余弦分数、最后按 Registry 原始顺序稳定排序。
+
+`negative_keywords` 使用相同的 Property Name 匹配规则并优先排除。BO 描述、tag、字段描述和 Goal 自由文本不参与 BO Field 召回。`resource` 指向 canonical BO，`metadata["field"]` 指向 canonical Property，并记录 `lexical_cosine_similarity`。BO Field 搜索不得调用 embedding client。
 
 ### Function
 
@@ -109,6 +112,7 @@ Function 先按 Goal 的返回类型和 `is_list` 过滤。每个合法函数的
 - Context 名称/path 命中且不会调用 embedding；
 - Context annotation/tag 仍可作为低优先级确定性候选；
 - BO Field 只匹配 Property Name 且不会调用 embedding；
+- `custGrpName` 可以被 `cust group name` 通过分词和词法余弦召回；
 - BO Field 候选返回正确 BO 和 Property；
 - Property Name exact 命中优先于去下划线和后缀命中；
 - aliases 参与正向向量召回；

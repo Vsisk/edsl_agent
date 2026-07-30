@@ -1,3 +1,5 @@
+import threading
+
 from agent.resource_manager.loader.registry_models import ReturnType
 from agent.spec_orchestration.models import (
     CoverageDecision,
@@ -6,6 +8,10 @@ from agent.spec_orchestration.models import (
     ResourceCandidate,
     ResourceInput,
     ResourceTier,
+    ExpressionOperand,
+    OperandKind,
+    QueryDecomposition,
+    QueryPlanKind,
     ValueGoal,
 )
 from agent.spec_orchestration.orchestrator import SpecOrchestrator
@@ -93,6 +99,112 @@ def test_context_cover_stops_lower_priority_search():
 
     assert result.root_resolution.candidate.candidate_id == "ctx.name"
     assert search.calls == [("客户名称", ResourceTier.VISIBLE_VALUE)]
+
+
+def test_fixed_string_decomposition_bypasses_goal_and_resource_search():
+    class LiteralSemantic:
+        def configure_background(self, **_):
+            pass
+
+        def decompose_query(self, **_):
+            return QueryDecomposition(
+                kind=QueryPlanKind.LITERAL,
+                literal_value="固定值",
+            )
+
+        def generate_goal(self, **_):
+            raise AssertionError("literal must not create a searched goal")
+
+        def generate_keywords(self, **_):
+            raise AssertionError("literal must not generate keywords")
+
+    class NoSearch:
+        def search(self, _):
+            raise AssertionError("literal must not search resources")
+
+    result = SpecOrchestrator(
+        semantic=LiteralSemantic(),
+        search=NoSearch(),
+    ).resolve(
+        node_info={"node_name": "状态"},
+        query='固定填写"固定值"',
+        expected_type=_goal("x").expected_type,
+    )
+
+    assert result.root_resolution.candidate.kind == "literal"
+    assert result.root_resolution.candidate.metadata["value"] == "固定值"
+    assert result.execution_order == ["root"]
+
+
+def test_concat_decomposition_resolves_resource_goals_in_parallel_and_keeps_order():
+    barrier = threading.Barrier(2)
+    first = _candidate("ctx.first_name")
+    last = _candidate("ctx.last_name")
+
+    class ComposeSemantic(FakeSemantic):
+        def decompose_query(self, **_):
+            return QueryDecomposition(
+                kind=QueryPlanKind.COMPOSE,
+                operator="concat",
+                operands=[
+                    ExpressionOperand(
+                        kind=OperandKind.RESOURCE,
+                        semantic_name="first name",
+                    ),
+                    ExpressionOperand(
+                        kind=OperandKind.LITERAL,
+                        value="_",
+                    ),
+                    ExpressionOperand(
+                        kind=OperandKind.RESOURCE,
+                        semantic_name="last name",
+                    ),
+                ],
+            )
+
+    class ParallelSearch(FakeSearch):
+        def search(self, request):
+            if request.tier == ResourceTier.VISIBLE_VALUE:
+                barrier.wait(timeout=2)
+            return super().search(request)
+
+    semantic = ComposeSemantic(
+        _goal("unused"),
+        {
+            ("first name", ResourceTier.VISIBLE_VALUE): CoverageDecision(
+                kind=CoverageKind.DIRECT_COVER,
+                selected_candidate_id=first.candidate_id,
+                reason="first name context",
+            ),
+            ("last name", ResourceTier.VISIBLE_VALUE): CoverageDecision(
+                kind=CoverageKind.DIRECT_COVER,
+                selected_candidate_id=last.candidate_id,
+                reason="last name context",
+            ),
+        },
+    )
+    search = ParallelSearch(
+        {
+            ("first name", ResourceTier.VISIBLE_VALUE): [first],
+            ("last name", ResourceTier.VISIBLE_VALUE): [last],
+        }
+    )
+
+    result = SpecOrchestrator(semantic=semantic, search=search).resolve(
+        node_info={"node_name": "full_name"},
+        query='用"_"拼接 first name 和 last name',
+        expected_type=_goal("x").expected_type,
+    )
+
+    assert result.root_resolution.candidate.kind == "composition"
+    assert [
+        dependency.candidate.kind
+        for dependency in result.root_resolution.dependencies
+    ] == ["context", "literal", "context"]
+    assert [
+        dependency.goal.semantic_name
+        for dependency in result.root_resolution.dependencies
+    ] == ["first name", "_", "last name"]
 
 
 def test_naming_sql_is_committed_only_after_parameter_goal_resolves():

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -51,6 +51,60 @@ class CoverageKind(str, Enum):
     DIRECT_COVER = "direct_cover"
     DEPENDENCY_COVER = "dependency_cover"
     NOT_COVER = "not_cover"
+
+
+class QueryPlanKind(str, Enum):
+    SINGLE = "single"
+    LITERAL = "literal"
+    COMPOSE = "compose"
+
+
+class OperandKind(str, Enum):
+    RESOURCE = "resource"
+    LITERAL = "literal"
+
+
+class ExpressionOperand(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    kind: OperandKind
+    semantic_name: str | None = None
+    value: str | None = None
+
+    @model_validator(mode="after")
+    def validate_operand(self) -> "ExpressionOperand":
+        if self.kind == OperandKind.RESOURCE:
+            if not str(self.semantic_name or "").strip() or self.value is not None:
+                raise ValueError("resource operand requires semantic_name only")
+        elif self.value is None or self.semantic_name is not None:
+            raise ValueError("literal operand requires value only")
+        return self
+
+
+class QueryDecomposition(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    kind: QueryPlanKind
+    operator: Literal["concat"] | None = None
+    operands: list[ExpressionOperand] = Field(default_factory=list)
+    literal_value: str | None = None
+
+    @model_validator(mode="after")
+    def validate_shape(self) -> "QueryDecomposition":
+        if self.kind == QueryPlanKind.SINGLE:
+            if self.operator is not None or self.operands or self.literal_value is not None:
+                raise ValueError("single decomposition cannot have expression fields")
+        elif self.kind == QueryPlanKind.LITERAL:
+            if self.literal_value is None or self.operator is not None or self.operands:
+                raise ValueError("literal decomposition requires literal_value only")
+        elif (
+            self.operator != "concat"
+            or len(self.operands) < 2
+            or self.literal_value is not None
+            or not any(item.kind == OperandKind.RESOURCE for item in self.operands)
+        ):
+            raise ValueError("compose requires concat and at least one resource operand")
+        return self
 
 
 class ResourceInput(BaseModel):

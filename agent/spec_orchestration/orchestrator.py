@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 from agent.resource_manager.loader.registry_models import ReturnType
@@ -10,6 +11,9 @@ from .models import (
     GoalRole,
     GoalSearchRequest,
     GoalStatus,
+    OperandKind,
+    QueryDecomposition,
+    QueryPlanKind,
     ResolvedGoal,
     ResourceCandidate,
     ResourceTier,
@@ -27,11 +31,13 @@ class SpecOrchestrator:
         search: Any,
         max_depth: int = 6,
         max_goals: int = 20,
+        max_parallel_goals: int = 4,
     ) -> None:
         self.semantic = semantic
         self.search = search
         self.max_depth = max_depth
         self.max_goals = max_goals
+        self.max_parallel_goals = max_parallel_goals
 
     def resolve(
         self,
@@ -47,6 +53,35 @@ class SpecOrchestrator:
             self.semantic.configure_background(
                 request=request,
                 context_pack=context_pack,
+            )
+        decomposition = (
+            self.semantic.decompose_query(
+                node_info=node_info,
+                query=query,
+                expected_type=expected_type,
+            )
+            if hasattr(self.semantic, "decompose_query")
+            else QueryDecomposition(kind=QueryPlanKind.SINGLE)
+        )
+        if decomposition.kind == QueryPlanKind.LITERAL:
+            root, resolution = _literal_resolution(
+                goal_id="root",
+                value=decomposition.literal_value or "",
+                role=GoalRole.FINAL_OUTPUT,
+                expected_type=expected_type,
+            )
+            return SpecOrchestrationResult(
+                query=query,
+                root_goal=root,
+                root_resolution=resolution,
+                execution_order=["root"],
+            )
+        if decomposition.kind == QueryPlanKind.COMPOSE:
+            return self._resolve_composition(
+                decomposition=decomposition,
+                query=query,
+                expected_type=expected_type,
+                node_path=node_path,
             )
         root = self.semantic.generate_goal(
             goal_id="root",
@@ -75,6 +110,118 @@ class SpecOrchestrator:
             execution_order=_execution_order(resolution),
             failed_goal_ids=list(dict.fromkeys(state.failed_goal_ids)),
             resolution_trace=state.trace,
+        )
+
+    def _resolve_composition(
+        self,
+        *,
+        decomposition: QueryDecomposition,
+        query: str,
+        expected_type: ReturnType,
+        node_path: str,
+    ) -> SpecOrchestrationResult:
+        root = ValueGoal(
+            goal_id="root",
+            semantic_name=query,
+            role=GoalRole.FINAL_OUTPUT,
+            expected_type=expected_type.model_copy(deep=True),
+            status=GoalStatus.WAITING_DEPENDENCIES,
+        )
+        dependencies: list[ResolvedGoal | None] = [None] * len(decomposition.operands)
+        branch_states: dict[int, _ResolutionState] = {}
+        resource_indexes = [
+            index
+            for index, operand in enumerate(decomposition.operands)
+            if operand.kind == OperandKind.RESOURCE
+        ]
+        for index, operand in enumerate(decomposition.operands):
+            if operand.kind == OperandKind.LITERAL:
+                _, dependencies[index] = _literal_resolution(
+                    goal_id=f"root::operand:{index}",
+                    value=operand.value or "",
+                    role=GoalRole.INTERMEDIATE_VALUE,
+                    expected_type=ReturnType(
+                        data_type="basic",
+                        data_type_name="string",
+                        is_list=False,
+                    ),
+                )
+
+        def resolve_operand(index: int) -> tuple[int, ResolvedGoal | None, _ResolutionState]:
+            operand = decomposition.operands[index]
+            state = _ResolutionState(max_goals=self.max_goals)
+            goal = ValueGoal(
+                goal_id=f"root::operand:{index}",
+                semantic_name=operand.semantic_name or "",
+                role=GoalRole.INTERMEDIATE_VALUE,
+                expected_type=ReturnType(
+                    data_type="basic",
+                    data_type_name="string",
+                    is_list=False,
+                ),
+            )
+            resolution = self._resolve_goal(
+                goal,
+                query=query,
+                node_path=node_path,
+                depth=1,
+                stack=(),
+                state=state,
+                tiers=VALUE_GOAL_TIER_ORDER,
+            )
+            return index, resolution, state
+
+        with ThreadPoolExecutor(
+            max_workers=min(self.max_parallel_goals, len(resource_indexes))
+        ) as executor:
+            futures = [executor.submit(resolve_operand, index) for index in resource_indexes]
+            for future in futures:
+                index, resolution, branch_state = future.result()
+                dependencies[index] = resolution
+                branch_states[index] = branch_state
+
+        trace = []
+        failed_goal_ids = []
+        for index in resource_indexes:
+            branch_state = branch_states[index]
+            trace.extend(branch_state.trace)
+            failed_goal_ids.extend(branch_state.failed_goal_ids)
+        if any(item is None for item in dependencies):
+            root.status = GoalStatus.FAILED
+            failed_goal_ids.append(root.goal_id)
+            return SpecOrchestrationResult(
+                query=query,
+                root_goal=root,
+                failed_goal_ids=list(dict.fromkeys(failed_goal_ids)),
+                resolution_trace=trace,
+            )
+        committed = [item for item in dependencies if item is not None]
+        root.status = GoalStatus.RESOLVED
+        candidate = ResourceCandidate(
+            candidate_id="composition:root",
+            kind="composition",
+            resource={"operator": decomposition.operator},
+            return_type=expected_type.model_copy(deep=True),
+            metadata={"operator": decomposition.operator},
+        )
+        root.selected_candidate_id = candidate.candidate_id
+        root.candidate_resolutions = [candidate]
+        resolution = ResolvedGoal(
+            goal=root,
+            candidate=candidate,
+            dependencies=committed,
+            bindings={
+                str(index): dependency.goal.goal_id
+                for index, dependency in enumerate(committed)
+            },
+        )
+        return SpecOrchestrationResult(
+            query=query,
+            root_goal=root,
+            root_resolution=resolution,
+            execution_order=_execution_order(resolution),
+            failed_goal_ids=list(dict.fromkeys(failed_goal_ids)),
+            resolution_trace=trace,
         )
 
     def _resolve_goal(
@@ -277,6 +424,33 @@ class _ResolutionState:
         self.goal_count = 0
         self.failed_goal_ids: list[str] = []
         self.trace: list[dict[str, Any]] = []
+
+
+def _literal_resolution(
+    *,
+    goal_id: str,
+    value: str,
+    role: GoalRole,
+    expected_type: ReturnType,
+) -> tuple[ValueGoal, ResolvedGoal]:
+    goal = ValueGoal(
+        goal_id=goal_id,
+        semantic_name=value,
+        role=role,
+        expected_type=expected_type.model_copy(deep=True),
+        status=GoalStatus.RESOLVED,
+    )
+    candidate = ResourceCandidate(
+        candidate_id=f"literal:{goal_id}",
+        kind="literal",
+        resource=value,
+        return_type=expected_type.model_copy(deep=True),
+        evidence=["query decomposition literal"],
+        metadata={"value": value},
+    )
+    goal.selected_candidate_id = candidate.candidate_id
+    goal.candidate_resolutions = [candidate]
+    return goal, ResolvedGoal(goal=goal, candidate=candidate)
 
 
 def _types_compatible(expected: ReturnType, actual: ReturnType) -> bool:

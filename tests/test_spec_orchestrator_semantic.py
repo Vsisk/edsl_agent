@@ -4,6 +4,7 @@ from agent.spec_orchestration.models import (
     GoalRole,
     ResourceCandidate,
     ResourceTier,
+    QueryPlanKind,
     ValueGoal,
 )
 from agent.spec_orchestration.semantic import SpecSemanticGateway
@@ -55,6 +56,57 @@ def test_generate_goal_keeps_code_authoritative_expected_type():
 
     assert goal.expected_type.data_type_name == "string"
     assert goal.target_bo_name == "BB_DIC_CUSTGRP"
+
+
+def test_decompose_query_returns_bounded_concat_plan():
+    def decide(**kwargs):
+        assert kwargs["prompt_template"] == "spec_orchestrator_decompose"
+        return {
+            "kind": "compose",
+            "operator": "concat",
+            "operands": [
+                {"kind": "resource", "semantic_name": "first name", "value": None},
+                {"kind": "literal", "semantic_name": None, "value": "_"},
+                {"kind": "resource", "semantic_name": "last name", "value": None},
+            ],
+            "literal_value": None,
+        }
+
+    result = SpecSemanticGateway(decision_fn=decide).decompose_query(
+        node_info={"node_name": "full_name"},
+        query='用"_"拼接 first name 和 last name',
+        expected_type=ReturnType(
+            data_type="basic", data_type_name="string", is_list=False
+        ),
+    )
+
+    assert result.kind == QueryPlanKind.COMPOSE
+    assert [item.value or item.semantic_name for item in result.operands] == [
+        "first name",
+        "_",
+        "last name",
+    ]
+
+
+def test_invalid_decomposition_falls_back_to_single_goal():
+    gateway = SpecSemanticGateway(
+        decision_fn=lambda **_: {
+            "kind": "compose",
+            "operator": "unknown",
+            "operands": [],
+            "literal_value": None,
+        }
+    )
+
+    result = gateway.decompose_query(
+        node_info={},
+        query="ordinary",
+        expected_type=ReturnType(
+            data_type="basic", data_type_name="string", is_list=False
+        ),
+    )
+
+    assert result.kind == QueryPlanKind.SINGLE
 
 
 def test_request_and_context_pack_are_injected_as_prompt_background():

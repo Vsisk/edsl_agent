@@ -273,3 +273,85 @@ def test_compiler_renders_literal_without_selecting_environment_resource():
     assert compiled.filtered_environment.selected_bos == []
     assert compiled.filtered_environment.selected_global_contexts == []
     assert compiled.filtered_environment.selected_functions == []
+
+
+def test_compiler_renders_concat_in_operand_order_and_merges_resources():
+    expected = ReturnType(
+        data_type="basic", data_type_name="string", is_list=False
+    )
+    first_context = ContextRegistry(
+        resource_id="ctx.first",
+        context_name="$ctx$.person.first_name",
+        return_type=expected,
+        property_type=PropertyTypeEnum.system,
+        annotation="first name",
+    )
+    last_context = ContextRegistry(
+        resource_id="ctx.last",
+        context_name="$ctx$.person.last_name",
+        return_type=expected,
+        property_type=PropertyTypeEnum.system,
+        annotation="last name",
+    )
+    dependencies = []
+    for goal_id, semantic_name, candidate in [
+        ("root::operand:0", "first name", ResourceCandidate(
+            candidate_id="ctx.first",
+            kind="context",
+            resource=first_context,
+            return_type=expected,
+        )),
+        ("root::operand:1", "_", ResourceCandidate(
+            candidate_id="literal:root::operand:1",
+            kind="literal",
+            resource="_",
+            return_type=expected,
+            metadata={"value": "_"},
+        )),
+        ("root::operand:2", "last name", ResourceCandidate(
+            candidate_id="ctx.last",
+            kind="context",
+            resource=last_context,
+            return_type=expected,
+        )),
+    ]:
+        dependencies.append(
+            ResolvedGoal(
+                goal=_goal(goal_id, semantic_name),
+                candidate=candidate,
+            )
+        )
+    root = _goal("root", "full name")
+    resolution = ResolvedGoal(
+        goal=root,
+        candidate=ResourceCandidate(
+            candidate_id="composition:root",
+            kind="composition",
+            resource={"operator": "concat"},
+            return_type=expected,
+            metadata={"operator": "concat"},
+        ),
+        dependencies=dependencies,
+        bindings={
+            str(index): dependency.goal.goal_id
+            for index, dependency in enumerate(dependencies)
+        },
+    )
+
+    compiled = ResolutionCompiler().compile(
+        SpecOrchestrationResult(
+            query='用"_"拼接 first name 和 last name',
+            root_goal=root,
+            root_resolution=resolution,
+        )
+    )
+
+    assert "按顺序拼接" in compiled.expression_spec.nl
+    first_index = compiled.expression_spec.nl.index("$ctx$.person.first_name")
+    literal_index = compiled.expression_spec.nl.index("纯字符串“_”")
+    last_index = compiled.expression_spec.nl.index("$ctx$.person.last_name")
+    assert first_index < literal_index < last_index
+    assert compiled.filtered_environment.selected_global_context_ids == [
+        "ctx.first",
+        "ctx.last",
+    ]

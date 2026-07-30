@@ -6,6 +6,10 @@ from .models import (
     GoalStatus,
     ResourceCandidate,
     ResourceTier,
+    ExpressionOperand,
+    OperandKind,
+    QueryDecomposition,
+    QueryPlanKind,
     ValueGoal,
 )
 from .search import OrchestratorResourceSearch
@@ -19,5 +23,9 @@ __all__ = [
     "OrchestratorResourceSearch",
     "ResourceCandidate",
     "ResourceTier",
+    "ExpressionOperand",
+    "OperandKind",
+    "QueryDecomposition",
+    "QueryPlanKind",
     "ValueGoal",
 ]

@@ -154,6 +154,15 @@ def _render_resolution(root: ResolvedGoal) -> str:
             )
         elif candidate.kind == "function":
             lines.append(f"调用函数 {_candidate_label(item)} 生成“{item.goal.semantic_name}”。")
+        elif candidate.kind == "composition":
+            operator = candidate.metadata.get("operator")
+            operands = "、".join(
+                _candidate_label(dependency) for dependency in item.dependencies
+            )
+            if operator == "concat":
+                lines.append(
+                    f"按顺序拼接 {operands}，生成“{item.goal.semantic_name}”。"
+                )
         elif candidate.kind == "bo_select":
             bindings = []
             by_goal_id = {dep.goal.goal_id: dep for dep in item.dependencies}
@@ -191,6 +200,8 @@ def _candidate_label(value: ResolvedGoal | None) -> str:
         return str(candidate.resource.sql_name)
     if candidate.kind == "function":
         return str(candidate.resource.func_name)
+    if candidate.kind == "composition":
+        return "字符串拼接"
     if candidate.kind == "bo_select":
         return (
             f"{candidate.metadata.get('operation', 'select_one')}"

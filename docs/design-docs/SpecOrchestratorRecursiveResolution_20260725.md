@@ -939,6 +939,20 @@ $ctx$.billInvoice.invoiceId
 
 ## 完成标准
 
+### Query 表达式分解与并行 Goal
+
+在创建 Root Goal 并进入资源搜索前，语义网关先将 query 约束为以下三种骨架之一：
+
+- `single`：沿用原有单 Goal 递归求解；
+- `literal`：直接提交纯字符串候选，不生成关键词、不调用资源搜索；
+- `compose/concat`：按原顺序生成 `resource` 与 `literal` 操作数。
+
+`concat` 中每个 `resource` 操作数形成独立 Value Goal，并使用 `ctx -> bo field -> function -> literal`
+策略并行求解。各分支拥有独立的预算、trace 和回滚状态，代码按操作数位置确定性合并结果；
+任一必要资源分支失败时，整个组合失败。`literal` 操作数不进入 `FilteredEnvironment`，最终资源列表
+只合并成功提交分支中的 Context、BO、NamingSQL 和 Function。当前组合操作符仅开放 `concat`，
+未知操作符或非法骨架降级到 `single`，不允许 LLM 生成任意表达式 AST 或直接指定资源。
+
 1. Value Logic 普通表达式主链由 `SpecOrchestrator` 完成递归 Spec 求解。
 2. 代码固定资源搜索优先级并负责每次搜索工具触发。
 3. LLM只负责 Goal、Goal 级关键词和覆盖判断。

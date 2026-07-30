@@ -4,6 +4,8 @@ import math
 import re
 from typing import Any
 
+from sklearn.metrics.pairwise import cosine_similarity as sklearn_cosine_similarity
+
 from agent.resource_manager.loader.namingsql_profile_loader import NamingSqlProfileLoader
 from agent.resource_manager.loader.registry_models import (
     DataTypeEnum,
@@ -498,11 +500,39 @@ def _name_tokens(value: str) -> list[str]:
 def _token_cosine(left: list[str], right: list[str]) -> float:
     if not left or not right:
         return 0.0
-    left_score = sum(max(_token_similarity(item, other) for other in right) for item in left)
-    right_score = sum(max(_token_similarity(item, other) for other in left) for item in right)
-    numerator = (left_score + right_score) / 2.0
-    denominator = math.sqrt(len(left) * len(right))
-    return min(1.0, numerator / denominator) if denominator else 0.0
+    left_vector, right_vector = _token_feature_vectors(left, right)
+    similarity = sklearn_cosine_similarity(
+        [left_vector],
+        [right_vector],
+    )[0][0]
+    return max(0.0, min(1.0, float(similarity)))
+
+
+def _token_feature_vectors(
+    left: list[str],
+    right: list[str],
+) -> tuple[list[float], list[float]]:
+    features = list(dict.fromkeys(right))
+    assignments: list[tuple[str, float]] = []
+    for token in left:
+        matches = [
+            (candidate, _token_similarity(token, candidate))
+            for candidate in right
+        ]
+        feature, score = max(matches, key=lambda item: item[1])
+        if score == 0.0:
+            feature = token
+            if feature not in features:
+                features.append(feature)
+        assignments.append((feature, score or 1.0))
+    feature_indexes = {feature: index for index, feature in enumerate(features)}
+    left_vector = [0.0] * len(features)
+    right_vector = [0.0] * len(features)
+    for feature, weight in assignments:
+        left_vector[feature_indexes[feature]] += weight
+    for token in right:
+        right_vector[feature_indexes[token]] += 1.0
+    return left_vector, right_vector
 
 
 def _token_similarity(left: str, right: str) -> float:

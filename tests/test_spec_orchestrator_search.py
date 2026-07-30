@@ -1,3 +1,5 @@
+import agent.spec_orchestration.search as search_module
+
 from agent.environment.namingsql_seletor import NamingSqlSelector
 from agent.resource_manager.loader.registry_models import (
     BoRegistry,
@@ -29,6 +31,28 @@ class FakeEmbeddingClient:
         if self.failure is not None:
             raise self.failure
         return [self.vectors_by_text[text] for text in texts]
+
+
+def test_token_cosine_uses_sklearn_pairwise_cosine(monkeypatch):
+    calls = []
+
+    def fake_cosine_similarity(left, right):
+        calls.append((left, right))
+        return [[0.91]]
+
+    monkeypatch.setattr(
+        search_module,
+        "sklearn_cosine_similarity",
+        fake_cosine_similarity,
+    )
+
+    similarity = search_module._token_cosine(
+        ["cust", "grp", "name"],
+        ["cust", "group", "name"],
+    )
+
+    assert similarity == 0.91
+    assert len(calls) == 1
 
 
 def _loaded_resource():

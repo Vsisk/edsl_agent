@@ -80,7 +80,7 @@ BO Field 不构造 embedding 文档。代码遍历每个 BO 的 `property_list`�
 3. 移除下划线后互为后缀。
 4. camelCase、snake_case、空格文本分词后的软词项余弦相似度不低于 0.75。
 
-软词项余弦对完全相同 token 计 1.0；长度不少于 3 的有序缩写按长度比例计分，例如 `grp` 可与 `group` 匹配。候选先按匹配等级、再按余弦分数、最后按 Registry 原始顺序稳定排序。
+软词项向量对完全相同 token 计 1.0；长度不少于 3 的有序缩写按长度比例计权，例如 `grp` 可映射到 `group`。最终余弦值统一通过 `sklearn.metrics.pairwise.cosine_similarity` 计算。候选先按匹配等级、再按余弦分数、最后按 Registry 原始顺序稳定排序。
 
 `negative_keywords` 使用相同的 Property Name 匹配规则并优先排除。BO 描述、tag、字段描述和 Goal 自由文本不参与 BO Field 召回。`resource` 指向 canonical BO，`metadata["field"]` 指向 canonical Property，并记录 `lexical_cosine_similarity`。BO Field 搜索不得调用 embedding client。
 
@@ -113,6 +113,7 @@ Function 先按 Goal 的返回类型和 `is_list` 过滤。每个合法函数的
 - Context annotation/tag 仍可作为低优先级确定性候选；
 - BO Field 只匹配 Property Name 且不会调用 embedding；
 - `custGrpName` 可以被 `cust group name` 通过分词和词法余弦召回；
+- 词项向量余弦由 sklearn pairwise cosine 实现；
 - BO Field 候选返回正确 BO 和 Property；
 - Property Name exact 命中优先于去下划线和后缀命中；
 - aliases 参与正向向量召回；

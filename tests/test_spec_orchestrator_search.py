@@ -251,6 +251,65 @@ def test_bo_field_tokenizes_camel_case_and_ranks_by_lexical_cosine():
     assert embedding.calls == []
 
 
+def test_bo_field_search_processes_bo_registry_in_parallel_batches(monkeypatch):
+    loaded = _loaded_resource()
+    loaded.bo_registry = {}
+    for index in range(5):
+        loaded.bo_registry[f"BO_{index}"] = BoRegistry(
+            resource_id=f"bo.{index}",
+            bo_name=f"BO_{index}",
+            bo_desc=f"BO {index}",
+            property_list=[
+                PropertyTerm(
+                    field_name=f"CUST_GRP_NAME_{index}",
+                    data_type=DataTypeEnum.basic,
+                    data_type_name="string",
+                )
+            ],
+        )
+    submitted_batch_sizes = []
+    created_workers = []
+
+    class FakeExecutor:
+        def __init__(self, max_workers):
+            created_workers.append(max_workers)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def map(self, fn, batches):
+            batch_list = list(batches)
+            submitted_batch_sizes.extend(len(batch) for batch in batch_list)
+            return [fn(batch) for batch in batch_list]
+
+    monkeypatch.setattr(search_module, "ThreadPoolExecutor", FakeExecutor, raising=False)
+    search = OrchestratorResourceSearch(
+        loaded,
+        bo_search_batch_size=2,
+        bo_search_max_workers=3,
+    )
+    request = GoalSearchRequest(
+        goal=_goal("customer group name"),
+        tier=ResourceTier.BO_FIELD,
+        keywords=["cust group name"],
+    )
+
+    candidates = search.search(request)
+
+    assert submitted_batch_sizes == [2, 2, 1]
+    assert created_workers == [3]
+    assert [item.field_name for item in candidates] == [
+        "CUST_GRP_NAME_0",
+        "CUST_GRP_NAME_1",
+        "CUST_GRP_NAME_2",
+        "CUST_GRP_NAME_3",
+        "CUST_GRP_NAME_4",
+    ]
+
+
 def test_bo_access_search_does_not_mix_relation_with_naming_sql():
     search = OrchestratorResourceSearch(_loaded_resource())
     request = GoalSearchRequest(

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 import math
 import re
 from typing import Any
@@ -29,6 +30,8 @@ class OrchestratorResourceSearch:
         naming_sql_retriever: Any = None,
         embedding_client: Any = None,
         embedding_batch_size: int | None = None,
+        bo_search_batch_size: int = 64,
+        bo_search_max_workers: int = 4,
     ) -> None:
         self.loaded_resource = loaded_resource
         self.naming_sql_retriever = naming_sql_retriever
@@ -37,6 +40,12 @@ class OrchestratorResourceSearch:
             embedding_client,
             embedding_batch_size,
         )
+        if bo_search_batch_size <= 0:
+            raise ValueError("bo_search_batch_size must be positive")
+        if bo_search_max_workers <= 0:
+            raise ValueError("bo_search_max_workers must be positive")
+        self.bo_search_batch_size = bo_search_batch_size
+        self.bo_search_max_workers = bo_search_max_workers
         self._resource_vector_cache: dict[str, list[float]] = {}
 
     def search(self, request: GoalSearchRequest) -> list[ResourceCandidate]:
@@ -96,12 +105,39 @@ class OrchestratorResourceSearch:
         return [item[2] for item in ranked[: request.limit]]
 
     def _search_bo_fields(self, request: GoalSearchRequest) -> list[ResourceCandidate]:
-        ranked = []
         positives = _unique_nonempty([*request.keywords, *request.aliases])
-        index = 0
-        for bo in self.loaded_resource.bo_registry.values():
-            if request.target_bo_name and bo.bo_name != request.target_bo_name:
-                continue
+        bo_entries = [
+            (index, bo)
+            for index, bo in enumerate(self.loaded_resource.bo_registry.values())
+            if not request.target_bo_name or bo.bo_name == request.target_bo_name
+        ]
+        ranked = []
+        batches = list(_batches(bo_entries, self.bo_search_batch_size))
+        if len(batches) <= 1 or self.bo_search_max_workers == 1:
+            for batch in batches:
+                ranked.extend(self._search_bo_field_batch(request, positives, batch))
+        else:
+            with ThreadPoolExecutor(max_workers=self.bo_search_max_workers) as executor:
+                for batch_ranked in executor.map(
+                    lambda batch: self._search_bo_field_batch(
+                        request,
+                        positives,
+                        batch,
+                    ),
+                    batches,
+                ):
+                    ranked.extend(batch_ranked)
+        ranked.sort(key=lambda item: (item[0], item[1], item[2]))
+        return [item[3] for item in ranked[: request.limit]]
+
+    def _search_bo_field_batch(
+        self,
+        request: GoalSearchRequest,
+        positives: list[str],
+        bo_entries: list[tuple[int, Any]],
+    ) -> list[tuple[int, float, int, ResourceCandidate]]:
+        ranked = []
+        for bo_index, bo in bo_entries:
             for field in bo.property_list:
                 if _property_name_match(
                     field.field_name,
@@ -116,14 +152,14 @@ class OrchestratorResourceSearch:
                     (
                         match_rank,
                         -lexical_cosine,
-                        index,
+                        bo_index,
                         ResourceCandidate(
-                        candidate_id=f"{bo.resource_id}:field:{field.field_name}",
-                        kind="bo_field",
-                        resource=bo,
-                        bo_name=bo.bo_name,
-                        field_name=field.field_name,
-                        is_key=field.data_type == DataTypeEnum.key,
+                            candidate_id=f"{bo.resource_id}:field:{field.field_name}",
+                            kind="bo_field",
+                            resource=bo,
+                            bo_name=bo.bo_name,
+                            field_name=field.field_name,
+                            is_key=field.data_type == DataTypeEnum.key,
                             return_type=_property_return_type(field),
                             evidence=["BO property name match"],
                             metadata={
@@ -133,9 +169,7 @@ class OrchestratorResourceSearch:
                         ),
                     )
                 )
-                index += 1
-        ranked.sort(key=lambda item: (item[0], item[1], item[2]))
-        return [item[3] for item in ranked[: request.limit]]
+        return ranked
 
     def _search_bo_access(self, request: GoalSearchRequest) -> list[ResourceCandidate]:
         return self._search_naming_sql(request)[: request.limit]
@@ -589,6 +623,13 @@ def _unique_nonempty(values: list[str]) -> list[str]:
         if normalized and normalized not in result:
             result.append(normalized)
     return result
+
+
+def _batches(values: list[Any], batch_size: int) -> list[list[Any]]:
+    return [
+        values[offset:offset + batch_size]
+        for offset in range(0, len(values), batch_size)
+    ]
 
 
 def _resolve_embedding_batch_size(

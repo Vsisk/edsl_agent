@@ -7,9 +7,11 @@ from typing import Any
 
 from sklearn.metrics.pairwise import cosine_similarity as sklearn_cosine_similarity
 
+from agent.expression_generation.type_system import TypeDef, TypeRef
 from agent.resource_manager.loader.namingsql_profile_loader import NamingSqlProfileLoader
 from agent.resource_manager.loader.registry_models import (
     DataTypeEnum,
+    PropertyTerm,
     ReturnType,
 )
 from agent.resource_manager.loader.resource_loader import LoadedResource
@@ -164,6 +166,10 @@ class OrchestratorResourceSearch:
                             evidence=["BO property name match"],
                             metadata={
                                 "field": field,
+                                "expanded_fields": _expanded_structured_fields(
+                                    field,
+                                    self.loaded_resource.type_defs,
+                                ),
                                 "lexical_cosine_similarity": lexical_cosine,
                             },
                         ),
@@ -196,6 +202,11 @@ class OrchestratorResourceSearch:
             return []
         operation = "select" if request.goal.expected_type.is_list else "select_one"
         condition_names = [field.field_name for field in condition_fields]
+        selected_fields = [
+            field
+            for field in target_bo.property_list
+            if field.field_name in {request.target_field_name, *condition_names}
+        ]
         return [
             ResourceCandidate(
                 candidate_id=(
@@ -234,6 +245,14 @@ class OrchestratorResourceSearch:
                     "operation": operation,
                     "target_field_name": request.target_field_name,
                     "condition_fields": condition_names,
+                    "expanded_fields": [
+                        expanded
+                        for field in selected_fields
+                        for expanded in _expanded_structured_fields(
+                            field,
+                            self.loaded_resource.type_defs,
+                        )
+                    ],
                 },
             )
         ]
@@ -423,6 +442,112 @@ def _property_return_type(field: Any) -> ReturnType:
         data_type=data_type,
         data_type_name=field.data_type_name,
         is_list=field.is_list,
+    )
+
+
+def _expanded_structured_fields(
+    field: Any,
+    type_defs: list[TypeDef],
+    *,
+    max_depth: int = 6,
+) -> list[PropertyTerm]:
+    owner_type = _property_type_ref(field)
+    if owner_type is None:
+        return []
+    result: list[PropertyTerm] = []
+    _append_expanded_fields(
+        result,
+        parent_name=str(field.field_name),
+        owner_type=owner_type,
+        type_defs={_type_key(type_def.owner_type): type_def for type_def in type_defs},
+        stack=(),
+        depth=0,
+        max_depth=max_depth,
+    )
+    return result
+
+
+def _append_expanded_fields(
+    result: list[PropertyTerm],
+    *,
+    parent_name: str,
+    owner_type: TypeRef,
+    type_defs: dict[tuple[Any, ...], TypeDef],
+    stack: tuple[tuple[Any, ...], ...],
+    depth: int,
+    max_depth: int,
+) -> None:
+    key = _type_key(owner_type)
+    if key in stack or depth >= max_depth:
+        return
+    type_def = type_defs.get(key)
+    if type_def is None:
+        return
+    next_stack = (*stack, key)
+    for field_name, type_ref in type_def.fields.items():
+        normalized = _property_term_type(type_ref)
+        if normalized is None:
+            continue
+        expanded_name = f"{parent_name}.{field_name}"
+        result.append(
+            PropertyTerm(
+                field_name=expanded_name,
+                data_type=normalized[0],
+                data_type_name=normalized[1],
+                is_list=normalized[2],
+            )
+        )
+        nested_owner = _structured_type_ref(type_ref)
+        if nested_owner is not None:
+            _append_expanded_fields(
+                result,
+                parent_name=expanded_name,
+                owner_type=nested_owner,
+                type_defs=type_defs,
+                stack=next_stack,
+                depth=depth + 1,
+                max_depth=max_depth,
+            )
+
+
+def _property_type_ref(field: Any) -> TypeRef | None:
+    data_type = getattr(field, "data_type", None)
+    kind = data_type.value if hasattr(data_type, "value") else str(data_type or "")
+    if kind not in {"logic", "extattr"}:
+        return None
+    data_type_name = str(getattr(field, "data_type_name", "") or "")
+    if not data_type_name:
+        return None
+    return TypeRef(kind=kind, name=data_type_name)
+
+
+def _structured_type_ref(type_ref: TypeRef) -> TypeRef | None:
+    current = type_ref.element_type if type_ref.kind == "list" else type_ref
+    if current is None or current.kind not in {"logic", "extattr"} or not current.name:
+        return None
+    return TypeRef(kind=current.kind, name=current.name)
+
+
+def _property_term_type(type_ref: TypeRef) -> tuple[DataTypeEnum, str, bool] | None:
+    is_list = type_ref.kind == "list"
+    current = type_ref.element_type if is_list else type_ref
+    if current is None or current.kind not in {"key", "bo", "logic", "basic", "extattr"}:
+        return None
+    if not current.name:
+        return None
+    return DataTypeEnum(current.kind), current.name, is_list
+
+
+def _type_key(type_ref: TypeRef | None) -> tuple[Any, ...]:
+    if type_ref is None:
+        return ()
+    return (
+        type_ref.kind,
+        type_ref.name,
+        _type_key(type_ref.element_type),
+        _type_key(type_ref.key_type),
+        _type_key(type_ref.value_type),
+        type_ref.nullable,
     )
 
 

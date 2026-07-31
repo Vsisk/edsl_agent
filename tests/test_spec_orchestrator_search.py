@@ -1,6 +1,7 @@
 import agent.spec_orchestration.search as search_module
 
 from agent.environment.namingsql_seletor import NamingSqlSelector
+from agent.expression_generation.type_system import TypeDef, TypeRef
 from agent.resource_manager.loader.registry_models import (
     BoRegistry,
     ContextRegistry,
@@ -137,6 +138,20 @@ def _loaded_resource():
         },
         edsl_tree={},
         domain_registry=DomainRegistry(),
+        type_defs=[
+            TypeDef(
+                owner_type=TypeRef(kind="logic", name="CustomerLogic"),
+                fields={
+                    "profile": TypeRef(kind="extattr", name="CustomerExtAttr"),
+                },
+            ),
+            TypeDef(
+                owner_type=TypeRef(kind="extattr", name="CustomerExtAttr"),
+                fields={
+                    "vip_level": TypeRef(kind="basic", name="String"),
+                },
+            ),
+        ],
     )
 
 
@@ -198,6 +213,30 @@ def test_bo_field_search_marks_key_and_returns_matching_field():
         ("BB_DIC_CUSTGRP", "CUST_GRP_NAME")
     ]
     assert candidates[0].is_key is False
+
+
+def test_bo_field_search_expands_logic_and_extattr_properties():
+    loaded = _loaded_resource()
+    loaded.bo_registry["BB_DIC_CUSTGRP"].property_list.append(
+        PropertyTerm(
+            field_name="CUSTOMER_LOGIC",
+            description="customer logic object",
+            data_type=DataTypeEnum.logic,
+            data_type_name="CustomerLogic",
+        )
+    )
+    search = OrchestratorResourceSearch(loaded)
+    request = GoalSearchRequest(
+        goal=_goal("customer logic", "CustomerLogic"),
+        tier=ResourceTier.BO_FIELD,
+        keywords=["CUSTOMER_LOGIC"],
+    )
+
+    candidate = search.search(request)[0]
+
+    assert [
+        field.field_name for field in candidate.metadata["expanded_fields"]
+    ] == ["CUSTOMER_LOGIC.profile", "CUSTOMER_LOGIC.profile.vip_level"]
 
 
 def test_bo_field_matches_property_name_and_never_calls_embedding():

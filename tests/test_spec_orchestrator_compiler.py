@@ -248,6 +248,65 @@ def test_compiler_projects_bo_select_target_and_condition_fields():
     assert "$ctx$.customer.id" in compiled.expression_spec.nl
 
 
+def test_compiler_includes_expanded_logic_and_extattr_bo_fields():
+    target = PropertyTerm(
+        field_name="CUSTOMER_LOGIC",
+        description="customer logic object",
+        data_type=DataTypeEnum.logic,
+        data_type_name="CustomerLogic",
+    )
+    expanded = [
+        PropertyTerm(
+            field_name="CUSTOMER_LOGIC.profile",
+            data_type=DataTypeEnum.extattr,
+            data_type_name="CustomerExtAttr",
+        ),
+        PropertyTerm(
+            field_name="CUSTOMER_LOGIC.profile.vip_level",
+            data_type=DataTypeEnum.basic,
+            data_type_name="String",
+        ),
+    ]
+    bo = BoRegistry(
+        resource_id="bo.customer",
+        bo_name="BO_CUSTOMER",
+        bo_desc="customer",
+        property_list=[target],
+    )
+    goal = _goal("root", "customer logic", "CustomerLogic")
+    resolution = ResolvedGoal(
+        goal=goal,
+        candidate=ResourceCandidate(
+            candidate_id="bo.customer:field:CUSTOMER_LOGIC",
+            kind="bo_field",
+            resource=bo,
+            bo_name=bo.bo_name,
+            field_name=target.field_name,
+            return_type=ReturnType(
+                data_type="logic", data_type_name="CustomerLogic", is_list=False
+            ),
+            metadata={"field": target, "expanded_fields": expanded},
+        ),
+    )
+
+    compiled = ResolutionCompiler().compile(
+        SpecOrchestrationResult(
+            query="get customer logic",
+            root_goal=goal,
+            root_resolution=resolution,
+        )
+    )
+
+    assert [
+        field.field_name
+        for field in compiled.filtered_environment.selected_bos[0].property_list
+    ] == [
+        "CUSTOMER_LOGIC",
+        "CUSTOMER_LOGIC.profile",
+        "CUSTOMER_LOGIC.profile.vip_level",
+    ]
+
+
 def test_compiler_renders_literal_without_selecting_environment_resource():
     goal = _goal("root", "完成状态")
     resolution = ResolvedGoal(

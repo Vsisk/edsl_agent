@@ -67,7 +67,7 @@ class ResolutionCompiler:
                                 None,
                             )
                             if field is not None:
-                                part["fields"][field.field_name] = field
+                                _add_field_with_expansion(part, field, candidate)
                         continue
                     field = candidate.metadata.get("field")
                     if field is None and candidate.field_name:
@@ -76,7 +76,7 @@ class ResolutionCompiler:
                             None,
                         )
                     if field is not None:
-                        part["fields"][field.field_name] = field
+                        _add_field_with_expansion(part, field, candidate)
             if candidate.kind == "naming_sql":
                 bo = candidate.metadata.get("bo")
                 if isinstance(bo, BoRegistry):
@@ -117,6 +117,18 @@ def _walk(resolution: ResolvedGoal):
     for dependency in resolution.dependencies:
         yield from _walk(dependency)
     yield resolution
+
+
+def _add_field_with_expansion(
+    part: dict[str, Any],
+    field: Any,
+    candidate: Any,
+) -> None:
+    part["fields"][field.field_name] = field
+    for expanded in candidate.metadata.get("expanded_fields", []) or []:
+        field_name = getattr(expanded, "field_name", "")
+        if field_name:
+            part["fields"][field_name] = expanded
 
 
 def _render_resolution(root: ResolvedGoal) -> str:

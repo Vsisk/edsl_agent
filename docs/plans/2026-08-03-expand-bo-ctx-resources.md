@@ -51,3 +51,17 @@
 - 功能：确认加载层行为和下游 typed context 消费兼容。
 - 实现说明：先运行资源加载测试，再运行相关表达式上下文测试；不覆盖工作区已有改动。
 - 预期验证结果：定向测试全部通过，无新增回归。
+
+## Phase #3: Local Context 返回类型展开
+
+### Task #4: 为可见 Local Context 注册嵌套路径资源
+
+**状态：** Finished
+
+**文件：**
+- 修改：`agent/resource_manager/loader/local_context_loader.py`
+- 修改：`agent/resource_manager/loader/resource_loader.py`
+- 修改：`tests/test_resource_loader.py`
+- 功能：`$local$` 与 `$iter$` 遇到 logic/extattr/BO return type 时，保留根资源并递归注册所有可访问子路径。
+- 实现说明：复用 `StructuredTypeExpander`；子资源继承根资源的 source_path、property_type 与可见性，只改 context_name、return_type、annotation 和 tag；由 `LoadedResource` 注入 logic/extattr/BO 类型索引。
+- 预期验证结果：多层 logic → extattr 展开路径完整，既有祖先和列表可见性测试保持通过，循环类型不会无限递归。

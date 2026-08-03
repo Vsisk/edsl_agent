@@ -2,7 +2,9 @@ from typing import Any, Dict, List, Tuple
 
 from jsonpath_ng import parse
 
+from agent.expression_generation.type_system import TypeDef, TypeRef, normalize_return_type
 from agent.resource_manager.loader.tag_utils import build_tags
+from agent.resource_manager.loader.type_expander import StructuredTypeExpander
 from agent.resource_manager.models import LocalContextRegistry
 
 
@@ -15,8 +17,13 @@ DEFAULT_LOCAL_CONTEXT_RETURN_TYPE = {
 }
 
 
-def load_visible_local_context_registry(edsl_tree: Dict[str, Any], node_path: str) -> List[LocalContextRegistry]:
+def load_visible_local_context_registry(
+    edsl_tree: Dict[str, Any],
+    node_path: str,
+    type_defs: List[TypeDef] | None = None,
+) -> List[LocalContextRegistry]:
     registry: List[LocalContextRegistry] = []
+    expander = StructuredTypeExpander(type_defs or [])
     normalized_path = _normalize_path(node_path)
     nearest_list: Tuple[Dict[str, Any], str] | None = None
 
@@ -46,7 +53,8 @@ def load_visible_local_context_registry(edsl_tree: Dict[str, Any], node_path: st
                 if not property_name:
                     continue
                 return_type = _local_context_return_type(context_item)
-                registry.append(
+                _append_local_context_with_descendants(
+                    registry,
                     LocalContextRegistry(
                         resource_id=f"local.{len(registry):04d}",
                         context_name=f"$local$.{property_name}",
@@ -60,7 +68,8 @@ def load_visible_local_context_registry(edsl_tree: Dict[str, Any], node_path: st
                             ancestor_node,
                             return_type,
                         ),
-                    )
+                    ),
+                    expander,
                 )
 
     if nearest_list is not None:
@@ -71,7 +80,8 @@ def load_visible_local_context_registry(edsl_tree: Dict[str, Any], node_path: st
                 "annotation": list_node.get("annotation") or "",
                 "return_type": return_type,
             }
-            registry.append(
+            _append_local_context_with_descendants(
+                registry,
                 LocalContextRegistry(
                     resource_id=f"local.{len(registry):04d}",
                     context_name="$iter$",
@@ -85,10 +95,61 @@ def load_visible_local_context_registry(edsl_tree: Dict[str, Any], node_path: st
                         list_node,
                         return_type,
                     ),
-                )
+                ),
+                expander,
             )
 
     return registry
+
+
+def _append_local_context_with_descendants(
+    registry: List[LocalContextRegistry],
+    root: LocalContextRegistry,
+    expander: StructuredTypeExpander,
+) -> None:
+    registry.append(root)
+    if root.return_type is None:
+        return
+
+    for child_path, child_type in expander.descendants(
+        normalize_return_type(root.return_type)
+    ):
+        return_type = _return_type_from_type_ref(child_type)
+        if return_type is None:
+            continue
+        registry.append(
+            LocalContextRegistry(
+                resource_id=f"local.{len(registry):04d}",
+                context_name=f"{root.context_name}.{child_path}",
+                return_type=return_type,
+                annotation=".".join(
+                    part for part in (root.annotation, child_path) if part
+                ),
+                source_path=root.source_path,
+                property_type=root.property_type,
+                tag=build_tags(child_path, *root.tag, return_type["data_type_name"]),
+            )
+        )
+
+
+def _return_type_from_type_ref(type_ref: TypeRef) -> Dict[str, Any] | None:
+    is_list = type_ref.kind == "list"
+    value_type = type_ref.element_type if is_list else type_ref
+    if value_type is None or value_type.kind not in {
+        "basic",
+        "key",
+        "bo",
+        "logic",
+        "extattr",
+    }:
+        return None
+    if not value_type.name:
+        return None
+    return {
+        "data_type": value_type.kind,
+        "data_type_name": value_type.name,
+        "is_list": is_list,
+    }
 
 
 def _normalize_path(node_path: str) -> str:

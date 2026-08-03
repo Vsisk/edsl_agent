@@ -28,11 +28,16 @@ class LoadedResource:
     edsl_tree: Dict[str, Any]
     domain_registry: DomainRegistry
     type_defs: list[TypeDef] = field(default_factory=list)
+    expandable_type_defs: list[TypeDef] = field(default_factory=list, repr=False)
 
     def get_visible_local_context_registry(self, node_path: str) -> Dict[str, LocalContextRegistry]:
         return {
             local_context.context_name: local_context
-            for local_context in load_visible_local_context_registry(self.edsl_tree, node_path)
+            for local_context in load_visible_local_context_registry(
+                self.edsl_tree,
+                node_path,
+                self.expandable_type_defs or self.type_defs,
+            )
         }
 
 
@@ -92,6 +97,7 @@ class ResourceLoader:
                 function_registry=self.function_registry_cache[source_key],
             ),
             type_defs=self.type_defs_cache[source_key],
+            expandable_type_defs=all_expandable_type_defs,
         )
 
     def get_resource_data(self, site_id: str, project_id: str) -> Dict[str, Any]:

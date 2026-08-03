@@ -306,6 +306,105 @@ class ResourceLoaderTest(unittest.TestCase):
         self.assertEqual(registry[0].return_type.data_type_name, "CustomerView")
         self.assertTrue(registry[0].return_type.is_list)
 
+    def test_local_context_expands_logic_and_extattr_return_type_paths(self):
+        tree = {
+            "mapping_content": {
+                "tree_node_type": "parent",
+                "local_context": [
+                    {
+                        "property_name": "customerView",
+                        "annotation": "customer view",
+                        "data_source": {
+                            "data_source_type": "expression",
+                            "data_expression": {
+                                "return_type": {
+                                    "data_type": "logic",
+                                    "data_type_name": "CustomerView",
+                                    "is_list": False,
+                                }
+                            },
+                        },
+                    }
+                ],
+            }
+        }
+        structured_payload = {
+            "logic": {
+                "logic_list": [
+                    {
+                        "type_name": "CustomerView",
+                        "sub_properties": [
+                            {
+                                "property_name": "extra",
+                                "data_type": {
+                                    "data_type": "extattr",
+                                    "data_type_name": "CustomerExtra",
+                                    "is_list": False,
+                                },
+                            }
+                        ],
+                    }
+                ]
+            },
+            "extattr": {
+                "extattr_list": [
+                    {
+                        "type_name": "CustomerExtra",
+                        "sub_properties": [
+                            {
+                                "property_name": "level",
+                                "data_type": {
+                                    "data_type": "basic",
+                                    "data_type_name": "String",
+                                    "is_list": False,
+                                },
+                            }
+                        ],
+                    }
+                ]
+            },
+        }
+        type_defs = load_structured_type_defs_from_json(structured_payload)
+
+        registry = load_visible_local_context_registry(
+            tree,
+            "$.mapping_content",
+            type_defs,
+        )
+
+        self.assertEqual(
+            [item.context_name for item in registry],
+            [
+                "$local$.customerView",
+                "$local$.customerView.extra",
+                "$local$.customerView.extra.level",
+            ],
+        )
+        self.assertEqual(registry[1].source_path, registry[0].source_path)
+        self.assertEqual(registry[2].property_type, "local")
+        self.assertEqual(registry[2].return_type.data_type_name, "String")
+
+        class PayloadLoader(ResourceLoader):
+            def get_resource_data(self, site_id, project_id):
+                return {
+                    "logic": structured_payload["logic"],
+                    "extattr": structured_payload["extattr"],
+                    "bo": {},
+                    "context": {},
+                    "function": {},
+                }
+
+        loaded = PayloadLoader().load_resource("site", "project", tree)
+
+        self.assertEqual(
+            list(loaded.get_visible_local_context_registry("$.mapping_content")),
+            [
+                "$local$.customerView",
+                "$local$.customerView.extra",
+                "$local$.customerView.extra.level",
+            ],
+        )
+
     def test_local_context_type_defaults_when_data_source_metadata_is_missing(self):
         tree = {
             "mapping_content": {

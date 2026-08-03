@@ -197,6 +197,11 @@ def test_default_resource_pipeline_can_be_replaced_by_spec_orchestrator():
     gen = ValueLogicGenerator(
         resource_loader=ResourceLoader(),
         llm_planner=planner,
+        query_spec_clarity_analyzer=type(
+            "Analyzer",
+            (),
+            {"is_explicit_spec": lambda self, **_: False},
+        )(),
         spec_orchestrator_factory=lambda loaded: Orchestrator(),
     )
 
@@ -205,6 +210,87 @@ def test_default_resource_pipeline_can_be_replaced_by_spec_orchestrator():
     assert result.expression == '"ok"'
     assert events == [("orchestrator", "ordinary")]
     assert planner.calls[0]["expression_spec"].nl == "ordinary"
+
+
+def test_explicit_query_spec_bypasses_spec_generation_and_filters_resources_directly():
+    events = []
+
+    class Analyzer:
+        def is_explicit_spec(self, **kwargs):
+            events.append(("clarity", kwargs["query"]))
+            return True
+
+    class CapturingTargets(Targets):
+        def generate(self, **kwargs):
+            events.append(("filter", kwargs["query"]))
+            return []
+
+    class FlakyPlanner(Planner):
+        def plan(self, **kwargs):
+            if not self.calls:
+                self.calls.append(kwargs)
+                raise RuntimeError("retry planner")
+            return super().plan(**kwargs)
+
+    planner = FlakyPlanner(fetch=False)
+    gen = ValueLogicGenerator(
+        resource_loader=ResourceLoader(),
+        llm_planner=planner,
+        query_spec_clarity_analyzer=Analyzer(),
+        resource_filter_target_generator=CapturingTargets(),
+        spec_orchestrator_factory=lambda _: (_ for _ in ()).throw(
+            AssertionError("explicit spec must bypass spec generation")
+        ),
+    )
+
+    result = gen.generate(request(False))
+
+    assert result.expression == '"ok"'
+    assert [event for event in events if event[0] == "clarity"] == [
+        ("clarity", "ordinary")
+    ]
+    assert [event[0] for event in events].count("filter") == 2
+
+
+def test_unclear_query_spec_runs_existing_spec_generation_path():
+    events = []
+
+    class Analyzer:
+        def is_explicit_spec(self, **kwargs):
+            events.append(("clarity", kwargs["query"]))
+            return False
+
+    class Orchestrator:
+        def resolve(self, **kwargs):
+            events.append(("orchestrator", kwargs["query"]))
+            goal = ValueGoal(
+                goal_id="root",
+                semantic_name=kwargs["query"],
+                role=GoalRole.FINAL_OUTPUT,
+                expected_type=kwargs["expected_type"],
+            )
+            return SpecOrchestrationResult(
+                query=kwargs["query"],
+                root_goal=goal,
+                failed_goal_ids=["root"],
+            )
+
+    class FailTargets(Targets):
+        def generate(self, **kwargs):
+            raise AssertionError("unclear query must not bypass spec generation")
+
+    gen = ValueLogicGenerator(
+        resource_loader=ResourceLoader(),
+        llm_planner=Planner(fetch=False),
+        query_spec_clarity_analyzer=Analyzer(),
+        resource_filter_target_generator=FailTargets(),
+        spec_orchestrator_factory=lambda _: Orchestrator(),
+    )
+
+    result = gen.generate(request(False))
+
+    assert result.expression == '"ok"'
+    assert events == [("clarity", "ordinary"), ("orchestrator", "ordinary")]
 
 
 def test_value_logic_generator_no_longer_exposes_expression_spec_generator():

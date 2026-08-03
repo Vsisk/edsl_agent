@@ -13,6 +13,7 @@ from .models import (
     ValueGoal,
 )
 from .search import OrchestratorResourceSearch
+from .spec_clarity import QuerySpecClarityAnalyzer
 
 __all__ = [
     "CoverageDecision",
@@ -27,5 +28,6 @@ __all__ = [
     "QueryClassificationKind",
     "QueryDecomposition",
     "QueryPlanKind",
+    "QuerySpecClarityAnalyzer",
     "ValueGoal",
 ]

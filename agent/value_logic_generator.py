@@ -52,6 +52,7 @@ from agent.spec_orchestration.compiler import ResolutionCompiler
 from agent.spec_orchestration.orchestrator import SpecOrchestrator
 from agent.spec_orchestration.search import OrchestratorResourceSearch
 from agent.spec_orchestration.semantic import SpecSemanticGateway
+from agent.spec_orchestration.spec_clarity import QuerySpecClarityAnalyzer
 
 
 DEFAULT_CONTEXT_LIMIT = 5
@@ -104,6 +105,7 @@ class ValueLogicGenerator:
         generation_max_attempts: int = DEFAULT_GENERATION_MAX_ATTEMPTS,
         spec_orchestrator_factory: Callable[[LoadedResource], Any] | None = None,
         resolution_compiler: Any | None = None,
+        query_spec_clarity_analyzer: Any | None = None,
     ):
         if (
             not isinstance(generation_max_attempts, int)
@@ -129,6 +131,9 @@ class ValueLogicGenerator:
             spec_orchestrator_factory or _default_spec_orchestrator_factory
         )
         self.resolution_compiler = resolution_compiler or ResolutionCompiler()
+        self.query_spec_clarity_analyzer = (
+            query_spec_clarity_analyzer or QuerySpecClarityAnalyzer()
+        )
         self.enable_legacy_filter_fallback = enable_legacy_filter_fallback
         self.naming_sql_selector_factory = naming_sql_selector_factory or _default_naming_sql_selector_factory
         self.context_pack_manager = context_pack_manager or create_context_pack_manager()
@@ -292,10 +297,27 @@ class ValueLogicGenerator:
         return None
 
     def _generate_expression_by_plan(self, request: ValueLogicRequest, ctx: GenerationContext) -> ValueLogicResult:
+        node_info = self._to_node_def(request.node, request.node_path)
+        query_is_explicit_spec = (
+            False
+            if self._legacy_resource_pipeline
+            else self.query_spec_clarity_analyzer.is_explicit_spec(
+                query=request.query,
+                node_info=node_info,
+                expected_type=_requested_goal_return_type(request),
+                request=request,
+                context_pack=ctx.context_pack,
+            )
+        )
         retry_feedback = None
         for attempt in range(1, self.generation_max_attempts + 1):
             try:
-                result = self._generate_expression_attempt(request, ctx, retry_feedback=retry_feedback)
+                result = self._generate_expression_attempt(
+                    request,
+                    ctx,
+                    retry_feedback=retry_feedback,
+                    query_is_explicit_spec=query_is_explicit_spec,
+                )
             except _GenerationAttemptError as failure:
                 if attempt == self.generation_max_attempts:
                     raise failure.error.with_traceback(failure.error.__traceback__)
@@ -324,9 +346,15 @@ class ValueLogicGenerator:
         ctx: GenerationContext,
         *,
         retry_feedback: dict[str, Any] | None,
+        query_is_explicit_spec: bool,
     ) -> ValueLogicResult:
         try:
-            return self._run_expression_attempt(request, ctx, retry_feedback=retry_feedback)
+            return self._run_expression_attempt(
+                request,
+                ctx,
+                retry_feedback=retry_feedback,
+                query_is_explicit_spec=query_is_explicit_spec,
+            )
         except _GenerationAttemptError:
             raise
         except Exception as exc:
@@ -338,9 +366,10 @@ class ValueLogicGenerator:
         ctx: GenerationContext,
         *,
         retry_feedback: dict[str, Any] | None,
+        query_is_explicit_spec: bool,
     ) -> ValueLogicResult:
         node_info = self._to_node_def(request.node, request.node_path)
-        if not self._legacy_resource_pipeline:
+        if not self._legacy_resource_pipeline and not query_is_explicit_spec:
             try:
                 orchestration = self.spec_orchestrator_factory(
                     ctx.resources.loaded

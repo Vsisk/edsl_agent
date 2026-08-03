@@ -4,6 +4,20 @@ from agent.llm.prompt_manager import prompt_manager
 
 
 class PlannerPromptTest(unittest.TestCase):
+    def test_query_spec_clarity_prompt_requires_a_strict_boolean_decision(self):
+        rendered = prompt_manager.render(
+            "query_spec_clarity",
+            user_requirement="use $ctx$.customer.id",
+            node_info_json="{}",
+            expected_type_json="{}",
+            request_json="{}",
+            context_pack_json="{}",
+        )
+
+        self.assertIn("is_explicit_spec", rendered)
+        self.assertIn("JSON 布尔值", rendered)
+        self.assertIn("直接生成资源筛选目标", rendered)
+
     def test_retry_feedback_is_appended_as_untrusted_diagnostic_data(self):
         feedback = '{"stage":"validation","error_type":"PARSE_FAILED","message":"bad syntax"}'
         planner_prompt = prompt_manager.render(

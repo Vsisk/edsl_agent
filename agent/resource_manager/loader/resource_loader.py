@@ -3,7 +3,10 @@ import json
 from pathlib import Path
 from typing import Dict, Any
 from agent.expression_generation.type_system import TypeDef
-from agent.resource_manager.loader.bo_loader import load_bo_registry_by_json
+from agent.resource_manager.loader.bo_loader import (
+    build_bo_type_defs_from_json,
+    load_bo_registry_by_json,
+)
 from agent.resource_manager.loader.context_loader import load_context_registry_by_json
 from agent.resource_manager.loader.function_loader import load_function_registry_by_json
 from agent.resource_manager.loader.local_context_loader import load_visible_local_context_registry
@@ -54,12 +57,6 @@ class ResourceLoader:
         payload = self.get_resource_data(site_id, project_id)
 
         source_key = site_id + ":" + project_id
-        if not self.context_registry_cache.get(source_key):
-            self.context_registry_cache[source_key] = load_context_registry_by_json(payload.get("context") or {})
-        if source_key not in self.bo_registry_cache:
-            self.bo_registry_cache[source_key] = load_bo_registry_by_json(payload.get("bo") or {})
-        if not self.function_registry_cache.get(source_key):
-            self.function_registry_cache[source_key] = load_function_registry_by_json(payload.get("function") or {})
         if source_key not in self.type_defs_cache:
             self.type_defs_cache[source_key] = load_structured_type_defs_from_json(
                 {
@@ -67,6 +64,22 @@ class ResourceLoader:
                     "extattr": payload.get("extattr") or {},
                 }
             )
+        structured_type_defs = self.type_defs_cache[source_key]
+        bo_payload = payload.get("bo") or {}
+        bo_type_defs = build_bo_type_defs_from_json(bo_payload)
+        all_expandable_type_defs = [*structured_type_defs, *bo_type_defs]
+        if source_key not in self.bo_registry_cache:
+            self.bo_registry_cache[source_key] = load_bo_registry_by_json(
+                bo_payload,
+                structured_type_defs,
+            )
+        if source_key not in self.context_registry_cache:
+            self.context_registry_cache[source_key] = load_context_registry_by_json(
+                payload.get("context") or {},
+                all_expandable_type_defs,
+            )
+        if source_key not in self.function_registry_cache:
+            self.function_registry_cache[source_key] = load_function_registry_by_json(payload.get("function") or {})
 
         return LoadedResource(
             context_registry=self.context_registry_cache[source_key],

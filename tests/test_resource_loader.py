@@ -687,6 +687,149 @@ class ResourceLoaderTest(unittest.TestCase):
         self.assertEqual(type_defs[1].owner_type.name, "Aextattr")
         self.assertEqual(type_defs[1].fields["a_extattr_id"].kind, "basic")
 
+    def test_resource_loader_expands_bo_and_context_return_types_and_keeps_each_path(self):
+        bo_payload = {
+            "sys_bo_list": [
+                {
+                    "bo_name": "B",
+                    "bo_desc": "B table",
+                    "property_list": [
+                        {
+                            "field_name": "a",
+                            "description": "extended A",
+                            "is_list": False,
+                            "data_type": "extattr",
+                            "data_type_name": "A",
+                        }
+                    ],
+                }
+            ]
+        }
+        context_payload = {
+            "global_context": {
+                "property_name": "$ctx$",
+                "sub_properties": [
+                    {
+                        "property_name": "current",
+                        "property_type": "custom",
+                        "annotation": "current B",
+                        "return_type": {
+                            "data_type": "bo",
+                            "data_type_name": "B",
+                            "is_list": False,
+                        },
+                    }
+                ],
+            }
+        }
+        extattr_payload = {
+            "extattr_list": [
+                {
+                    "type_name": "A",
+                    "sub_properties": [
+                        {
+                            "property_name": "a1",
+                            "property_annotation": "first",
+                            "data_type": {
+                                "data_type": "basic",
+                                "data_type_name": "String",
+                                "is_list": False,
+                            },
+                        },
+                        {
+                            "property_name": "a2",
+                            "property_annotation": "second",
+                            "data_type": {
+                                "data_type": "basic",
+                                "data_type_name": "long",
+                                "is_list": False,
+                            },
+                        },
+                    ],
+                }
+            ]
+        }
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir)
+            (data_dir / "bo_def_ootb.json").write_text(json.dumps(bo_payload), encoding="utf-8")
+            (data_dir / "context_definition.json").write_text(json.dumps(context_payload), encoding="utf-8")
+            (data_dir / "exttr_def.json").write_text(json.dumps(extattr_payload), encoding="utf-8")
+
+            loaded = ResourceLoader(data_dir=data_dir).load_resource("site", "project", {})
+
+        self.assertEqual(
+            [field.field_name for field in loaded.bo_registry["B"].property_list],
+            ["a", "a.a1", "a.a2"],
+        )
+        self.assertEqual(
+            list(loaded.context_registry),
+            [
+                "$ctx$.current",
+                "$ctx$.current.a",
+                "$ctx$.current.a.a1",
+                "$ctx$.current.a.a2",
+            ],
+        )
+        self.assertEqual(
+            loaded.context_registry["$ctx$.current.a.a1"].return_type.data_type_name,
+            "String",
+        )
+
+    def test_bo_return_type_expansion_stops_recursive_type_cycles(self):
+        bo_payload = {
+            "sys_bo_list": [
+                {
+                    "bo_name": "NODE_BO",
+                    "bo_desc": "node",
+                    "property_list": [
+                        {
+                            "field_name": "node",
+                            "data_type": "logic",
+                            "data_type_name": "Node",
+                            "is_list": False,
+                        }
+                    ],
+                }
+            ]
+        }
+        type_defs = load_structured_type_defs_from_json(
+            {
+                "logic": {
+                    "logic_list": [
+                        {
+                            "type_name": "Node",
+                            "sub_properties": [
+                                {
+                                    "property_name": "child",
+                                    "data_type": {
+                                        "data_type": "logic",
+                                        "data_type_name": "Node",
+                                        "is_list": False,
+                                    },
+                                },
+                                {
+                                    "property_name": "value",
+                                    "data_type": {
+                                        "data_type": "basic",
+                                        "data_type_name": "String",
+                                        "is_list": False,
+                                    },
+                                },
+                            ],
+                        }
+                    ]
+                }
+            }
+        )
+
+        registry = load_bo_registry_by_json(bo_payload, type_defs)
+
+        self.assertEqual(
+            [field.field_name for field in registry["NODE_BO"].property_list],
+            ["node", "node.child", "node.value"],
+        )
+
     def test_load_context_registry_from_json_reads_default_sample_data(self):
         data_path = (
             Path(__file__).resolve().parents[1]

@@ -1,6 +1,12 @@
-from agent.value_logic_sql import SqlBranchBoSelector
-from tests.test_environment import sample_edsl_tree_payload
+from agent.value_logic_sql import SqlBranchBoSelector, SqlBranchResolver
 from agent.resource_manager.loader.resource_loader import ResourceLoader
+from tests.test_environment import StaticResourceLoader, bill_statement_context_payload, sample_edsl_tree_payload
+from tests.test_resource_loader import sample_bo_payload
+
+
+class FirstProfileSelector:
+    def select(self, **request):
+        return request["profiles"][:1]
 
 
 def test_sql_bo_selector_uses_llm_prompt_and_accepts_known_bo_only():
@@ -36,3 +42,36 @@ def test_sql_bo_selector_rejects_unknown_bo():
     )
 
     assert selected is None
+
+
+def test_sql_param_binding_context_filter_exposes_matching_param_context():
+    payload = bill_statement_context_payload()
+    payload["bo"] = sample_bo_payload()
+    loaded = StaticResourceLoader(payload).load_resource("site1", "project1", sample_edsl_tree_payload())
+    calls = []
+
+    def bind_params(**kwargs):
+        calls.append(kwargs)
+        return [
+            {
+                "param_name": "END_DATE",
+                "source_type": "global_context",
+                "context_name": "$ctx$.billStatement.END_DATE",
+            }
+        ]
+
+    result = SqlBranchResolver(
+        bo_selector=lambda **kwargs: "BB_BAK_TRANS",
+        naming_sql_selector_factory=lambda: FirstProfileSelector(),
+        param_binder=bind_params,
+    ).resolve(
+        query="query transaction list by end date",
+        node={"node_id": "ab", "tree_node_type": "parent_list"},
+        loaded_resource=loaded,
+        node_path="$.mapping_content.children[1]",
+        context_pack=None,
+    )
+
+    assert result.logic_type == "sql"
+    assert result.source.sql_params[0]["context_name"] == "$ctx$.billStatement.END_DATE"
+    assert "$ctx$.billStatement.END_DATE" in calls[0]["available_context_json"]

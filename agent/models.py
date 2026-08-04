@@ -31,6 +31,7 @@ class ValueLogicSource(BaseModel):
     bo_field: str | None = None
     sql_name: str | None = None
     naming_sql_id: str | None = None
+    sql_params: list[dict[str, Any]] = Field(default_factory=list)
     detail_field: str | None = None
     summary_type: Literal["sum", "count"] | None = None
 

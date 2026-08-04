@@ -54,7 +54,7 @@ from agent.spec_orchestration.search import OrchestratorResourceSearch
 from agent.spec_orchestration.semantic import SpecSemanticGateway
 from agent.spec_orchestration.spec_clarity import QuerySpecClarityAnalyzer
 from agent.value_logic_routing import ValueLogicTarget, classify_value_logic_target, is_summary_field
-from agent.value_logic_sql import SqlBranchBoSelector, SqlBranchResolver
+from agent.value_logic_sql import SqlBranchBoSelector, SqlBranchResolver, SqlParamBinder
 
 
 DEFAULT_CONTEXT_LIMIT = 5
@@ -110,6 +110,7 @@ class ValueLogicGenerator:
         resolution_compiler: Any | None = None,
         query_spec_clarity_analyzer: Any | None = None,
         sql_bo_selector: Callable[..., str | None] | None = None,
+        sql_param_binder: Callable[..., list[dict[str, Any]] | None] | None = None,
     ):
         if (
             not isinstance(generation_max_attempts, int)
@@ -151,6 +152,7 @@ class ValueLogicGenerator:
         self.method_registry = method_registry or create_builtin_method_registry()
         self.generation_max_attempts = generation_max_attempts
         self.sql_bo_selector = sql_bo_selector or SqlBranchBoSelector()
+        self.sql_param_binder = sql_param_binder or SqlParamBinder()
 
     def generate(self, request: ValueLogicRequest) -> ValueLogicResult:
         target = None
@@ -252,11 +254,14 @@ class ValueLogicGenerator:
         resolver = SqlBranchResolver(
             bo_selector=self.sql_bo_selector,
             naming_sql_selector_factory=lambda: self.naming_sql_selector_factory(ctx.resources.loaded),
+            param_binder=self.sql_param_binder,
+            llm_resource_filter=self.llm_resource_filter,
         )
         result = resolver.resolve(
             query=request.query,
             node=request.node,
-            bo_registry=ctx.resources.loaded.bo_registry,
+            loaded_resource=ctx.resources.loaded,
+            node_path=request.node_path,
             context_pack=ctx.context_pack,
         )
         if result is not None:

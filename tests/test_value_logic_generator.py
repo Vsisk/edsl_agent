@@ -148,10 +148,26 @@ def test_sql_branch_selects_bo_then_namingsql_and_returns_sql_result():
     planner = Planner(fetch=False)
     selector = FirstProfileSelector()
     bo_calls = []
+    param_calls = []
 
     def choose_bo(**kwargs):
         bo_calls.append(kwargs)
         return "BB_BAK_TRANS"
+
+    def bind_params(**kwargs):
+        param_calls.append(kwargs)
+        return [
+            {
+                "param_name": "END_DATE",
+                "source_type": "constant",
+                "constant_value": "2026-08-04",
+            },
+            {
+                "param_name": "HOT_SEQ",
+                "source_type": "constant",
+                "constant_value": 1,
+            }
+        ]
 
     gen = ValueLogicGenerator(
         resource_loader=ResourceLoader(),
@@ -159,6 +175,7 @@ def test_sql_branch_selects_bo_then_namingsql_and_returns_sql_result():
         naming_sql_selector_factory=lambda loaded: selector,
         resource_filter_target_generator=Targets(),
         sql_bo_selector=choose_bo,
+        sql_param_binder=bind_params,
     )
     req = request(False).model_copy(update={
         "is_ab": True,
@@ -173,11 +190,26 @@ def test_sql_branch_selects_bo_then_namingsql_and_returns_sql_result():
     assert result.source.source_type == "sql"
     assert result.source.bo_name == "BB_BAK_TRANS"
     assert result.source.sql_name == "BB_BAK_TRANS_queryDataLoadData"
+    assert result.source.sql_params == [
+        {
+            "param_name": "END_DATE",
+            "source_type": "constant",
+            "context_name": None,
+            "constant_value": "2026-08-04",
+        },
+        {
+            "param_name": "HOT_SEQ",
+            "source_type": "constant",
+            "context_name": None,
+            "constant_value": 1,
+        }
+    ]
     assert result.return_type.is_list is True
     assert result.return_type.data_type_name == "BB_BAK_TRANS"
     assert not planner.calls
     assert bo_calls and "BB_BAK_TRANS" in bo_calls[0]["bo_candidates_json"]
     assert [profile.bo_name for profile in selector.calls[0]["profiles"]] == ["BB_BAK_TRANS"]
+    assert param_calls and "END_DATE" in param_calls[0]["params_json"]
 
 
 def test_sql_branch_falls_back_to_expression_when_bo_is_not_selected():
@@ -189,6 +221,30 @@ def test_sql_branch_falls_back_to_expression_when_bo_is_not_selected():
         naming_sql_selector_factory=lambda loaded: (_ for _ in ()).throw(AssertionError()),
         resource_filter_target_generator=Targets(),
         sql_bo_selector=lambda **kwargs: None,
+    )
+    req = request(False).model_copy(update={
+        "is_ab": True,
+        "node": {"node_id": "ab", "tree_node_type": "parent_list", "name": "transactions"},
+        "query": "query transaction list",
+    })
+
+    result = gen.generate(req)
+
+    assert result.logic_type == "expression"
+    assert planner.calls
+
+
+def test_sql_branch_falls_back_to_expression_when_param_binding_is_incomplete():
+    planner = Planner(fetch=False)
+    selector = FirstProfileSelector()
+
+    gen = ValueLogicGenerator(
+        resource_loader=ResourceLoader(),
+        llm_planner=planner,
+        naming_sql_selector_factory=lambda loaded: selector,
+        resource_filter_target_generator=Targets(),
+        sql_bo_selector=lambda **kwargs: "BB_BAK_TRANS",
+        sql_param_binder=lambda **kwargs: [],
     )
     req = request(False).model_copy(update={
         "is_ab": True,

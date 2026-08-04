@@ -80,7 +80,7 @@ LLM 只能在当前路由允许的逻辑类型内生成内容，不得改变优�
 
 生成入口必须保持四条清晰分支：
 
-- `sql` branch：先调用一次 LLM 在所有可用 BO 中判断是否能选择目标 BO；选不到 BO 时直接回退 expression。选中 BO 后，只读取该 BO 的 `naming_sql_list` 并调用 NamingSQL selector 选择 NamingSQL；选择成功后返回 `sql` 结果。
+- `sql` branch：先调用一次 LLM 在所有可用 BO 中判断是否能选择目标 BO；选不到 BO 时直接回退 expression。选中 BO 后，只读取该 BO 的 `naming_sql_list` 并调用 NamingSQL selector 选择 NamingSQL；再进入参数绑定，参数只能从 context-only 资源筛选结果中的 global context、local context 或用户显式常量中选择。BO、function、未筛出的 context 和虚构常量都不能作为参数来源。全部参数绑定成功后返回 `sql` 结果。
 - `expression` branch：复用现有 planner、AST、类型校验链路。
 - `table_field` branch：仅当 node 存在 `field_id` 时可进入；单字段映射不可用或不能满足需求时回退 expression。
 - `summary` branch：作为 field 的受限子分支，复用现有 summary 逻辑，不进入普通 table field 优先级竞争。
@@ -94,6 +94,7 @@ AB 容器和 parent list 优先使用 SQL：
   -> 确认目标 BO
   -> BO 未选时先从 registry/当前数据源选择 BO
   -> 选择一次可查询出一组符合条件 BO 的 naming SQL
+  -> 对 NamingSQL 参数做 context-only 资源筛选和参数绑定
   -> 绑定查询条件
   -> 校验结果为 list<xxx>
   -> 成功则返回 sql

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from difflib import SequenceMatcher
 from collections.abc import Callable
 from typing import Any
 
@@ -20,6 +21,12 @@ class SqlBoSelection(BaseModel):
     bo_keywords: list[str] = Field(default_factory=list)
 
 
+class SqlBoFinalSelection(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    bo_name: str | None = None
+
+
 class SqlParamBinding(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
@@ -37,8 +44,9 @@ class SqlParamBindingResponse(BaseModel):
 
 
 class SqlBranchBoSelector:
-    def __init__(self, decision_fn: Callable[..., Any] = generate_by_llm) -> None:
+    def __init__(self, decision_fn: Callable[..., Any] = generate_by_llm, top_k: int = 5) -> None:
         self.decision_fn = decision_fn
+        self.top_k = top_k
 
     def select(
         self,
@@ -50,7 +58,22 @@ class SqlBranchBoSelector:
     ) -> str | None:
         if not bo_registry:
             return None
-        bo_candidates_json = _dump_bo_candidates(bo_registry)
+        try:
+            raw = self.decision_fn(
+                prompt_template="value_logic_sql_bo_keywords",
+                llm_name="base",
+                lang="zh",
+                query=str(query or "")[:4000],
+                node_json=_dump(node),
+                bo_candidates_json=_dump_bo_candidates(bo_registry),
+                context_pack_json=_dump(_model_dump(context_pack)),
+            )
+            keywords = SqlBoSelection.model_validate(raw).bo_keywords
+        except Exception:
+            return None
+        candidates = _match_bo_names_by_keywords(keywords, bo_registry, top_k=self.top_k)
+        if not candidates:
+            return None
         try:
             raw = self.decision_fn(
                 prompt_template="value_logic_sql_bo_selector",
@@ -58,13 +81,15 @@ class SqlBranchBoSelector:
                 lang="zh",
                 query=str(query or "")[:4000],
                 node_json=_dump(node),
-                bo_candidates_json=bo_candidates_json,
+                bo_candidates_json=_dump_bo_candidates(candidates),
                 context_pack_json=_dump(_model_dump(context_pack)),
             )
-            keywords = SqlBoSelection.model_validate(raw).bo_keywords
+            selected = SqlBoFinalSelection.model_validate(raw).bo_name
         except Exception:
             return None
-        return _match_bo_name_by_keywords(keywords, bo_registry)
+        if selected in candidates:
+            return selected
+        return None
 
 
 class SqlParamBinder:
@@ -273,23 +298,58 @@ def _dump_bo_candidates(bo_registry: dict[str, BoRegistry]) -> str:
     return _dump(candidates)
 
 
-def _match_bo_name_by_keywords(
+def _match_bo_names_by_keywords(
     keywords: list[str],
     bo_registry: dict[str, BoRegistry],
-) -> str | None:
+    *,
+    top_k: int,
+) -> dict[str, BoRegistry]:
     normalized_keywords = [
         normalized
         for keyword in keywords
         if (normalized := _normalize_match_text(keyword))
     ]
-    if not normalized_keywords:
-        return None
+    if not normalized_keywords or top_k <= 0:
+        return {}
 
+    scored: list[tuple[float, str, BoRegistry]] = []
     for bo_name in bo_registry:
         normalized_bo_name = _normalize_match_text(bo_name)
-        if any(keyword in normalized_bo_name for keyword in normalized_keywords):
-            return bo_name
-    return None
+        acronym = _bo_acronym(bo_name)
+        score = max(
+            _bo_keyword_score(keyword, normalized_bo_name, acronym)
+            for keyword in normalized_keywords
+        )
+        if score > 0:
+            scored.append((score, bo_name, bo_registry[bo_name]))
+    scored.sort(key=lambda item: (-item[0], item[1]))
+    return {bo_name: bo for _, bo_name, bo in scored[:top_k]}
+
+
+def _bo_keyword_score(keyword: str, normalized_bo_name: str, acronym: str) -> float:
+    if keyword in normalized_bo_name:
+        return 1.0 + len(keyword) / max(len(normalized_bo_name), 1)
+    if normalized_bo_name in keyword:
+        return 0.95
+    if _is_subsequence(keyword, acronym):
+        return 0.9 + len(keyword) / max(len(acronym), 1) / 10
+    score = SequenceMatcher(None, keyword, normalized_bo_name).ratio()
+    return score if score >= 0.72 else 0.0
+
+
+def _bo_acronym(bo_name: str) -> str:
+    parts = [part for part in str(bo_name or "").replace("_", " ").split() if part]
+    return "".join(part[0].lower() for part in parts)
+
+
+def _is_subsequence(needle: str, haystack: str) -> bool:
+    if not needle:
+        return False
+    index = 0
+    for char in haystack:
+        if index < len(needle) and needle[index] == char:
+            index += 1
+    return index == len(needle)
 
 
 def _normalize_match_text(value: Any) -> str:

@@ -164,7 +164,7 @@ legacy
 
 - 只允许使用已解析的 AB/parent 数据源、SQL 或 naming SQL 资源。
 - SQL 结果必须声明为 list；`select_one` 或单对象结果不能满足本规则，除非上游另行定义包装语义。
-- SQL 参数绑定必须走仅 context 的资源筛选过程；参数值优先来自筛选出的 global context、local context，或用户 query 中明确给出的常量。不得使用 BO 字段、function、未筛出的 context 或 LLM 虚构常量。若单个参数绑定失败，本地代码填充默认常量空字符串 `""`，不因此回退 expression。
+- SQL 参数绑定必须走仅 context 的资源筛选过程；参数值优先来自筛选出的 global context、local context，或用户 query 中明确给出的常量。LLM 输出格式固定为 `{"sql_condition":[{"param_name":"","param_value":""}]}`；最终 NamingSQL 结果结构为 `{"sql_name":"","sql_condition":[{"param_name":"","param_value":""}]}`。不得使用 BO 字段、function、未筛出的 context 或 LLM 虚构常量。若单个参数绑定失败，本地代码填充 `param_value=""`，不因此回退 expression。
 - SQL 内容、命名 SQL ID、BO 名称等敏感/执行细节按现有 ContextPack 脱敏策略处理。
 
 #### AB 内部字段的 `edsl_expression`
@@ -354,7 +354,7 @@ ValueLogicTarget
   -> fallback_branch
 ```
 
-- `sql branch`：AB 容器和 parent list 的首选入口；先调用一次 LLM 判断所有可用 BO 中是否存在能表达当前 query 和 node 取值逻辑的 BO。选不到 BO 时直接进入 expression branch；选中 BO 后，只取该 BO 的 `naming_sql_list` 并调用 NamingSQL selector。选择成功后进入参数绑定：用仅 context 的资源筛选得到可用 global/local context，并允许用户显式常量；单个参数绑定失败时填充默认常量空字符串 `""`，仍返回显式 `sql` 结果。
+- `sql branch`：AB 容器和 parent list 的首选入口；先调用一次 LLM 判断所有可用 BO 中是否存在能表达当前 query 和 node 取值逻辑的 BO。选不到 BO 时直接进入 expression branch；选中 BO 后，只取该 BO 的 `naming_sql_list` 并调用 NamingSQL selector。选择成功后进入参数绑定：用仅 context 的资源筛选得到可用 global/local context，并允许用户显式常量；单个参数绑定失败时填充 `param_value=""`，仍返回显式 `sql` 结果。
 - `expression branch`：现有 planner / AST / validation 链路。
 - `table_field branch`：只有 `field_id` 字段能进入；没有 `field_id` 或直接字段映射无法满足时，退回 expression。
 - `summary branch`：作为 AB field 的受限子分支，继续复用现有 summary 逻辑。

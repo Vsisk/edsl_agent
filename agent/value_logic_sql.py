@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
-from typing import Any, Literal
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
@@ -24,27 +24,16 @@ class SqlParamBinding(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     param_name: str
-    source_type: Literal["global_context", "local_context", "constant"]
-    context_name: str | None = None
-    constant_value: Any | None = None
-
-
-class SqlConditionBinding(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-
-    param: SqlParamBinding
+    param_value: Any
 
 
 class SqlParamBindingResponse(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
-    params: list[SqlParamBinding] = Field(default_factory=list)
-    sql_condition: list[SqlConditionBinding] = Field(default_factory=list)
+    sql_condition: list[SqlParamBinding] = Field(default_factory=list)
 
     def bindings(self) -> list[SqlParamBinding]:
-        if self.sql_condition:
-            return [item.param for item in self.sql_condition]
-        return self.params
+        return self.sql_condition
 
 
 class SqlBranchBoSelector:
@@ -293,41 +282,35 @@ def _normalize_param_bindings(
 ) -> list[dict[str, Any]] | None:
     required = [param.param_name for param in params]
     by_param = {binding.param_name: binding for binding in bindings}
-    available_global = {item.context_name for item in filtered_env.selected_global_contexts}
-    available_local = {item.context_name for item in filtered_env.visible_local_context}
+    available_values = {
+        item.context_name for item in [
+            *filtered_env.selected_global_contexts,
+            *filtered_env.visible_local_context,
+        ]
+    }
     result: list[dict[str, Any]] = []
     for param_name in required:
         binding = by_param.get(param_name)
         if binding is None:
             result.append(_default_param_binding(param_name))
             continue
-        if binding.source_type == "global_context" and binding.context_name not in available_global:
+        if binding.param_value is None:
             result.append(_default_param_binding(param_name))
             continue
-        if binding.source_type == "local_context" and binding.context_name not in available_local:
+        if _looks_like_context(binding.param_value) and binding.param_value not in available_values:
             result.append(_default_param_binding(param_name))
             continue
-        if binding.source_type == "constant" and binding.constant_value is None:
-            result.append(_default_param_binding(param_name))
-            continue
-        result.append(
-            {
-                "param_name": param_name,
-                "source_type": binding.source_type,
-                "context_name": binding.context_name,
-                "constant_value": binding.constant_value,
-            }
-        )
+        result.append({"param_name": param_name, "param_value": binding.param_value})
     return result
 
 
 def _default_param_binding(param_name: str) -> dict[str, Any]:
-    return {
-        "param_name": param_name,
-        "source_type": "constant",
-        "context_name": None,
-        "constant_value": "",
-    }
+    return {"param_name": param_name, "param_value": ""}
+
+
+def _looks_like_context(value: Any) -> bool:
+    text = str(value or "")
+    return text.startswith("$ctx$.") or text.startswith("$local$.") or text.startswith("$iter$.")
 
 
 def _param_binding_query(query: str, sql_def: Any) -> str:

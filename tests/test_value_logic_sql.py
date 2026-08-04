@@ -56,8 +56,7 @@ def test_sql_param_binding_context_filter_exposes_matching_param_context():
         return [
             {
                 "param_name": "END_DATE",
-                "source_type": "global_context",
-                "context_name": "$ctx$.billStatement.END_DATE",
+                "param_value": "$ctx$.billStatement.END_DATE",
             }
         ]
 
@@ -74,7 +73,10 @@ def test_sql_param_binding_context_filter_exposes_matching_param_context():
     )
 
     assert result.logic_type == "sql"
-    assert result.source.sql_params[0]["context_name"] == "$ctx$.billStatement.END_DATE"
+    assert result.source.sql_params[0] == {
+        "param_name": "END_DATE",
+        "param_value": "$ctx$.billStatement.END_DATE",
+    }
     assert "$ctx$.billStatement.END_DATE" in calls[0]["available_context_json"]
 
 
@@ -89,11 +91,8 @@ def test_sql_param_binder_accepts_sql_condition_param_shape():
         return {
             "sql_condition": [
                 {
-                    "param": {
-                        "param_name": "END_DATE",
-                        "source_type": "global_context",
-                        "context_name": "$ctx$.billStatement.END_DATE",
-                    }
+                    "param_name": "END_DATE",
+                    "param_value": "$ctx$.billStatement.END_DATE",
                 }
             ]
         }
@@ -106,5 +105,8 @@ def test_sql_param_binder_accepts_sql_condition_param_shape():
         filtered_env=FilteredEnvironment(selected_global_contexts=[end_date]),
     )
 
-    assert bindings[0]["context_name"] == "$ctx$.billStatement.END_DATE"
+    assert bindings[0] == {
+        "param_name": "END_DATE",
+        "param_value": "$ctx$.billStatement.END_DATE",
+    }
     assert len(bindings) == len(sql_def.param_list)

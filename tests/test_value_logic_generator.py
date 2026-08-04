@@ -159,13 +159,11 @@ def test_sql_branch_selects_bo_then_namingsql_and_returns_sql_result():
         return [
             {
                 "param_name": "END_DATE",
-                "source_type": "constant",
-                "constant_value": "2026-08-04",
+                "param_value": "2026-08-04",
             },
             {
                 "param_name": "HOT_SEQ",
-                "source_type": "constant",
-                "constant_value": 1,
+                "param_value": 1,
             }
         ]
 
@@ -191,18 +189,8 @@ def test_sql_branch_selects_bo_then_namingsql_and_returns_sql_result():
     assert result.source.bo_name == "BB_BAK_TRANS"
     assert result.source.sql_name == "BB_BAK_TRANS_queryDataLoadData"
     assert result.source.sql_params == [
-        {
-            "param_name": "END_DATE",
-            "source_type": "constant",
-            "context_name": None,
-            "constant_value": "2026-08-04",
-        },
-        {
-            "param_name": "HOT_SEQ",
-            "source_type": "constant",
-            "context_name": None,
-            "constant_value": 1,
-        }
+        {"param_name": "END_DATE", "param_value": "2026-08-04"},
+        {"param_name": "HOT_SEQ", "param_value": 1},
     ]
     assert result.return_type.is_list is True
     assert result.return_type.data_type_name == "BB_BAK_TRANS"
@@ -256,18 +244,8 @@ def test_sql_branch_uses_empty_string_defaults_when_param_binding_is_incomplete(
 
     assert result.logic_type == "sql"
     assert result.source.sql_params == [
-        {
-            "param_name": "END_DATE",
-            "source_type": "constant",
-            "context_name": None,
-            "constant_value": "",
-        },
-        {
-            "param_name": "HOT_SEQ",
-            "source_type": "constant",
-            "context_name": None,
-            "constant_value": "",
-        },
+        {"param_name": "END_DATE", "param_value": ""},
+        {"param_name": "HOT_SEQ", "param_value": ""},
     ]
     assert not planner.calls
 

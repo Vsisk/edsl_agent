@@ -80,7 +80,7 @@ LLM 只能在当前路由允许的逻辑类型内生成内容，不得改变优�
 
 生成入口必须保持四条清晰分支：
 
-- `sql` branch：先调用一次 LLM 在所有可用 BO 中判断是否能选择目标 BO；选不到 BO 时直接回退 expression。选中 BO 后，只读取该 BO 的 `naming_sql_list` 并调用 NamingSQL selector 选择 NamingSQL；再进入参数绑定，参数优先从 context-only 资源筛选结果中的 global context、local context 或用户显式常量中选择。BO、function、未筛出的 context 和虚构常量都不能作为参数来源。单个参数绑定失败时不回退 expression，而是由本地代码填充默认常量空字符串 `""`，然后返回 `sql` 结果。
+- `sql` branch：先调用一次 LLM 在所有可用 BO 中判断是否能选择目标 BO；选不到 BO 时直接回退 expression。选中 BO 后，只读取该 BO 的 `naming_sql_list` 并调用 NamingSQL selector 选择 NamingSQL；再进入参数绑定，参数优先从 context-only 资源筛选结果中的 global context、local context 或用户显式常量中选择。BO、function、未筛出的 context 和虚构常量都不能作为参数来源。LLM 参数绑定输出为 `{"sql_condition":[{"param_name":"","param_value":""}]}`；单个参数绑定失败时不回退 expression，而是由本地代码填充 `param_value=""`，然后返回 `sql` 结果。
 - `expression` branch：复用现有 planner、AST、类型校验链路。
 - `table_field` branch：仅当 node 存在 `field_id` 时可进入；单字段映射不可用或不能满足需求时回退 expression。
 - `summary` branch：作为 field 的受限子分支，复用现有 summary 逻辑，不进入普通 table field 优先级竞争。
@@ -110,6 +110,7 @@ AB 容器和 parent list 优先使用 SQL：
 - `select_one` 或 scalar 结果不能直接满足 AB/parent list 规则。
 - SQL 无法完整表达用户需求时，回退表达式，而不是拼接多个不满足契约的查询。
 - 回退表达式时必须保留已解析的 BO、字段和目标类型上下文。
+- 最终 NamingSQL 输出结构为 `{"sql_name":"","sql_condition":[{"param_name":"","param_value":""}]}`。
 
 ## 7. AB 返回类型与内部字段映射
 

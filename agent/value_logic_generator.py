@@ -53,6 +53,7 @@ from agent.spec_orchestration.orchestrator import SpecOrchestrator
 from agent.spec_orchestration.search import OrchestratorResourceSearch
 from agent.spec_orchestration.semantic import SpecSemanticGateway
 from agent.spec_orchestration.spec_clarity import QuerySpecClarityAnalyzer
+from agent.value_logic_routing import ValueLogicTarget, classify_value_logic_target
 
 
 DEFAULT_CONTEXT_LIMIT = 5
@@ -82,6 +83,7 @@ class GenerationContext:
     parent_node: dict[str, Any] | None
     query: str
     context_pack: ContextPack
+    target: ValueLogicTarget | None = None
 
 
 class ValueLogicGenerator:
@@ -148,6 +150,9 @@ class ValueLogicGenerator:
         self.generation_max_attempts = generation_max_attempts
 
     def generate(self, request: ValueLogicRequest) -> ValueLogicResult:
+        target = None
+        if isinstance(request.node.get("tree_node_type"), str):
+            target = classify_value_logic_target(request.node)
         resources = ResourceContext(
             loaded=self.resource_loader.load_resource(
                 request.site_id,
@@ -194,9 +199,12 @@ class ValueLogicGenerator:
             parent_node=request.parent_node,
             query=request.query,
             context_pack=context_pack,
+            target=target,
         )
 
-        if not request.is_ab:
+        if target is not None and target.kind == "simple_leaf":
+            return self._generate_simple_leaf_expression(request, ctx)
+        if not request.is_ab and (target is None or target.kind == "generic"):
             return self._generate_simple_leaf_expression(request, ctx)
         else:
             return self._generate_field_logic(request, ctx)

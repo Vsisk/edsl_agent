@@ -234,7 +234,7 @@ def test_sql_branch_falls_back_to_expression_when_bo_is_not_selected():
     assert planner.calls
 
 
-def test_sql_branch_falls_back_to_expression_when_param_binding_is_incomplete():
+def test_sql_branch_uses_empty_string_defaults_when_param_binding_is_incomplete():
     planner = Planner(fetch=False)
     selector = FirstProfileSelector()
 
@@ -254,8 +254,22 @@ def test_sql_branch_falls_back_to_expression_when_param_binding_is_incomplete():
 
     result = gen.generate(req)
 
-    assert result.logic_type == "expression"
-    assert planner.calls
+    assert result.logic_type == "sql"
+    assert result.source.sql_params == [
+        {
+            "param_name": "END_DATE",
+            "source_type": "constant",
+            "context_name": None,
+            "constant_value": "",
+        },
+        {
+            "param_name": "HOT_SEQ",
+            "source_type": "constant",
+            "context_name": None,
+            "constant_value": "",
+        },
+    ]
+    assert not planner.calls
 
 
 @pytest.mark.parametrize("failing_stage", ["resource_filter", "planner"])

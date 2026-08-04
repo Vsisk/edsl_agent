@@ -287,13 +287,17 @@ def _normalize_param_bindings(
     for param_name in required:
         binding = by_param.get(param_name)
         if binding is None:
-            return None
+            result.append(_default_param_binding(param_name))
+            continue
         if binding.source_type == "global_context" and binding.context_name not in available_global:
-            return None
+            result.append(_default_param_binding(param_name))
+            continue
         if binding.source_type == "local_context" and binding.context_name not in available_local:
-            return None
+            result.append(_default_param_binding(param_name))
+            continue
         if binding.source_type == "constant" and binding.constant_value is None:
-            return None
+            result.append(_default_param_binding(param_name))
+            continue
         result.append(
             {
                 "param_name": param_name,
@@ -303,6 +307,15 @@ def _normalize_param_bindings(
             }
         )
     return result
+
+
+def _default_param_binding(param_name: str) -> dict[str, Any]:
+    return {
+        "param_name": param_name,
+        "source_type": "constant",
+        "context_name": None,
+        "constant_value": "",
+    }
 
 
 def _param_binding_query(query: str, sql_def: Any) -> str:

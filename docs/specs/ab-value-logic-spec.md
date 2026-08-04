@@ -66,6 +66,25 @@
 
 LLM 只能在当前路由允许的逻辑类型内生成内容，不得改变优先级。
 
+### 5.1 `target` 到生成分支的派发
+
+目标分类结果必须显式产出 `primary_branch` 和 `fallback_branch`，后续生成入口按分支派发，而不是继续依赖 `is_ab` 或父节点 SQL 条件隐式穿透：
+
+| target kind | primary branch | fallback branch |
+|---|---|---|
+| `simple_leaf` | `expression` | 无 |
+| `ab_container` / `parent_list` | `sql` | `expression` |
+| `ab_field` 普通字段 | `table_field` | `expression` |
+| `ab_field` summary 字段 | `summary` | 无通用回退 |
+| `generic` | `sql` | `expression` |
+
+生成入口必须保持四条清晰分支：
+
+- `sql` branch：负责 AB 容器/parent list 的 BO 优先选择，再在目标 BO 的 NamingSQL 内选择；无法一次查询满足时回退 expression。
+- `expression` branch：复用现有 planner、AST、类型校验链路。
+- `table_field` branch：仅当 node 存在 `field_id` 时可进入；单字段映射不可用或不能满足需求时回退 expression。
+- `summary` branch：作为 field 的受限子分支，复用现有 summary 逻辑，不进入普通 table field 优先级竞争。
+
 ## 6. AB 容器 SQL 链路
 
 AB 容器和 parent list 优先使用 SQL：

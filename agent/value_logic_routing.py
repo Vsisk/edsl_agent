@@ -9,6 +9,8 @@ KNOWN_TREE_NODE_TYPES = AB_CONTAINER_TYPES | frozenset({"simple_leaf", "parent",
 @dataclass(frozen=True)
 class ValueLogicTarget:
     kind: str
+    primary_branch: str
+    fallback_branch: str | None
     allowed_logic_types: tuple[str, ...]
     priority: tuple[str, ...]
     required_is_list: bool
@@ -21,13 +23,22 @@ def classify_value_logic_target(node: dict[str, Any]) -> ValueLogicTarget:
         raise ValueError(f"unknown tree_node_type: {tree_node_type}")
 
     if tree_node_type == "simple_leaf":
-        return ValueLogicTarget("simple_leaf", ("edsl_expression",), ("edsl_expression",), False)
+        return ValueLogicTarget(
+            "simple_leaf",
+            "expression",
+            None,
+            ("edsl_expression",),
+            ("edsl_expression",),
+            False,
+        )
 
     if node.get("field_id"):
         if _is_summary_field(node):
-            return ValueLogicTarget("ab_field", ("summary",), ("summary",), False, True)
+            return ValueLogicTarget("ab_field", "summary", None, ("summary",), ("summary",), False, True)
         return ValueLogicTarget(
             "ab_field",
+            "table_field",
+            "expression",
             ("table_field", "edsl_expression"),
             ("table_field", "edsl_expression"),
             False,
@@ -36,6 +47,8 @@ def classify_value_logic_target(node: dict[str, Any]) -> ValueLogicTarget:
     if node.get("node_id") and tree_node_type in AB_CONTAINER_TYPES:
         return ValueLogicTarget(
             "ab_container",
+            "sql",
+            "expression",
             ("sql", "edsl_expression"),
             ("sql", "edsl_expression"),
             True,
@@ -43,6 +56,8 @@ def classify_value_logic_target(node: dict[str, Any]) -> ValueLogicTarget:
 
     return ValueLogicTarget(
         "generic",
+        "sql",
+        "expression",
         ("sql", "edsl_expression"),
         ("sql", "edsl_expression"),
         False,

@@ -5,7 +5,7 @@ import pytest
 from agent.context_manager.errors import NO_NAMING_SQL_CANDIDATES
 from agent.context_pack.models import ContextPack
 from agent.expression_generation.typed_context import TypedExpressionContext
-from agent.models import ValueLogicRequest
+from agent.models import ValueLogicRequest, ValueLogicResult, ValueLogicSource
 from agent.resource_manager.loader.namingsql_profile_loader import NamingSqlProfile
 from agent.planner.models import Plan
 from agent.resource_manager.loader.resource_loader import ResourceLoader
@@ -80,6 +80,61 @@ def generator(factory, planner, context_pack_manager=None, context_resource_rout
         naming_sql_selector_factory=factory,
         resource_filter_target_generator=Targets(), context_pack_manager=context_pack_manager,
         context_resource_router=context_resource_router)
+
+
+class BranchSpyGenerator(ValueLogicGenerator):
+    def __init__(self):
+        super().__init__(
+            resource_loader=ResourceLoader(),
+            llm_planner=Planner(fetch=False),
+            naming_sql_selector_factory=lambda loaded: (_ for _ in ()).throw(AssertionError()),
+            resource_filter_target_generator=Targets(),
+        )
+        self.branch_calls = []
+
+    def _branch_result(self, branch):
+        self.branch_calls.append(branch)
+        return ValueLogicResult(
+            node_id=branch,
+            logic_type="expression",
+            expression=branch,
+            source=ValueLogicSource(source_type="plan"),
+        )
+
+    def _generate_sql_branch(self, request, ctx):
+        return self._branch_result("sql")
+
+    def _generate_expression_branch(self, request, ctx):
+        return self._branch_result("expression")
+
+    def _generate_table_field_branch(self, request, ctx):
+        return self._branch_result("table_field")
+
+    def _generate_summary_branch(self, request, ctx):
+        return self._branch_result("summary")
+
+
+@pytest.mark.parametrize(
+    ("node", "is_ab", "expected_branch"),
+    [
+        ({"node_id": "leaf", "tree_node_type": "simple_leaf"}, False, "expression"),
+        ({"node_id": "ab", "tree_node_type": "ab_pivot_table"}, True, "sql"),
+        ({"field_id": "field", "tree_node_type": "ab_pivot_table"}, True, "table_field"),
+        (
+            {"field_id": "sum", "tree_node_type": "ab_pivot_table", "field_type": "summary"},
+            True,
+            "summary",
+        ),
+    ],
+)
+def test_value_logic_target_dispatches_to_branch(node, is_ab, expected_branch):
+    gen = BranchSpyGenerator()
+    req = request(False).model_copy(update={"node": node, "is_ab": is_ab})
+
+    result = gen.generate(req)
+
+    assert result.expression == expected_branch
+    assert gen.branch_calls == [expected_branch]
 
 
 @pytest.mark.parametrize("failing_stage", ["resource_filter", "planner"])
@@ -409,17 +464,30 @@ def test_default_filter_path_uses_expression_spec_text():
     assert targets.calls[0]["query"] == "ordinary"
 
 
-def test_parent_sql_direct_field_mapping_still_bypasses_planner():
+def test_parent_sql_direct_field_mapping_requires_field_id():
     planner = Planner(fetch=False)
     req = request(False).model_copy(update={
         "is_ab": True,
-        "node": {"node_id": "log", "name": "LOG_ID", "is_ab": True},
+        "node": {"field_id": "log", "tree_node_type": "field", "name": "LOG_ID", "is_ab": True},
         "parent_node": {"data_source_type": "sql", "bo_name": "BB_BAK_TRANS"},
         "query": "direct BO field mapping",
     })
     result = generator(lambda loaded: (_ for _ in ()).throw(AssertionError()), planner).generate(req)
     assert result.logic_type == "bo_field_mapping" and result.expression == "LOG_ID"
     assert not planner.calls
+
+
+def test_parent_sql_node_without_field_id_falls_back_to_expression():
+    planner = Planner(fetch=False)
+    req = request(False).model_copy(update={
+        "is_ab": True,
+        "node": {"node_id": "log", "tree_node_type": "field", "name": "LOG_ID", "is_ab": True},
+        "parent_node": {"data_source_type": "sql", "bo_name": "BB_BAK_TRANS"},
+        "query": "direct BO field mapping",
+    })
+    result = generator(lambda loaded: (_ for _ in ()).throw(AssertionError()), planner).generate(req)
+    assert result.logic_type == "expression"
+    assert planner.calls
 
 
 def test_empty_targets_keep_empty_environment_and_trace():
@@ -487,7 +555,7 @@ def test_legacy_fallback_dynamic_limits_and_disabled_groups(route, expected):
 
 def _ab_request(*, source_type="sql", field="LOG_ID", query="directly map LOG_ID from table field"):
     return request(False).model_copy(update={"is_ab": True, "node": {
-        "node_id": "normal-field", "tree_node_type": "field", "xml_name_property": {"xml_name": field}},
+        "field_id": "normal-field", "tree_node_type": "field", "xml_name_property": {"xml_name": field}},
         "parent_node": {"node_id": "ab-parent", "is_ab": True, "ab_content": {"data_source": {
             "data_source_type": source_type, "sql_query": {"bo_name": "BB_BAK_TRANS"}}}}, "query": query})
 

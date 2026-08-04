@@ -202,12 +202,11 @@ class ValueLogicGenerator:
             target=target,
         )
 
-        if target is not None and target.kind == "simple_leaf":
-            return self._generate_simple_leaf_expression(request, ctx)
+        if target is not None:
+            return self._generate_target_logic(request, ctx, target)
         if not request.is_ab and (target is None or target.kind == "generic"):
             return self._generate_simple_leaf_expression(request, ctx)
-        else:
-            return self._generate_field_logic(request, ctx)
+        return self._generate_field_logic(request, ctx)
 
     def _load_project_edsl_tree(self) -> dict[str, Any]:
         tree_path = self.resource_loader.data_dir / "edsl_tree.json"
@@ -232,13 +231,50 @@ class ValueLogicGenerator:
         request: ValueLogicRequest,
         ctx: GenerationContext,
     ) -> ValueLogicResult:
-        return self._generate_expression_by_plan(request, ctx)
+        return self._generate_expression_branch(request, ctx)
 
     def _generate_field_logic(self, request: ValueLogicRequest, ctx: GenerationContext) -> ValueLogicResult:
         if self._is_summary_field(request.node):
-            return self._generate_summary_field_logic(request, ctx)
+            return self._generate_summary_branch(request, ctx)
 
-        return self._generate_normal_field_logic(request, ctx)
+        return self._generate_table_field_branch(request, ctx)
+
+    def _generate_target_logic(
+        self,
+        request: ValueLogicRequest,
+        ctx: GenerationContext,
+        target: ValueLogicTarget,
+    ) -> ValueLogicResult:
+        if target.primary_branch == "sql":
+            return self._generate_sql_branch(request, ctx)
+        if target.primary_branch == "table_field":
+            return self._generate_table_field_branch(request, ctx)
+        if target.primary_branch == "summary":
+            return self._generate_summary_branch(request, ctx)
+        return self._generate_expression_branch(request, ctx)
+
+    def _generate_sql_branch(self, request: ValueLogicRequest, ctx: GenerationContext) -> ValueLogicResult:
+        # SQL generation is resolved by the spec orchestration pipeline:
+        # first select BO, then select NamingSQL from that BO.
+        return self._generate_expression_branch(request, ctx)
+
+    def _generate_expression_branch(self, request: ValueLogicRequest, ctx: GenerationContext) -> ValueLogicResult:
+        return self._generate_expression_by_plan(request, ctx)
+
+    def _generate_table_field_branch(self, request: ValueLogicRequest, ctx: GenerationContext) -> ValueLogicResult:
+        if not request.node.get("field_id"):
+            return self._generate_expression_branch(request, ctx)
+
+        if request.parent_node and self._is_sql_source(request.parent_node):
+            bo_name = self._extract_parent_sql_bo_name(request.parent_node)
+            mapping_result = self._try_generate_bo_field_mapping(request, ctx, bo_name)
+            if mapping_result is not None:
+                return mapping_result
+
+        return self._generate_expression_branch(request, ctx)
+
+    def _generate_summary_branch(self, request: ValueLogicRequest, ctx: GenerationContext) -> ValueLogicResult:
+        return self._generate_summary_field_logic(request, ctx)
 
     def _generate_summary_field_logic(self, request: ValueLogicRequest, ctx: GenerationContext) -> ValueLogicResult:
         summary_type = self._extract_summary_type(request.node)
@@ -256,17 +292,7 @@ class ValueLogicGenerator:
         )
 
     def _generate_normal_field_logic(self, request: ValueLogicRequest, ctx: GenerationContext) -> ValueLogicResult:
-        if request.parent_node :
-            if self._is_sql_source(request.parent_node):
-                bo_name = self._extract_parent_sql_bo_name(request.parent_node)
-                mapping_result = self._try_generate_bo_field_mapping(request, ctx, bo_name)
-                if mapping_result is not None:
-                    return mapping_result
-                return self._generate_expression_by_plan(request, ctx)
-
-            return self._generate_expression_by_plan(request, ctx)
-
-        return self._generate_expression_by_plan(request, ctx)
+        return self._generate_table_field_branch(request, ctx)
 
     def _try_generate_bo_field_mapping(
         self,

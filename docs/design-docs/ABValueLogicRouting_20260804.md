@@ -339,3 +339,22 @@ summary 是 AB 内部字段的一种受限类型，不是独立于 field 的目�
 SQL 资源选择顺序固定为：先选择并提交目标 BO，再仅在该 BO 的 `naming_sql_list` 内选择 NamingSQL。未提交 BO 时不得直接选择 NamingSQL，也不得跨 BO 混选。
 
 实现前需要产品/上游确认一项协议问题：最终输出是否把 `logic_type` 直接升级为 `edsl_expression/sql/table_field`，还是保留当前 `expression/bo_field_mapping` 并新增业务层逻辑类型字段。该选择会影响 `ValueLogicResult`、调用方反序列化和回归测试，但不影响本文的目标分类和链路设计。
+
+## 实现修订：`target` 后续使用方式
+
+当前实现将 `target` 作为生成入口的分支派发依据，而不是仅作为分类元数据保存：
+
+```text
+ValueLogicTarget
+  -> primary_branch
+      -> sql branch
+      -> expression branch
+      -> table_field branch
+      -> summary branch
+  -> fallback_branch
+```
+
+- `sql branch`：AB 容器和 parent list 的首选入口；NamingSQL 选择沿用 SpecOrchestrator 的 BO-first 链路，即先提交目标 BO，再只看该 BO 的 `naming_sql_list`。
+- `expression branch`：现有 planner / AST / validation 链路。
+- `table_field branch`：只有 `field_id` 字段能进入；没有 `field_id` 或直接字段映射无法满足时，退回 expression。
+- `summary branch`：作为 AB field 的受限子分支，继续复用现有 summary 逻辑。

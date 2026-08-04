@@ -17,7 +17,7 @@ from agent.resource_manager.loader.registry_models import BoRegistry
 class SqlBoSelection(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
-    bo_name: str | None = None
+    bo_keywords: list[str] = Field(default_factory=list)
 
 
 class SqlParamBinding(BaseModel):
@@ -61,12 +61,10 @@ class SqlBranchBoSelector:
                 bo_candidates_json=bo_candidates_json,
                 context_pack_json=_dump(_model_dump(context_pack)),
             )
-            selected = SqlBoSelection.model_validate(raw).bo_name
+            keywords = SqlBoSelection.model_validate(raw).bo_keywords
         except Exception:
             return None
-        if selected in bo_registry:
-            return selected
-        return None
+        return _match_bo_name_by_keywords(keywords, bo_registry)
 
 
 class SqlParamBinder:
@@ -273,6 +271,29 @@ def _dump_bo_candidates(bo_registry: dict[str, BoRegistry]) -> str:
         for bo in bo_registry.values()
     ]
     return _dump(candidates)
+
+
+def _match_bo_name_by_keywords(
+    keywords: list[str],
+    bo_registry: dict[str, BoRegistry],
+) -> str | None:
+    normalized_keywords = [
+        normalized
+        for keyword in keywords
+        if (normalized := _normalize_match_text(keyword))
+    ]
+    if not normalized_keywords:
+        return None
+
+    for bo_name in bo_registry:
+        normalized_bo_name = _normalize_match_text(bo_name)
+        if any(keyword in normalized_bo_name for keyword in normalized_keywords):
+            return bo_name
+    return None
+
+
+def _normalize_match_text(value: Any) -> str:
+    return "".join(ch for ch in str(value or "").lower() if ch.isalnum())
 
 
 def _normalize_param_bindings(

@@ -10,12 +10,12 @@ class FirstProfileSelector:
         return request["profiles"][:1]
 
 
-def test_sql_bo_selector_uses_llm_prompt_and_accepts_known_bo_only():
+def test_sql_bo_selector_matches_generated_keywords_against_bo_names():
     calls = []
 
     def decide(**kwargs):
         calls.append(kwargs)
-        return {"bo_name": "BB_BAK_TRANS"}
+        return {"bo_keywords": ["bak trans", "transaction"]}
 
     loaded = ResourceLoader().load_resource("site1", "project1", sample_edsl_tree_payload())
     selected = SqlBranchBoSelector(decision_fn=decide).select(
@@ -30,9 +30,9 @@ def test_sql_bo_selector_uses_llm_prompt_and_accepts_known_bo_only():
     assert "BB_BAK_TRANS" in calls[0]["bo_candidates_json"]
 
 
-def test_sql_bo_selector_rejects_unknown_bo():
+def test_sql_bo_selector_returns_none_when_keywords_do_not_match_bo_name():
     def decide(**kwargs):
-        return {"bo_name": "MISSING_BO"}
+        return {"bo_keywords": ["missing customer"]}
 
     loaded = ResourceLoader().load_resource("site1", "project1", sample_edsl_tree_payload())
     selected = SqlBranchBoSelector(decision_fn=decide).select(

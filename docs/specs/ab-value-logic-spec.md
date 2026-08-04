@@ -80,7 +80,7 @@ LLM 只能在当前路由允许的逻辑类型内生成内容，不得改变优�
 
 生成入口必须保持四条清晰分支：
 
-- `sql` branch：先调用一次 LLM 在所有可用 BO 中判断是否能选择目标 BO；选不到 BO 时直接回退 expression。选中 BO 后，只读取该 BO 的 `naming_sql_list` 并调用 NamingSQL selector 选择 NamingSQL；再进入参数绑定，参数优先从 context-only 资源筛选结果中的 global context、local context 或用户显式常量中选择。BO、function、未筛出的 context 和虚构常量都不能作为参数来源。LLM 参数绑定输出为 `{"sql_condition":[{"param_name":"","param_value":""}]}`；单个参数绑定失败时不回退 expression，而是由本地代码填充 `param_value=""`，然后返回 `sql` 结果。
+- `sql` branch：先调用一次 LLM 生成可能的 BO 关键词，再由本地代码遍历所有可用 BO name 做关键词匹配；匹配不到 BO 时直接回退 expression。匹配到 BO 后，只读取该 BO 的 `naming_sql_list` 并调用 NamingSQL selector 选择 NamingSQL；再进入参数绑定，参数优先从 context-only 资源筛选结果中的 global context、local context 或用户显式常量中选择。BO、function、未筛出的 context 和虚构常量都不能作为参数来源。LLM 参数绑定输出为 `{"sql_condition":[{"param_name":"","param_value":""}]}`；单个参数绑定失败时不回退 expression，而是由本地代码填充 `param_value=""`，然后返回 `sql` 结果。
 - `expression` branch：复用现有 planner、AST、类型校验链路。
 - `table_field` branch：仅当 node 存在 `field_id` 时可进入；单字段映射不可用或不能满足需求时回退 expression。
 - `summary` branch：作为 field 的受限子分支，复用现有 summary 逻辑，不进入普通 table field 优先级竞争。
@@ -91,8 +91,8 @@ AB 容器和 parent list 优先使用 SQL：
 
 ```text
 识别目标 AB/parent
-  -> 确认目标 BO
-  -> BO 未选时先从 registry/当前数据源选择 BO
+  -> LLM 生成可能的 BO 关键词
+  -> 本地遍历 registry 中所有 BO name 做关键词匹配
   -> 选择一次可查询出一组符合条件 BO 的 naming SQL
   -> 对 NamingSQL 参数做 context-only 资源筛选和参数绑定
   -> 绑定查询条件

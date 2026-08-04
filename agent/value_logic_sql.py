@@ -29,10 +29,22 @@ class SqlParamBinding(BaseModel):
     constant_value: Any | None = None
 
 
+class SqlConditionBinding(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    param: SqlParamBinding
+
+
 class SqlParamBindingResponse(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     params: list[SqlParamBinding] = Field(default_factory=list)
+    sql_condition: list[SqlConditionBinding] = Field(default_factory=list)
+
+    def bindings(self) -> list[SqlParamBinding]:
+        if self.sql_condition:
+            return [item.param for item in self.sql_condition]
+        return self.params
 
 
 class SqlBranchBoSelector:
@@ -97,7 +109,7 @@ class SqlParamBinder:
             response = SqlParamBindingResponse.model_validate(raw)
         except (ValidationError, TypeError, ValueError):
             return None
-        return _normalize_param_bindings(response.params, params, filtered_env)
+        return _normalize_param_bindings(response.bindings(), params, filtered_env)
 
 
 class SqlBranchResolver:

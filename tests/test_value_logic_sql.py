@@ -1,4 +1,5 @@
-from agent.value_logic_sql import SqlBranchBoSelector, SqlBranchResolver
+from agent.environment.environment import FilteredEnvironment
+from agent.value_logic_sql import SqlBranchBoSelector, SqlBranchResolver, SqlParamBinder
 from agent.resource_manager.loader.resource_loader import ResourceLoader
 from tests.test_environment import StaticResourceLoader, bill_statement_context_payload, sample_edsl_tree_payload
 from tests.test_resource_loader import sample_bo_payload
@@ -75,3 +76,35 @@ def test_sql_param_binding_context_filter_exposes_matching_param_context():
     assert result.logic_type == "sql"
     assert result.source.sql_params[0]["context_name"] == "$ctx$.billStatement.END_DATE"
     assert "$ctx$.billStatement.END_DATE" in calls[0]["available_context_json"]
+
+
+def test_sql_param_binder_accepts_sql_condition_param_shape():
+    payload = bill_statement_context_payload()
+    payload["bo"] = sample_bo_payload()
+    loaded = StaticResourceLoader(payload).load_resource("site1", "project1", sample_edsl_tree_payload())
+    end_date = loaded.context_registry["$ctx$.billStatement.END_DATE"]
+    sql_def = loaded.bo_registry["BB_BAK_TRANS"].naming_sql_list[0]
+
+    def decide(**kwargs):
+        return {
+            "sql_condition": [
+                {
+                    "param": {
+                        "param_name": "END_DATE",
+                        "source_type": "global_context",
+                        "context_name": "$ctx$.billStatement.END_DATE",
+                    }
+                }
+            ]
+        }
+
+    bindings = SqlParamBinder(decision_fn=decide).bind(
+        query="query by end date",
+        node={"node_id": "ab"},
+        sql_name=sql_def.sql_name,
+        params=sql_def.param_list,
+        filtered_env=FilteredEnvironment(selected_global_contexts=[end_date]),
+    )
+
+    assert bindings[0]["context_name"] == "$ctx$.billStatement.END_DATE"
+    assert len(bindings) == len(sql_def.param_list)

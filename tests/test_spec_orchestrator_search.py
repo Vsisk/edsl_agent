@@ -363,6 +363,27 @@ def test_bo_access_search_does_not_mix_relation_with_naming_sql():
     assert candidates == []
 
 
+def test_naming_sql_search_requires_selected_bo_and_stays_within_that_bo():
+    search = OrchestratorResourceSearch(_loaded_resource())
+
+    missing_bo = GoalSearchRequest(
+        goal=_goal("invoice customer group"),
+        tier=ResourceTier.BO_ACCESS,
+        keywords=["invoice"],
+    )
+    selected_bo = GoalSearchRequest(
+        goal=_goal("invoice customer group"),
+        tier=ResourceTier.BO_ACCESS,
+        keywords=["invoice"],
+        target_bo_name="BB_BILL_CUSTGRP",
+    )
+
+    assert search.search(missing_bo) == []
+    candidates = search.search(selected_bo)
+    assert [item.bo_name for item in candidates] == ["BB_BILL_CUSTGRP"]
+    assert all(item.kind == "naming_sql" for item in candidates)
+
+
 def test_bo_select_fallback_uses_primary_key_when_query_has_no_condition():
     search = OrchestratorResourceSearch(_loaded_resource())
     request = GoalSearchRequest(

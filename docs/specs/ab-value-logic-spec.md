@@ -84,6 +84,8 @@ AB 容器和 parent list 优先使用 SQL：
 约束：
 
 - BO 名称必须来自真实 registry 或 AB 数据源，不能由 LLM 虚构。
+- 未确定目标 BO 前不得搜索或选择 NamingSQL。
+- NamingSQL 选择必须限定在目标 BO 自己的 `naming_sql_list`，不得跨 BO 混选。
 - 一次 naming SQL 必须能够查询出一组符合条件的 BO。
 - `select_one` 或 scalar 结果不能直接满足 AB/parent list 规则。
 - SQL 无法完整表达用户需求时，回退表达式，而不是拼接多个不满足契约的查询。

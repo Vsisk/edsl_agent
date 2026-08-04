@@ -336,4 +336,6 @@ summary 是 AB 内部字段的一种受限类型，不是独立于 field 的目�
 
 该修订同时明确：SQL 是 AB 容器和 parent list 的首选能力，table field 是普通 AB 内部字段的首选能力；summary 作为特定 field 的独立子分支保持现有逻辑。SQL 或 table field 不能完整表达需求时，普通场景才进入表达式生成。
 
+SQL 资源选择顺序固定为：先选择并提交目标 BO，再仅在该 BO 的 `naming_sql_list` 内选择 NamingSQL。未提交 BO 时不得直接选择 NamingSQL，也不得跨 BO 混选。
+
 实现前需要产品/上游确认一项协议问题：最终输出是否把 `logic_type` 直接升级为 `edsl_expression/sql/table_field`，还是保留当前 `expression/bo_field_mapping` 并新增业务层逻辑类型字段。该选择会影响 `ValueLogicResult`、调用方反序列化和回归测试，但不影响本文的目标分类和链路设计。

@@ -258,6 +258,8 @@ class OrchestratorResourceSearch:
         ]
 
     def _search_naming_sql(self, request: GoalSearchRequest) -> list[ResourceCandidate]:
+        # NamingSQL is a second-stage lookup: BO selection must commit a target
+        # BO before this method inspects that BO's SQL definitions.
         target_bo_name = request.target_bo_name
         if not target_bo_name:
             return []

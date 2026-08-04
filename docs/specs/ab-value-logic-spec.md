@@ -80,7 +80,7 @@ LLM 只能在当前路由允许的逻辑类型内生成内容，不得改变优�
 
 生成入口必须保持四条清晰分支：
 
-- `sql` branch：负责 AB 容器/parent list 的 BO 优先选择，再在目标 BO 的 NamingSQL 内选择；无法一次查询满足时回退 expression。
+- `sql` branch：先调用一次 LLM 在所有可用 BO 中判断是否能选择目标 BO；选不到 BO 时直接回退 expression。选中 BO 后，只读取该 BO 的 `naming_sql_list` 并调用 NamingSQL selector 选择 NamingSQL；选择成功后返回 `sql` 结果。
 - `expression` branch：复用现有 planner、AST、类型校验链路。
 - `table_field` branch：仅当 node 存在 `field_id` 时可进入；单字段映射不可用或不能满足需求时回退 expression。
 - `summary` branch：作为 field 的受限子分支，复用现有 summary 逻辑，不进入普通 table field 优先级竞争。

@@ -54,6 +54,7 @@ from agent.spec_orchestration.search import OrchestratorResourceSearch
 from agent.spec_orchestration.semantic import SpecSemanticGateway
 from agent.spec_orchestration.spec_clarity import QuerySpecClarityAnalyzer
 from agent.value_logic_routing import ValueLogicTarget, classify_value_logic_target, is_summary_field
+from agent.value_logic_sql import SqlBranchBoSelector, SqlBranchResolver
 
 
 DEFAULT_CONTEXT_LIMIT = 5
@@ -108,6 +109,7 @@ class ValueLogicGenerator:
         spec_orchestrator_factory: Callable[[LoadedResource], Any] | None = None,
         resolution_compiler: Any | None = None,
         query_spec_clarity_analyzer: Any | None = None,
+        sql_bo_selector: Callable[..., str | None] | None = None,
     ):
         if (
             not isinstance(generation_max_attempts, int)
@@ -148,6 +150,7 @@ class ValueLogicGenerator:
         self.type_registry = type_registry or TypeRegistry()
         self.method_registry = method_registry or create_builtin_method_registry()
         self.generation_max_attempts = generation_max_attempts
+        self.sql_bo_selector = sql_bo_selector or SqlBranchBoSelector()
 
     def generate(self, request: ValueLogicRequest) -> ValueLogicResult:
         target = None
@@ -246,8 +249,18 @@ class ValueLogicGenerator:
         return self._generate_expression_branch(request, ctx)
 
     def _generate_sql_branch(self, request: ValueLogicRequest, ctx: GenerationContext) -> ValueLogicResult:
-        # SQL generation is resolved by the spec orchestration pipeline:
-        # first select BO, then select NamingSQL from that BO.
+        resolver = SqlBranchResolver(
+            bo_selector=self.sql_bo_selector,
+            naming_sql_selector_factory=lambda: self.naming_sql_selector_factory(ctx.resources.loaded),
+        )
+        result = resolver.resolve(
+            query=request.query,
+            node=request.node,
+            bo_registry=ctx.resources.loaded.bo_registry,
+            context_pack=ctx.context_pack,
+        )
+        if result is not None:
+            return result
         return self._generate_expression_branch(request, ctx)
 
     def _generate_expression_branch(self, request: ValueLogicRequest, ctx: GenerationContext) -> ValueLogicResult:

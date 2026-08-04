@@ -38,6 +38,13 @@ class Selector:
     def select(self, **request): self.calls.append(request); return self.result
 
 
+class FirstProfileSelector:
+    def __init__(self): self.calls = []
+    def select(self, **request):
+        self.calls.append(request)
+        return request["profiles"][:1]
+
+
 class Route:
     def __init__(self, use_bo, use_function, resource_count_hint=5):
         self.use_bo, self.use_function = use_bo, use_function
@@ -135,6 +142,64 @@ def test_value_logic_target_dispatches_to_branch(node, is_ab, expected_branch):
 
     assert result.expression == expected_branch
     assert gen.branch_calls == [expected_branch]
+
+
+def test_sql_branch_selects_bo_then_namingsql_and_returns_sql_result():
+    planner = Planner(fetch=False)
+    selector = FirstProfileSelector()
+    bo_calls = []
+
+    def choose_bo(**kwargs):
+        bo_calls.append(kwargs)
+        return "BB_BAK_TRANS"
+
+    gen = ValueLogicGenerator(
+        resource_loader=ResourceLoader(),
+        llm_planner=planner,
+        naming_sql_selector_factory=lambda loaded: selector,
+        resource_filter_target_generator=Targets(),
+        sql_bo_selector=choose_bo,
+    )
+    req = request(False).model_copy(update={
+        "is_ab": True,
+        "node": {"node_id": "ab", "tree_node_type": "parent_list", "name": "transactions"},
+        "query": "query transaction list by end date",
+    })
+
+    result = gen.generate(req)
+
+    assert result.logic_type == "sql"
+    assert result.expression == "BB_BAK_TRANS_queryDataLoadData"
+    assert result.source.source_type == "sql"
+    assert result.source.bo_name == "BB_BAK_TRANS"
+    assert result.source.sql_name == "BB_BAK_TRANS_queryDataLoadData"
+    assert result.return_type.is_list is True
+    assert result.return_type.data_type_name == "BB_BAK_TRANS"
+    assert not planner.calls
+    assert bo_calls and "BB_BAK_TRANS" in bo_calls[0]["bo_candidates_json"]
+    assert [profile.bo_name for profile in selector.calls[0]["profiles"]] == ["BB_BAK_TRANS"]
+
+
+def test_sql_branch_falls_back_to_expression_when_bo_is_not_selected():
+    planner = Planner(fetch=False)
+
+    gen = ValueLogicGenerator(
+        resource_loader=ResourceLoader(),
+        llm_planner=planner,
+        naming_sql_selector_factory=lambda loaded: (_ for _ in ()).throw(AssertionError()),
+        resource_filter_target_generator=Targets(),
+        sql_bo_selector=lambda **kwargs: None,
+    )
+    req = request(False).model_copy(update={
+        "is_ab": True,
+        "node": {"node_id": "ab", "tree_node_type": "parent_list", "name": "transactions"},
+        "query": "query transaction list",
+    })
+
+    result = gen.generate(req)
+
+    assert result.logic_type == "expression"
+    assert planner.calls
 
 
 @pytest.mark.parametrize("failing_stage", ["resource_filter", "planner"])

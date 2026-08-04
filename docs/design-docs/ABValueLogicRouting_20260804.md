@@ -354,7 +354,7 @@ ValueLogicTarget
   -> fallback_branch
 ```
 
-- `sql branch`：AB 容器和 parent list 的首选入口；NamingSQL 选择沿用 SpecOrchestrator 的 BO-first 链路，即先提交目标 BO，再只看该 BO 的 `naming_sql_list`。
+- `sql branch`：AB 容器和 parent list 的首选入口；先调用一次 LLM 判断所有可用 BO 中是否存在能表达当前 query 和 node 取值逻辑的 BO。选不到 BO 时直接进入 expression branch；选中 BO 后，只取该 BO 的 `naming_sql_list` 并调用 NamingSQL selector，选择成功后返回显式 `sql` 结果。
 - `expression branch`：现有 planner / AST / validation 链路。
 - `table_field branch`：只有 `field_id` 字段能进入；没有 `field_id` 或直接字段映射无法满足时，退回 expression。
 - `summary branch`：作为 AB field 的受限子分支，继续复用现有 summary 逻辑。

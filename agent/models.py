@@ -26,9 +26,11 @@ class ValueLogicRequest(BaseModel):
 
 
 class ValueLogicSource(BaseModel):
-    source_type: Literal["plan", "bo", "detail_field"]
+    source_type: Literal["plan", "bo", "detail_field", "sql"]
     bo_name: str | None = None
     bo_field: str | None = None
+    sql_name: str | None = None
+    naming_sql_id: str | None = None
     detail_field: str | None = None
     summary_type: Literal["sum", "count"] | None = None
 
@@ -41,7 +43,7 @@ class ValueReturnType(BaseModel):
 
 class ValueLogicResult(BaseModel):
     node_id: str | None = None
-    logic_type: Literal["expression", "bo_field_mapping", "summary", "validation_failed"]
+    logic_type: Literal["expression", "bo_field_mapping", "summary", "sql", "validation_failed"]
     expression: str | None = None
     return_type: ValueReturnType | None = None
     source: ValueLogicSource

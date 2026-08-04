@@ -49,6 +49,21 @@ def test_summary_field_stays_in_field_branch():
     assert result.allowed_logic_types == ("summary",)
 
 
+@pytest.mark.parametrize(
+    "node",
+    [
+        {"field_id": "f1", "tree_node_type": "ab_pivot_table", "field_type": "Summary"},
+        {"field_id": "f1", "tree_node_type": "ab_pivot_table", "aggregate_type": "sum"},
+        {"field_id": "f1", "tree_node_type": "ab_pivot_table", "aggregation": "count"},
+    ],
+)
+def test_summary_field_detection_uses_shared_normalized_rules(node):
+    result = classify_value_logic_target(node)
+
+    assert result.primary_branch == "summary"
+    assert result.is_summary is True
+
+
 def test_table_field_requires_field_id():
     result = classify_value_logic_target({"tree_node_type": "parent"})
 

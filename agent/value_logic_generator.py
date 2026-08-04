@@ -53,7 +53,7 @@ from agent.spec_orchestration.orchestrator import SpecOrchestrator
 from agent.spec_orchestration.search import OrchestratorResourceSearch
 from agent.spec_orchestration.semantic import SpecSemanticGateway
 from agent.spec_orchestration.spec_clarity import QuerySpecClarityAnalyzer
-from agent.value_logic_routing import ValueLogicTarget, classify_value_logic_target
+from agent.value_logic_routing import ValueLogicTarget, classify_value_logic_target, is_summary_field
 
 
 DEFAULT_CONTEXT_LIMIT = 5
@@ -218,14 +218,6 @@ class ValueLogicGenerator:
             raise ValueError(f"EDSL tree resource must contain a JSON object: {tree_path}")
         return payload
 
-    def _is_summary_field(self, node: dict[str, Any]) -> bool:
-        if self._normalize_text(node.get("field_type")) == "summary":
-            return True
-        if self._normalize_summary_type(node.get("summary_type")) is not None:
-            return True
-        summary = node.get("summary") or node.get("summary_config")
-        return isinstance(summary, dict)
-
     def _generate_simple_leaf_expression(
         self,
         request: ValueLogicRequest,
@@ -234,7 +226,7 @@ class ValueLogicGenerator:
         return self._generate_expression_branch(request, ctx)
 
     def _generate_field_logic(self, request: ValueLogicRequest, ctx: GenerationContext) -> ValueLogicResult:
-        if self._is_summary_field(request.node):
+        if is_summary_field(request.node):
             return self._generate_summary_branch(request, ctx)
 
         return self._generate_table_field_branch(request, ctx)

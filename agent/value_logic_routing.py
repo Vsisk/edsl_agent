@@ -33,7 +33,7 @@ def classify_value_logic_target(node: dict[str, Any]) -> ValueLogicTarget:
         )
 
     if node.get("field_id"):
-        if _is_summary_field(node):
+        if is_summary_field(node):
             return ValueLogicTarget("ab_field", "summary", None, ("summary",), ("summary",), False, True)
         return ValueLogicTarget(
             "ab_field",
@@ -71,9 +71,35 @@ def _tree_node_type(node: dict[str, Any]) -> str:
     return value
 
 
-def _is_summary_field(node: dict[str, Any]) -> bool:
-    if node.get("field_type") == "summary":
+def is_summary_field(node: dict[str, Any]) -> bool:
+    if _normalize_text(node.get("field_type")) == "summary":
         return True
-    if node.get("summary_type"):
+    if _normalize_summary_type(node.get("summary_type")) is not None:
         return True
-    return isinstance(node.get("summary") or node.get("summary_config"), dict)
+    if _normalize_summary_type(node.get("aggregate_type")) is not None:
+        return True
+    if _normalize_summary_type(node.get("aggregation")) is not None:
+        return True
+
+    summary = node.get("summary") or node.get("summary_config")
+    if not isinstance(summary, dict):
+        return False
+
+    if _normalize_summary_type(summary.get("summary_type")) is not None:
+        return True
+    if _normalize_summary_type(summary.get("type")) is not None:
+        return True
+    if _normalize_summary_type(summary.get("aggregation")) is not None:
+        return True
+    return True
+
+
+def _normalize_summary_type(value: Any) -> str | None:
+    normalized = _normalize_text(value)
+    if normalized in {"sum", "count"}:
+        return normalized
+    return None
+
+
+def _normalize_text(value: Any) -> str:
+    return str(value or "").strip().lower()

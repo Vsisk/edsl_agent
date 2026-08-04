@@ -452,6 +452,18 @@ def test_summary_field_bypasses_factory_and_planner():
     assert result.source.detail_field == "AMOUNT" and not planner.calls
 
 
+def test_summary_field_with_aggregate_type_uses_summary_branch():
+    planner = Planner(fetch=False)
+    def fail(_): raise AssertionError("factory must not be called")
+    summary_request = request(False).model_copy(update={"is_ab": True, "node": {
+        "field_id": "sum", "tree_node_type": "field", "name": "total",
+        "aggregate_type": "sum", "detail_field": "AMOUNT",
+    }})
+    result = generator(fail, planner).generate(summary_request)
+    assert result.logic_type == "summary" and result.source.summary_type == "sum"
+    assert not planner.calls
+
+
 def test_default_filter_path_uses_expression_spec_text():
     class CapturingTargets:
         def __init__(self): self.calls = []

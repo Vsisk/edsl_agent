@@ -27,6 +27,12 @@ class SqlBoFinalSelection(BaseModel):
     bo_name: str | None = None
 
 
+class SqlTableQueryCount(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    table_query_count: int = 1
+
+
 class SqlParamBinding(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
@@ -92,6 +98,34 @@ class SqlBranchBoSelector:
         return None
 
 
+class SqlTableQueryCounter:
+    def __init__(self, decision_fn: Callable[..., Any] = generate_by_llm) -> None:
+        self.decision_fn = decision_fn
+
+    def count(
+        self,
+        *,
+        query: str,
+        node: dict[str, Any],
+        context_pack: Any,
+    ) -> int:
+        try:
+            raw = self.decision_fn(
+                prompt_template="value_logic_sql_query_count",
+                llm_name="base",
+                lang="zh",
+                query=str(query or "")[:4000],
+                node_json=_dump(node),
+                context_pack_json=_dump(_model_dump(context_pack)),
+            )
+            count = SqlTableQueryCount.model_validate(raw).table_query_count
+        except Exception:
+            return 2
+        if count < 1:
+            return 1
+        return count
+
+
 class SqlParamBinder:
     def __init__(self, decision_fn: Callable[..., Any] = generate_by_llm) -> None:
         self.decision_fn = decision_fn
@@ -128,11 +162,13 @@ class SqlBranchResolver:
     def __init__(
         self,
         *,
+        table_query_counter: Callable[..., int] | SqlTableQueryCounter,
         bo_selector: Callable[..., str | None] | SqlBranchBoSelector,
         naming_sql_selector_factory: Callable[[], Any],
         param_binder: Callable[..., list[dict[str, Any]] | None] | SqlParamBinder,
         llm_resource_filter: Any | None = None,
     ) -> None:
+        self.table_query_counter = table_query_counter
         self.bo_selector = bo_selector
         self.naming_sql_selector_factory = naming_sql_selector_factory
         self.param_binder = param_binder
@@ -147,6 +183,9 @@ class SqlBranchResolver:
         node_path: str,
         context_pack: Any,
     ) -> ValueLogicResult | None:
+        if self._table_query_count(query=query, node=node, context_pack=context_pack) > 1:
+            return None
+
         bo_registry = loaded_resource.bo_registry
         bo_name = self._select_bo(
             query=query,
@@ -241,6 +280,18 @@ class SqlBranchResolver:
         if selected in bo_registry:
             return selected
         return None
+
+    def _table_query_count(
+        self,
+        *,
+        query: str,
+        node: dict[str, Any],
+        context_pack: Any,
+    ) -> int:
+        kwargs = {"query": query, "node": node, "context_pack": context_pack}
+        if hasattr(self.table_query_counter, "count"):
+            return int(self.table_query_counter.count(**kwargs))
+        return int(self.table_query_counter(**kwargs))
 
     def _bind_params(
         self,

@@ -54,7 +54,7 @@ from agent.spec_orchestration.search import OrchestratorResourceSearch
 from agent.spec_orchestration.semantic import SpecSemanticGateway
 from agent.spec_orchestration.spec_clarity import QuerySpecClarityAnalyzer
 from agent.value_logic_routing import ValueLogicTarget, classify_value_logic_target, is_summary_field
-from agent.value_logic_sql import SqlBranchBoSelector, SqlBranchResolver, SqlParamBinder
+from agent.value_logic_sql import SqlBranchBoSelector, SqlBranchResolver, SqlParamBinder, SqlTableQueryCounter
 
 
 DEFAULT_CONTEXT_LIMIT = 5
@@ -111,6 +111,7 @@ class ValueLogicGenerator:
         query_spec_clarity_analyzer: Any | None = None,
         sql_bo_selector: Callable[..., str | None] | None = None,
         sql_param_binder: Callable[..., list[dict[str, Any]] | None] | None = None,
+        sql_table_query_counter: Callable[..., int] | None = None,
     ):
         if (
             not isinstance(generation_max_attempts, int)
@@ -153,6 +154,7 @@ class ValueLogicGenerator:
         self.generation_max_attempts = generation_max_attempts
         self.sql_bo_selector = sql_bo_selector or SqlBranchBoSelector()
         self.sql_param_binder = sql_param_binder or SqlParamBinder()
+        self.sql_table_query_counter = sql_table_query_counter or SqlTableQueryCounter()
 
     def generate(self, request: ValueLogicRequest) -> ValueLogicResult:
         target = None
@@ -252,6 +254,7 @@ class ValueLogicGenerator:
 
     def _generate_sql_branch(self, request: ValueLogicRequest, ctx: GenerationContext) -> ValueLogicResult:
         resolver = SqlBranchResolver(
+            table_query_counter=self.sql_table_query_counter,
             bo_selector=self.sql_bo_selector,
             naming_sql_selector_factory=lambda: self.naming_sql_selector_factory(ctx.resources.loaded),
             param_binder=self.sql_param_binder,

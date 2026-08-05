@@ -354,7 +354,7 @@ ValueLogicTarget
   -> fallback_branch
 ```
 
-- `sql branch`：AB 容器和 parent list 的首选入口；先调用一次 LLM 生成可能的 BO 关键词，再由本地代码遍历所有可用 BO name 做模糊/缩写匹配并取 top-k 候选。没有候选时直接进入 expression branch；有候选时再调用 LLM 在 top-k 候选中选择最终 BO。选中 BO 后，只取该 BO 的 `naming_sql_list` 并调用 NamingSQL selector。选择成功后进入参数绑定：用仅 context 的资源筛选得到可用 global/local context，并允许用户显式常量；单个参数绑定失败时填充 `param_value=""`，仍返回显式 `sql` 结果。
+- `sql branch`：AB 容器和 parent list 的首选入口；进入 SQL 选择前，先调用一次 LLM 判断是否只需要 1 次查表。若超过 1 次查表，直接进入 expression branch。若只需 1 次查表，再调用 LLM 生成可能的 BO 关键词，由本地代码遍历所有可用 BO name 做模糊/缩写匹配并取 top-k 候选。没有候选时直接进入 expression branch；有候选时再调用 LLM 在 top-k 候选中选择最终 BO。选中 BO 后，只取该 BO 的 `naming_sql_list` 并调用 NamingSQL selector。选择成功后进入参数绑定：用仅 context 的资源筛选得到可用 global/local context，并允许用户显式常量；单个参数绑定失败时填充 `param_value=""`，仍返回显式 `sql` 结果。
 - `expression branch`：现有 planner / AST / validation 链路。
 - `table_field branch`：只有 `field_id` 字段能进入；没有 `field_id` 或直接字段映射无法满足时，退回 expression。
 - `summary branch`：作为 AB field 的受限子分支，继续复用现有 summary 逻辑。

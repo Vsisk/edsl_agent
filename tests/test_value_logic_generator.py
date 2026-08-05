@@ -174,6 +174,7 @@ def test_sql_branch_selects_bo_then_namingsql_and_returns_sql_result():
         resource_filter_target_generator=Targets(),
         sql_bo_selector=choose_bo,
         sql_param_binder=bind_params,
+        sql_table_query_counter=lambda **kwargs: 1,
     )
     req = request(False).model_copy(update={
         "is_ab": True,
@@ -222,6 +223,32 @@ def test_sql_branch_falls_back_to_expression_when_bo_is_not_selected():
     assert planner.calls
 
 
+def test_sql_branch_skips_sql_selection_when_query_needs_multiple_table_queries():
+    planner = Planner(fetch=False)
+
+    def fail_bo(**kwargs):
+        raise AssertionError("BO selection must not run")
+
+    gen = ValueLogicGenerator(
+        resource_loader=ResourceLoader(),
+        llm_planner=planner,
+        naming_sql_selector_factory=lambda loaded: (_ for _ in ()).throw(AssertionError()),
+        resource_filter_target_generator=Targets(),
+        sql_bo_selector=fail_bo,
+        sql_table_query_counter=lambda **kwargs: 2,
+    )
+    req = request(False).model_copy(update={
+        "is_ab": True,
+        "node": {"node_id": "ab", "tree_node_type": "parent_list", "name": "transactions"},
+        "query": "query transactions then query customer details",
+    })
+
+    result = gen.generate(req)
+
+    assert result.logic_type == "expression"
+    assert planner.calls
+
+
 def test_sql_branch_uses_empty_string_defaults_when_param_binding_is_incomplete():
     planner = Planner(fetch=False)
     selector = FirstProfileSelector()
@@ -233,6 +260,7 @@ def test_sql_branch_uses_empty_string_defaults_when_param_binding_is_incomplete(
         resource_filter_target_generator=Targets(),
         sql_bo_selector=lambda **kwargs: "BB_BAK_TRANS",
         sql_param_binder=lambda **kwargs: [],
+        sql_table_query_counter=lambda **kwargs: 1,
     )
     req = request(False).model_copy(update={
         "is_ab": True,

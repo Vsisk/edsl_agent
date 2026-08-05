@@ -78,6 +78,7 @@ def test_sql_param_binding_context_filter_exposes_matching_param_context():
         ]
 
     result = SqlBranchResolver(
+        table_query_counter=lambda **kwargs: 1,
         bo_selector=lambda **kwargs: "BB_BAK_TRANS",
         naming_sql_selector_factory=lambda: FirstProfileSelector(),
         param_binder=bind_params,

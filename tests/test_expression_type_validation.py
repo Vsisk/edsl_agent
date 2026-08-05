@@ -83,6 +83,21 @@ def test_resolves_list_lambda_and_continues_field_chain():
     assert result.errors == [] and result.return_type == LONG
 
 
+def test_resolves_merge_list_for_same_element_type_lists():
+    result = validator().validate(
+        plan(
+            "primary.merge_list(secondary)",
+            [
+                SimpleDefinition(name="primary", expr="fetch(E_QUERY_CHARGE)"),
+                SimpleDefinition(name="secondary", expr="fetch(E_QUERY_CHARGE)"),
+            ],
+        )
+    )
+
+    assert result.errors == []
+    assert result.return_type == CHARGES
+
+
 @pytest.mark.parametrize(("expr", "error_type"), [
     ("$ctx$.address.addr1.addDays(1)", "METHOD_NOT_FOUND"),
     ("$ctx$.address.addr1.xxx", "FIELD_ACCESS_ON_BASIC_TYPE"),

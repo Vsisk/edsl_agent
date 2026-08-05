@@ -295,6 +295,7 @@ def test_builder_expands_list_methods_and_first_object_fields():
         "size",
         "find{expr}",
         "findAll{expr}",
+        "merge_list",
     ]
     assert any(
         field.access == "$ctx$.charges.first().CHARGE_AMT"

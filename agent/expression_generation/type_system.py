@@ -210,14 +210,6 @@ def register_builtin_methods(registry: MethodRegistry) -> None:
             arg_types=[],
             return_type=list_of_t,
         ),
-        # List composition keeps the element type fixed: List<T> + List<T> -> List<T>.
-        MethodSig(
-            owner_type=list_of_t,
-            name="merge_list",
-            arg_types=[list_of_t],
-            arg_names=["other"],
-            return_type=list_of_t,
-        ),
         MethodSig(
             owner_type=map_of_string_to_t,
             name="get",

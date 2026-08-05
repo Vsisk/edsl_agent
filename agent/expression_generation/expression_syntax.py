@@ -19,7 +19,7 @@ class ExpressionTokenizer:
         start = 0
         quote: str | None = None
         escape = False
-        parens = braces = 0
+        parens = braces = brackets = 0
         for index, char in enumerate(expr):
             if quote:
                 if escape:
@@ -39,7 +39,11 @@ class ExpressionTokenizer:
                 braces += 1
             elif char == "}":
                 braces -= 1
-            elif char == separator and parens == 0 and braces == 0:
+            elif char == "[":
+                brackets += 1
+            elif char == "]":
+                brackets -= 1
+            elif char == separator and parens == 0 and braces == 0 and brackets == 0:
                 if separator == "." and index > 0 and index + 1 < len(expr):
                     if expr[index - 1].isdigit() and expr[index + 1].isdigit():
                         continue

@@ -73,6 +73,7 @@ class ExpressionTypeResolver:
     def __init__(self, validation_input: ExpressionValidationInput, errors: list[TypeValidationError]):
         self.input = validation_input
         self.errors = errors
+        self.dynamic_fields: dict[tuple[str, str], TypeRef] = {}
         self.roots = {
             root.expr: parse_type_text(root.return_type)
             for root in validation_input.typed_context.root_values
@@ -85,6 +86,9 @@ class ExpressionTypeResolver:
             return literal
         if expr.lower().startswith("if(") and expr.endswith(")"):
             return self._resolve_if(expr, scope)
+        function_type = self._resolve_builtin_function(expr, scope)
+        if function_type is not None:
+            return function_type
         binary = _find_binary(expr)
         if binary is not None:
             left, op, right = binary
@@ -150,6 +154,60 @@ class ExpressionTypeResolver:
         self._error("UNKNOWN_ROOT", expr, match.group(0), f"unknown {kind} source")
         return None
 
+    def _resolve_builtin_function(self, expr: str, scope: TypeScope) -> TypeRef | None:
+        call = _top_level_call(expr)
+        if call is None:
+            return None
+        name, args = call
+        if name == "merge_list":
+            return self._resolve_merge_list(expr, args, scope)
+        if name == "trans_list":
+            return self._resolve_trans_list(expr, args, scope)
+        return None
+
+    def _resolve_merge_list(self, expr: str, args: list[str], scope: TypeScope) -> TypeRef | None:
+        if len(args) != 2:
+            self._error("METHOD_ARG_COUNT_MISMATCH", expr, "merge_list", "merge_list requires two list arguments")
+            return None
+        left = self.resolve(args[0], scope)
+        right = self.resolve(args[1], scope)
+        if left is None or right is None:
+            return None
+        if left.kind != "list" or right.kind != "list" or left != right:
+            self._error("METHOD_ARG_TYPE_MISMATCH", expr, "merge_list", "merge_list requires two lists with the same item type", expected=left, actual=right)
+            return None
+        return left
+
+    def _resolve_trans_list(self, expr: str, args: list[str], scope: TypeScope) -> TypeRef | None:
+        if len(args) < 2:
+            self._error("METHOD_ARG_COUNT_MISMATCH", expr, "trans_list", "trans_list requires a source list and at least one field mapping")
+            return None
+        source_type = self.resolve(args[0], scope)
+        if source_type is None:
+            return None
+        if source_type.kind != "list" or source_type.element_type is None:
+            self._error("METHOD_ARG_TYPE_MISMATCH", expr, "trans_list", "trans_list first argument must be a list", actual=source_type)
+            return None
+
+        item_scope = TypeScope(scope)
+        item_scope.bind("it", source_type.element_type)
+        fields: dict[str, TypeRef] = {}
+        for mapping in args[1:]:
+            parsed = _parse_trans_mapping(mapping)
+            if parsed is None:
+                self._error("METHOD_ARG_TYPE_MISMATCH", expr, mapping, "trans_list mapping must be [key, it.fieldExpr]")
+                return None
+            field_name, value_expr = parsed
+            value_type = self.resolve(value_expr, item_scope)
+            if value_type is None:
+                return None
+            fields[field_name] = value_type
+
+        owner_name = "trans_list:" + ",".join(fields)
+        for field_name, field_type in fields.items():
+            self.dynamic_fields[(owner_name, field_name)] = field_type
+        return TypeRef(kind="list", element_type=TypeRef(kind="logic", name=owner_name))
+
     def _resolve_chain(self, expr: str, scope: TypeScope) -> TypeRef | None:
         root_expr = next((root for root in sorted(self.roots, key=len, reverse=True) if expr == root or expr.startswith(root + ".")), None)
         if root_expr:
@@ -162,7 +220,7 @@ class ExpressionTypeResolver:
             if root.name.startswith(("$ctx$", "$local$")):
                 self._error("UNKNOWN_CONTEXT_PATH", expr, root.raw, "unknown context path")
                 return None
-            current = scope.resolve(root.name)
+            current = self._resolve_builtin_function(root.name, scope) or scope.resolve(root.name)
             if current is None:
                 code = "UNKNOWN_ROOT" if "(" in root.name else "UNKNOWN_VARIABLE"
                 self._error(code, expr, root.raw, "unknown expression root")
@@ -175,7 +233,9 @@ class ExpressionTypeResolver:
                 if current.kind == "list":
                     self._error("LIST_FIELD_ACCESS_WITHOUT_ELEMENT_METHOD", expr, token.raw, "list fields require first/find/findAll", owner=current)
                     return None
-                field_type = self.input.type_registry.resolve_field(current, token.name)
+                field_type = self.dynamic_fields.get((current.name or "", token.name))
+                if field_type is None:
+                    field_type = self.input.type_registry.resolve_field(current, token.name)
                 if field_type is None:
                     self._error("FIELD_NOT_FOUND", expr, token.raw, "field not found", owner=current)
                     return None
@@ -248,6 +308,26 @@ def parse_type_text(text: str) -> TypeRef:
         kind, name = text.split(".", 1)
         return TypeRef(kind=kind, name=name)
     return TypeRef(kind=text if text in {"void", "unknown"} else "unknown")
+
+
+def _top_level_call(expr: str) -> tuple[str, list[str]] | None:
+    match = re.match(r"^([A-Za-z_]\w*)\s*\((.*)\)$", expr.strip())
+    if not match:
+        return None
+    return match.group(1), split_top_level_commas(match.group(2))
+
+
+def _parse_trans_mapping(expr: str) -> tuple[str, str] | None:
+    text = expr.strip()
+    if not (text.startswith("[") and text.endswith("]")):
+        return None
+    parts = split_top_level_commas(text[1:-1])
+    if len(parts) != 2:
+        return None
+    field_name = parts[0].strip().strip("\"'")
+    if not re.fullmatch(r"[A-Za-z_]\w*", field_name):
+        return None
+    return field_name, parts[1].strip()
 
 
 def _literal_type(expr: str) -> TypeRef | None:

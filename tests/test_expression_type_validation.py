@@ -83,10 +83,10 @@ def test_resolves_list_lambda_and_continues_field_chain():
     assert result.errors == [] and result.return_type == LONG
 
 
-def test_resolves_merge_list_for_same_element_type_lists():
+def test_resolves_merge_list_function_for_same_element_type_lists():
     result = validator().validate(
         plan(
-            "primary.merge_list(secondary)",
+            "merge_list(primary, secondary)",
             [
                 SimpleDefinition(name="primary", expr="fetch(E_QUERY_CHARGE)"),
                 SimpleDefinition(name="secondary", expr="fetch(E_QUERY_CHARGE)"),
@@ -96,6 +96,18 @@ def test_resolves_merge_list_for_same_element_type_lists():
 
     assert result.errors == []
     assert result.return_type == CHARGES
+
+
+def test_resolves_trans_list_function_to_new_item_fields():
+    result = validator().validate(
+        plan(
+            "trans_list(charges, [amount, it.CHARGE_AMT], [amountText, it.CHARGE_AMT.long2str()]).first().amountText",
+            [SimpleDefinition(name="charges", expr="fetch(E_QUERY_CHARGE)")],
+        )
+    )
+
+    assert result.errors == []
+    assert result.return_type == STRING
 
 
 @pytest.mark.parametrize(("expr", "error_type"), [

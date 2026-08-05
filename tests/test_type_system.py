@@ -122,6 +122,7 @@ def test_method_registry_registers_and_matches_basic_signature():
         (list_of(CHARGE), "size", [], INT),
         (list_of(CHARGE), "find{expr}", [], CHARGE),
         (list_of(CHARGE), "findAll{expr}", [], list_of(CHARGE)),
+        (list_of(CHARGE), "merge_list", [list_of(CHARGE)], None),
         (map_of(STRING, CHARGE), "get", [STRING], CHARGE),
     ],
 )
@@ -177,7 +178,6 @@ def test_method_registry_lists_only_methods_for_concrete_owner():
         "size",
         "find{expr}",
         "findAll{expr}",
-        "merge_list",
     ]
     assert list_methods[0].return_type == CHARGE
     assert [method.name for method in string_methods] == [

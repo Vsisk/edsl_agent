@@ -48,6 +48,8 @@ def generate_expression(node: ASTNode) -> str:
     if isinstance(node, CallNode):
         if node.name in {"+", "-", "*", "/"} and len(node.args) == 2:
             return f"{generate_expression(node.args[0])} {node.name} {generate_expression(node.args[1])}"
+        if node.name == "__trans_mapping" and len(node.args) == 2:
+            return f"[{generate_expression(node.args[0]).strip(chr(34))}, {generate_expression(node.args[1])}]"
         return f"{node.name}({', '.join(generate_expression(arg) for arg in node.args)})"
     if isinstance(node, SelectNode):
         return f"select({node.bo}, {generate_expression(node.filter)})"

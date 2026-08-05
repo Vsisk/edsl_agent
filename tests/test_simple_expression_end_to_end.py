@@ -186,6 +186,59 @@ def test_fetch_cardinality_comes_from_call_not_typed_context_template():
     }
 
 
+def test_value_result_return_type_comes_from_merge_list_expression():
+    charge = TypeRef(kind="bo", name="BB_BILL_CHARGE")
+    registry = TypeRegistry()
+    registry.register_type(TypeDef(owner_type=charge, fields={"CHARGE_AMT": TypeRef(kind="basic", name="long")}))
+    context = TypedExpressionContext(
+        var_templates=[TypedVarTemplate(var_name="it", definition_expr="fetch(E_QUERY_CHARGE)", return_type="List<bo.BB_BILL_CHARGE>")]
+    )
+
+    result, _ = run(
+        SimpleExpressionPlan(
+            definitions=[
+                SimpleDefinition(name="primary", expr="fetch(E_QUERY_CHARGE)"),
+                SimpleDefinition(name="secondary", expr="fetch(E_QUERY_CHARGE)"),
+            ],
+            return_expr="merge_list(primary, secondary)",
+        ),
+        context,
+        registry,
+    )
+
+    assert result.expression == "def primary: fetch(E_QUERY_CHARGE);\ndef secondary: fetch(E_QUERY_CHARGE);\nmerge_list(primary, secondary)"
+    assert result.return_type.model_dump() == {
+        "is_list": True,
+        "data_type": "bo",
+        "data_type_name": "BB_BILL_CHARGE",
+    }
+
+
+def test_value_result_return_type_comes_from_trans_list_expression_field():
+    charge = TypeRef(kind="bo", name="BB_BILL_CHARGE")
+    registry = TypeRegistry()
+    registry.register_type(TypeDef(owner_type=charge, fields={"CHARGE_AMT": TypeRef(kind="basic", name="long")}))
+    context = TypedExpressionContext(
+        var_templates=[TypedVarTemplate(var_name="it", definition_expr="fetch(E_QUERY_CHARGE)", return_type="List<bo.BB_BILL_CHARGE>")]
+    )
+
+    result, _ = run(
+        SimpleExpressionPlan(
+            definitions=[SimpleDefinition(name="charges", expr="fetch(E_QUERY_CHARGE)")],
+            return_expr="trans_list(charges, [amountText, it.CHARGE_AMT.long2str()]).first().amountText",
+        ),
+        context,
+        registry,
+    )
+
+    assert result.expression == "def charges: fetch(E_QUERY_CHARGE);\ntrans_list(charges, [amountText, it.CHARGE_AMT.long2str()]).first().amountText"
+    assert result.return_type.model_dump() == {
+        "is_list": False,
+        "data_type": "basic",
+        "data_type_name": "String",
+    }
+
+
 def test_ast_validation_failure_returns_structured_error(monkeypatch):
     context = TypedExpressionContext(root_values=[TypedRootValue(expr="$ctx$.name", source_type="context", return_type="basic.String")])
     def fail_validation(*_args, **_kwargs): raise ValueError("invalid ast")

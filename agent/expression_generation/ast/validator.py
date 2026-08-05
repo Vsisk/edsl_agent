@@ -51,6 +51,7 @@ class AstValidationResult(BaseModel):
 class _ValidationState:
     context: AstValidationContext | None
     variable_types: dict[str, TypeRef] = field(default_factory=dict)
+    dynamic_fields: dict[tuple[str, str], TypeRef] = field(default_factory=dict)
 
 
 def validate_ast(program: ProgramNode, validation_context: AstValidationContext | None = None) -> None:
@@ -130,6 +131,7 @@ def _validate_node(node, state: _ValidationState | None = None) -> TypeRef | Non
                 lambda_state = _ValidationState(
                     context=state.context,
                     variable_types={**state.variable_types, "it": receiver_type.element_type},
+                    dynamic_fields=state.dynamic_fields,
                 )
             _validate_node(node.lambda_expr, lambda_state)
             return _resolve_method_type(receiver_type, f"{node.name}{{expr}}", [], state)
@@ -156,6 +158,12 @@ def _validate_node(node, state: _ValidationState | None = None) -> TypeRef | Non
             raise ValueError("call name must not be empty")
         if node.name == "exists" and len(node.args) != 1:
             raise ValueError("exists call must contain exactly one argument")
+        if node.name == "merge_list":
+            return _infer_merge_list_call_type(node, state)
+        if node.name == "trans_list":
+            return _infer_trans_list_call_type(node, state)
+        if node.name == "__trans_mapping":
+            return None
         arg_types = [_validate_node(arg, state) for arg in node.args]
         if node.name == "if":
             return _infer_if_call_type(node, arg_types)
@@ -232,6 +240,55 @@ def _infer_if_call_type(node: CallNode, arg_types: list[TypeRef | None]) -> Type
     return then_type
 
 
+def _infer_merge_list_call_type(node: CallNode, state: _ValidationState) -> TypeRef | None:
+    if len(node.args) != 2:
+        raise ValueError("merge_list call must contain exactly two arguments")
+    left_type = _validate_node(node.args[0], state)
+    right_type = _validate_node(node.args[1], state)
+    if left_type is None or right_type is None:
+        return None
+    if left_type.kind != "list" or right_type.kind != "list" or left_type != right_type:
+        raise ValueError(f"merge_list arguments must be same list type: {left_type} != {right_type}")
+    return left_type
+
+
+def _infer_trans_list_call_type(node: CallNode, state: _ValidationState) -> TypeRef | None:
+    if len(node.args) < 2:
+        raise ValueError("trans_list call must contain source list and mappings")
+    source_type = _validate_node(node.args[0], state)
+    if source_type is None:
+        return None
+    if source_type.kind != "list" or source_type.element_type is None:
+        raise ValueError("trans_list first argument must be list")
+
+    item_state = _ValidationState(
+        context=state.context,
+        variable_types={**state.variable_types, "it": source_type.element_type},
+        dynamic_fields=state.dynamic_fields,
+    )
+    fields: dict[str, TypeRef] = {}
+    for mapping in node.args[1:]:
+        name, value = _trans_mapping_parts(mapping)
+        value_type = _validate_node(value, item_state)
+        if value_type is None:
+            return None
+        fields[name] = value_type
+
+    owner_name = "trans_list:" + ",".join(fields)
+    for field_name, field_type in fields.items():
+        state.dynamic_fields[(owner_name, field_name)] = field_type
+    return TypeRef(kind="list", element_type=TypeRef(kind="logic", name=owner_name))
+
+
+def _trans_mapping_parts(node) -> tuple[str, Any]:
+    if not isinstance(node, CallNode) or node.name != "__trans_mapping" or len(node.args) != 2:
+        raise ValueError("trans_list mapping must be [key, expression]")
+    key_node = node.args[0]
+    if not isinstance(key_node, LiteralNode) or not isinstance(key_node.value, str) or not key_node.value:
+        raise ValueError("trans_list mapping key must be non-empty")
+    return key_node.value, node.args[1]
+
+
 def _infer_context_path_type(path: str, state: _ValidationState) -> TypeRef | None:
     if not _is_registry_context_path(path) or state.context is None:
         return None
@@ -274,7 +331,9 @@ def _resolve_field_type(
         raise ValueError(f"field access on list requires element method before field: {field_name}")
     if owner_type.kind in {"basic", "key"}:
         raise ValueError(f"field access on basic type {owner_type.kind}.{owner_type.name}: {field_name}")
-    field_type = state.context.type_registry.resolve_field(owner_type, field_name)
+    field_type = state.dynamic_fields.get((owner_type.name or "", field_name))
+    if field_type is None:
+        field_type = state.context.type_registry.resolve_field(owner_type, field_name)
     if field_type is None:
         raise ValueError(f"field not found on {owner_type.kind}.{owner_type.name}: {field_name}")
     return field_type

@@ -62,6 +62,9 @@ class EDSLExpressionParser:
         native_call = self._parse_native_call(expr)
         if native_call is not None:
             return native_call
+        builtin_call = self._parse_builtin_call(expr)
+        if builtin_call is not None:
+            return builtin_call
         fetch = re.match(r"^(fetch_one|fetch)\((.*)\)$", expr)
         if fetch:
             args = split_top_level_commas(fetch.group(2))
@@ -76,6 +79,45 @@ class EDSLExpressionParser:
                 params.append({"name": pair_args[0], "value": self.parse_expression(pair_args[1])})
             return {"type": fetch.group(1), "name": args[0], "params": params}
         return self._parse_chain(expr)
+
+    def _parse_builtin_call(self, expr: str) -> dict | None:
+        name = next((item for item in ("merge_list", "trans_list") if expr.startswith(item + "(")), None)
+        if name is None:
+            return None
+        open_paren = len(name)
+        close_paren = self._find_matching_paren(expr, open_paren)
+        if close_paren is None:
+            raise ValueError(f"unclosed builtin function call: {name}")
+        raw_args = split_top_level_commas(expr[open_paren + 1:close_paren])
+        current = {
+            "type": "call",
+            "name": name,
+            "args": [self._parse_trans_mapping(arg) if name == "trans_list" and index > 0 else self.parse_expression(arg) for index, arg in enumerate(raw_args)],
+        }
+        suffix = expr[close_paren + 1:].strip()
+        if not suffix:
+            return current
+        if not suffix.startswith("."):
+            raise ValueError(f"invalid builtin function call suffix: {suffix}")
+        tokens = MethodChainParser().parse("root" + suffix)[1:]
+        return self._append_chain(current, tokens)
+
+    def _parse_trans_mapping(self, expr: str) -> dict:
+        text = expr.strip()
+        if not (text.startswith("[") and text.endswith("]")):
+            raise ValueError(f"invalid trans_list mapping: {expr}")
+        parts = split_top_level_commas(text[1:-1])
+        if len(parts) != 2:
+            raise ValueError(f"invalid trans_list mapping: {expr}")
+        key = parts[0].strip().strip("\"'")
+        return {
+            "type": "call",
+            "name": "__trans_mapping",
+            "args": [
+                {"type": "literal", "value": key},
+                self.parse_expression(parts[1]),
+            ],
+        }
 
     def _parse_chain(self, expr: str) -> dict:
         root_expr = next((root for root in self.roots if expr == root or expr.startswith(root + ".")), None)

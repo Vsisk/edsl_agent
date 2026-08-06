@@ -49,10 +49,9 @@ def test_loader_extracts_only_selection_profile_facts():
     }
 
 
-def test_loader_marks_full_scan_as_not_optimized():
-    profile = NamingSqlProfileLoader().load_bo(
+def test_loader_excludes_full_scan_where_one_equals_one_profile():
+    profiles = NamingSqlProfileLoader().load_bo(
         _bo("SELECT ORDER_ID FROM ORDERS WHERE 1=1")
-    )[0]
+    )
 
-    assert profile.where_conditions == []
-    assert profile.performance_optimized is False
+    assert profiles == []

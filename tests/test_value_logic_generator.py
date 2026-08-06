@@ -16,7 +16,8 @@ from agent.spec_orchestration.models import (
     ValueGoal,
 )
 from agent.value_logic_generator import ValueLogicGenerator, requires_naming_sql
-from tests.test_environment import FakeResourceFilter, sample_edsl_tree_payload
+from tests.test_environment import FakeResourceFilter, StaticResourceLoader, sample_edsl_tree_payload
+from tests.test_resource_loader import sample_bo_payload
 
 
 class Targets:
@@ -43,6 +44,11 @@ class FirstProfileSelector:
     def select(self, **request):
         self.calls.append(request)
         return request["profiles"][:1]
+
+
+class SqlResourceLoader(StaticResourceLoader):
+    def __init__(self):
+        super().__init__({"bo": sample_bo_payload()})
 
 
 class Route:
@@ -160,15 +166,11 @@ def test_sql_branch_selects_bo_then_namingsql_and_returns_sql_result():
             {
                 "param_name": "END_DATE",
                 "param_value": "2026-08-04",
-            },
-            {
-                "param_name": "HOT_SEQ",
-                "param_value": 1,
             }
         ]
 
     gen = ValueLogicGenerator(
-        resource_loader=ResourceLoader(),
+        resource_loader=SqlResourceLoader(),
         llm_planner=planner,
         naming_sql_selector_factory=lambda loaded: selector,
         resource_filter_target_generator=Targets(),
@@ -191,7 +193,6 @@ def test_sql_branch_selects_bo_then_namingsql_and_returns_sql_result():
     assert result.source.sql_name == "BB_BAK_TRANS_queryDataLoadData"
     assert result.source.sql_params == [
         {"param_name": "END_DATE", "param_value": "2026-08-04"},
-        {"param_name": "HOT_SEQ", "param_value": 1},
     ]
     assert result.return_type.is_list is True
     assert result.return_type.data_type_name == "BB_BAK_TRANS"
@@ -254,7 +255,7 @@ def test_sql_branch_uses_empty_string_defaults_when_param_binding_is_incomplete(
     selector = FirstProfileSelector()
 
     gen = ValueLogicGenerator(
-        resource_loader=ResourceLoader(),
+        resource_loader=SqlResourceLoader(),
         llm_planner=planner,
         naming_sql_selector_factory=lambda loaded: selector,
         resource_filter_target_generator=Targets(),
@@ -273,7 +274,6 @@ def test_sql_branch_uses_empty_string_defaults_when_param_binding_is_incomplete(
     assert result.logic_type == "sql"
     assert result.source.sql_params == [
         {"param_name": "END_DATE", "param_value": ""},
-        {"param_name": "HOT_SEQ", "param_value": ""},
     ]
     assert not planner.calls
 

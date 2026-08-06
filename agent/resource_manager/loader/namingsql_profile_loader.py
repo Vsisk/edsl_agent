@@ -38,6 +38,8 @@ class NamingSqlProfileLoader:
         profiles = []
         for definition in bo.naming_sql_list:
             command = definition.sql_command or ""
+            if _is_full_scan_where_one_equals_one(command):
+                continue
             conditions = _where_conditions(command)
             profiles.append(
                 NamingSqlProfile(
@@ -80,6 +82,18 @@ def _where_conditions(sql: str) -> list[str]:
         for item in re.split(r"\s+\b(?:and|or)\b\s+", match.group(1), flags=re.IGNORECASE)
     ]
     return [item for item in conditions if item and not re.fullmatch(r"1\s*=\s*1", item)]
+
+
+def _is_full_scan_where_one_equals_one(sql: str) -> bool:
+    match = re.search(
+        r"\bwhere\b(.*?)(?:\bgroup\s+by\b|\border\s+by\b|\bhaving\b|\blimit\b|$)",
+        sql,
+        re.IGNORECASE | re.DOTALL,
+    )
+    if not match:
+        return False
+    condition_text = " ".join(match.group(1).strip().split())
+    return bool(re.fullmatch(r"1\s*=\s*1", condition_text))
 
 
 def _uses_key_equality(conditions: list[str], key_fields: set[str]) -> bool:

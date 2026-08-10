@@ -23,6 +23,7 @@ from agent.planner.llm_planner import (
     MAX_RESOURCES_JSON_CHARS,
     LLMPlanner,
     _summarize_filtered_environment_json,
+    _summarize_typed_context_json,
 )
 from agent.planner.models import Plan, ReturnExprPlanNode
 from agent.context_manager.models import ContextEvidenceItem, NamingSqlCandidate
@@ -53,6 +54,24 @@ class Resource:
 
 
 class LLMPlannerTest(unittest.TestCase):
+    def test_typed_context_summary_does_not_truncate_items_or_text(self):
+        long_expr = "$ctx$." + ("segment" * 100)
+        context = TypedExpressionContext(
+            root_values=[
+                TypedRootValue(
+                    expr=long_expr if index == 119 else f"$ctx$.value{index}",
+                    source_type="context",
+                    return_type="basic.String",
+                )
+                for index in range(120)
+            ]
+        )
+
+        rendered = json.loads(_summarize_typed_context_json(context))
+
+        self.assertEqual(len(rendered["Root Values"]), 120)
+        self.assertEqual(rendered["Root Values"][-1]["expr"], long_expr)
+
     def setUp(self):
         self.original_prompts = prompt_manager._prompts
         prompt_manager._prompts = {
@@ -141,7 +160,7 @@ class LLMPlannerTest(unittest.TestCase):
                     ],
                 )
             ],
-            # Simulate max_items retaining fields but trimming the catalog.
+            # Simulate a caller supplying fields without a prebuilt catalog.
             method_catalog=[],
             expression_patterns=[
                 TypedExpressionPattern(
@@ -251,37 +270,6 @@ class LLMPlannerTest(unittest.TestCase):
         client = FakeClient(['{"nodes":[{"type":"return","value":{"type":"literal","value":null}}]}'])
         LLMPlanner(client=client).plan(node_info=_node_info(), user_query="x", filtered_env=FilteredEnvironment())
         self.assertNotIn("naming_sql_selection", client.calls[0]["prompt"])
-
-    @unittest.skip("obsolete selector evidence contract removed")
-    def test_selection_summary_includes_safe_bounded_decision_evidence_only(self):
-        selection = _selection()
-        selection.evidence_trace = [ContextEvidenceItem(source="resolver\nsource", action="rerank",
-            asset_id="SECRET-INTERNAL-ASSET-ID", evidence="chosen because semantic match " + "x" * 1000,
-            payload={"private": "SECRET-PAYLOAD"})]
-        rendered = _summarize_filtered_environment_json(FilteredEnvironment(naming_sql_selection=selection))
-        decoded = json.loads(rendered)["naming_sql_selection"]["evidence_trace"][0]
-        self.assertEqual(set(decoded), {"source", "action", "evidence"})
-        self.assertEqual(decoded["source"], "resolver source")
-        self.assertEqual(decoded["action"], "rerank")
-        self.assertLessEqual(len(decoded["evidence"]), 512)
-        self.assertNotIn("SECRET-INTERNAL-ASSET-ID", rendered)
-        self.assertNotIn("SECRET-PAYLOAD", rendered)
-
-    @unittest.skip("obsolete selector response budget contract removed")
-    def test_oversized_authoritative_selection_fails_before_llm(self):
-        cases = []
-        huge_sql = _selection()
-        huge_sql.candidates[0].naming_sql_name = "S" * (2 * 1024 * 1024)
-        cases.append(huge_sql)
-        huge_evidence = _selection()
-        huge_evidence.candidates[0].evidence = ["R" * (2 * 1024 * 1024)]
-        cases.append(huge_evidence)
-        for result in cases:
-            with self.subTest(candidate=result.candidates[0].naming_sql_name):
-                client = FakeClient(['{"nodes":[{"type":"return","value":{"type":"literal","value":null}}]}'])
-                with self.assertRaisesRegex(ValueError, "NAMING_SQL_SELECTION_TOO_LARGE"):
-                    LLMPlanner(client=client).plan(node_info=_node_info(), user_query="x", filtered_env=FilteredEnvironment(naming_sql_selection=result))
-                self.assertEqual(client.calls, [])
 
     def test_resources_json_budget_is_valid_deterministic_and_preserves_selection(self):
         param = Resource(param_name="p", data_type_name="String")

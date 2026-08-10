@@ -6,7 +6,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, computed_field
 
-from agent.expression_generation.expression_syntax import MethodChainParser, split_top_level_commas
+from agent.expression_generation.expression_syntax import MethodChainParser, split_top_level_commas, strip_comments
 from agent.expression_generation.type_system import MethodRegistry, TypeRef, TypeRegistry
 from agent.expression_generation.typed_context import TypedExpressionContext
 
@@ -80,7 +80,7 @@ class ExpressionTypeResolver:
         }
 
     def resolve(self, expr: str, scope: TypeScope) -> TypeRef | None:
-        expr = expr.strip()
+        expr = strip_comments(expr).strip()
         literal = _literal_type(expr)
         if literal is not None:
             return literal

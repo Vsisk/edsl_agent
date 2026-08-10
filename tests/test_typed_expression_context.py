@@ -370,7 +370,7 @@ def test_builder_cuts_recursive_type_cycle_with_warning():
     assert result.warnings == ["recursive type cycle at $ctx$.node.child: logic.Node"]
 
 
-def test_builder_applies_global_item_budget_and_prioritizes_query_field():
+def test_builder_does_not_drop_context_items_when_max_items_is_small():
     registry = TypeRegistry()
     registry.register_type(
         TypeDef(
@@ -397,18 +397,14 @@ def test_builder_applies_global_item_budget_and_prioritizes_query_field():
         )
     )
 
-    item_count = (
-        len(result.root_values)
-        + sum(len(root.fields) for root in result.root_values)
-        + len(result.var_templates)
-        + sum(len(template.available_fields) for template in result.var_templates)
-        + len(result.method_catalog)
-        + len(result.expression_patterns)
-    )
-    assert item_count <= 2
     assert [field.access for field in result.root_values[0].fields] == [
-        "$ctx$.charge.CHARGE_AMT"
+        "$ctx$.charge.CHARGE_AMT",
+        "$ctx$.charge.OTHER",
     ]
+    assert {view.owner_type for view in result.method_catalog} == {
+        "basic.String",
+        "basic.long",
+    }
 
 
 def test_builder_expands_map_get_value_fields():
@@ -444,7 +440,7 @@ def test_builder_expands_map_get_value_fields():
     )
 
 
-def test_builder_prioritizes_bo_field_annotation_match_under_budget():
+def test_builder_prioritizes_bo_field_annotation_without_dropping_other_fields():
     bo = BoRegistry(
         resource_id="bo.annotation",
         bo_name="ANNOTATED_BO",
@@ -483,5 +479,6 @@ def test_builder_prioritizes_bo_field_annotation_match_under_budget():
     result = TypedExpressionContextBuilder().build(request)
 
     assert [field.access for field in result.root_values[0].fields] == [
-        "$ctx$.annotated.first().Z_FIELD"
+        "$ctx$.annotated.first().Z_FIELD",
+        "$ctx$.annotated.first().A_FIELD",
     ]

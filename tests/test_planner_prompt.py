@@ -4,6 +4,20 @@ from agent.llm.prompt_manager import prompt_manager
 
 
 class PlannerPromptTest(unittest.TestCase):
+    def test_simple_expression_planner_requires_supported_comments(self):
+        prompt = prompt_manager.render(
+            "simple_expression_planner",
+            user_requirement="calculate value",
+            node_info_json="{}",
+            resources_json="{}",
+            typed_context_json="{}",
+            expression_scope_json="{}",
+            expression_skills_json="{}",
+        )
+        self.assertIn("//", prompt)
+        self.assertIn("/* */", prompt)
+        self.assertIn("comment", prompt.lower())
+
     def test_query_spec_clarity_prompt_requires_a_strict_boolean_decision(self):
         rendered = prompt_manager.render(
             "query_spec_clarity",

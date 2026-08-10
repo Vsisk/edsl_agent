@@ -28,7 +28,6 @@ MAX_SELECTION_EVIDENCE_ITEMS = 20
 MAX_SELECTION_EVIDENCE_SOURCE = 128
 MAX_SELECTION_EVIDENCE_ACTION = 128
 MAX_SELECTION_EVIDENCE_TEXT = 512
-MAX_TYPED_CONTEXT_JSON_CHARS = 60_000
 
 
 class LLMPlanner:
@@ -202,13 +201,13 @@ def _summarize_typed_context_json(
             for template in context.var_templates
         ],
         "Available Methods by Type": _prompt_method_catalog(context),
-        "Expression Patterns": context.expression_patterns,
-        "Warnings": context.warnings,
+        "Expression Patterns": [
+            pattern.model_dump(mode="json")
+            for pattern in context.expression_patterns
+        ],
+        "Warnings": list(context.warnings),
     }
-    rendered = _dump_json(_bounded_typed_value(value))
-    if len(rendered) > MAX_TYPED_CONTEXT_JSON_CHARS:
-        raise ValueError("TYPED_EXPRESSION_CONTEXT_TOO_LARGE")
-    return rendered
+    return _dump_json(value)
 
 
 def _prompt_method_catalog(context: TypedExpressionContext) -> list[dict[str, Any]]:

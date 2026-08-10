@@ -163,3 +163,31 @@ def test_parses_registered_iter_field_chain():
     assert isinstance(value.receiver, ContextPathExprPlanNode)
     assert value.receiver.path == "$iter$"
     assert value.field == "ID"
+
+
+@pytest.mark.parametrize("commented", [
+    "// source value\n$ctx$.name",
+    "$ctx$.name /* inline note */",
+    "/* multi\nline note */ $ctx$.name",
+    "$ctx$.name // trailing note",
+])
+def test_ignores_line_and_block_comments_outside_string_literals(commented):
+    context = TypedExpressionContext(root_values=[
+        TypedRootValue(expr="$ctx$.name", source_type="context", return_type="basic.String"),
+    ])
+    parsed = EDSLExpressionParser(context).parse_plan(SimpleExpressionPlan(return_expr=commented))
+    assert generate_expression(build_ast(parsed)) == "$ctx$.name"
+
+
+def test_preserves_comment_markers_inside_string_literals():
+    parsed = EDSLExpressionParser(TypedExpressionContext()).parse_plan(
+        SimpleExpressionPlan(return_expr='"http://example/*not a comment*/"')
+    )
+    assert generate_expression(build_ast(parsed)) == '"http://example/*not a comment*/"'
+
+
+def test_rejects_unclosed_block_comment():
+    with pytest.raises(ValueError, match="unclosed block comment"):
+        EDSLExpressionParser(TypedExpressionContext()).parse_plan(
+            SimpleExpressionPlan(return_expr="$iter$ /* missing end")
+        )

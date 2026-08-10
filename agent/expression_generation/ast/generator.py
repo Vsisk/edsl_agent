@@ -22,8 +22,13 @@ from agent.expression_generation.ast.nodes import (
 
 
 def generate_expression(node: ASTNode) -> str:
+    """Generate canonical EDSL text after comments have been handled by parsing.
+
+    Comments are intentionally not represented as executable AST nodes, so generated
+    output cannot accidentally turn explanatory text into part of an expression.
+    """
     if isinstance(node, ProgramNode):
-        return "\n".join(generate_expression(item) for item in node.body)
+        return _join_program_lines(node)
     if isinstance(node, ContextPathNode):
         return node.path
     if isinstance(node, LiteralNode):
@@ -62,6 +67,10 @@ def generate_expression(node: ASTNode) -> str:
     if isinstance(node, ReturnNode):
         return generate_expression(node.value)
     raise TypeError(f"Unsupported AST node: {type(node).__name__}")
+
+
+def _join_program_lines(node: ProgramNode) -> str:
+    return "\n".join(generate_expression(item) for item in node.body)
 
 
 def _generate_literal(node: LiteralNode) -> str:

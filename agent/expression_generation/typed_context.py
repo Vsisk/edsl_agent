@@ -68,7 +68,11 @@ class TypedExpressionContextBuildInput(BaseModel):
     context_pack: SkipValidation[ContextPack]
     type_registry: TypeRegistry
     method_registry: MethodRegistry
-    max_items: int = Field(default=80, ge=1)
+    max_items: int = Field(
+        default=80,
+        ge=1,
+        description="Deprecated compatibility field; typed context is no longer truncated.",
+    )
 
 
 class TypedExpressionContextBuilder:
@@ -99,7 +103,7 @@ class TypedExpressionContextBuilder:
             expression_patterns=self._build_patterns(var_templates),
             warnings=self._warnings,
         )
-        return self._apply_item_budget(context)
+        return context
 
     def _register_loaded_type_defs(self) -> None:
         for type_def in getattr(self._input.loaded_resource, "type_defs", []) or []:
@@ -296,59 +300,6 @@ class TypedExpressionContextBuilder:
             ):
                 return candidate
         return None
-
-    def _apply_item_budget(self, context: TypedExpressionContext) -> TypedExpressionContext:
-        remaining = self._input.max_items
-        roots: list[TypedRootValue] = []
-        for root in context.root_values:
-            if remaining <= 0:
-                break
-            remaining -= 1
-            field_count = min(len(root.fields), remaining)
-            roots.append(root.model_copy(update={"fields": root.fields[:field_count]}))
-            remaining -= field_count
-
-        templates: list[TypedVarTemplate] = []
-        for template in context.var_templates:
-            if remaining <= 0:
-                break
-            remaining -= 1
-            field_count = min(len(template.available_fields), remaining)
-            templates.append(
-                template.model_copy(
-                    update={"available_fields": template.available_fields[:field_count]}
-                )
-            )
-            remaining -= field_count
-
-        emitted_types = {
-            item.return_type
-            for root in roots
-            for item in [root, *root.fields]
-        }
-        emitted_types.update(
-            item.return_type
-            for template in templates
-            for item in [template, *template.available_fields]
-        )
-        catalog: list[TypedMethodView] = []
-        for method_view in context.method_catalog:
-            if remaining <= 0:
-                break
-            if method_view.owner_type not in emitted_types:
-                continue
-            catalog.append(method_view)
-            remaining -= 1
-
-        patterns = context.expression_patterns[:remaining]
-        return TypedExpressionContext(
-            root_values=roots,
-            var_templates=templates,
-            method_catalog=catalog,
-            expression_patterns=patterns,
-            warnings=context.warnings,
-        )
-
 
 def render_type(type_ref: TypeRef) -> str:
     if type_ref.kind in {"basic", "key", "bo", "logic", "extattr"}:

@@ -4,7 +4,7 @@ import ast
 import json
 import re
 
-from agent.expression_generation.expression_syntax import MethodChainParser, split_top_level_commas
+from agent.expression_generation.expression_syntax import MethodChainParser, split_top_level_commas, strip_comments
 from agent.expression_generation.expression_type_validation import SimpleExpressionPlan, _find_binary
 from agent.expression_generation.typed_context import TypedExpressionContext
 from agent.planner.models import Plan
@@ -34,7 +34,7 @@ class EDSLExpressionParser:
         return Plan.model_validate({"nodes": nodes})
 
     def parse_expression(self, expr: str) -> dict:
-        expr = expr.strip()
+        expr = strip_comments(expr).strip()
         if len(expr) >= 2 and expr[0] == expr[-1] and expr[0] in {'"', "'"}:
             try:
                 value = json.loads(expr) if expr[0] == '"' else ast.literal_eval(expr)

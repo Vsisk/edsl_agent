@@ -197,6 +197,14 @@ def test_simple_plan_preserves_comments_as_comment_nodes():
     assert generate_expression(build_ast(parsed)) == "/* select customer name */\n$ctx$.name // direct context"
 
 
+def test_simple_plan_keeps_code_after_leading_block_comment():
+    parsed = EDSLExpressionParser(TypedExpressionContext()).parse_plan(
+        SimpleExpressionPlan(return_expr="/* note */ \n code")
+    )
+
+    assert generate_expression(build_ast(parsed)) == "/* note */\ncode"
+
+
 def test_simple_plan_preserves_comments_between_definitions():
     parsed = EDSLExpressionParser(TypedExpressionContext()).parse_plan(
         SimpleExpressionPlan(

@@ -96,6 +96,8 @@ def _join_program_lines(node: ProgramNode) -> str:
                 rendered_lines.append(_generate_block_comment(item.text))
             continue
         rendered = generate_expression(item)
+        if not isinstance(item, ReturnNode):
+            rendered = _ensure_semicolon(rendered)
         if pending_inline_comments:
             rendered = f"{rendered} // {'; '.join(pending_inline_comments)}"
             pending_inline_comments = []
@@ -111,6 +113,13 @@ def _generate_block_comment(text: str) -> str:
 
 def _sanitize_comment_text(text: str) -> str:
     return str(text or "").replace("/*", "").replace("*/", "").replace("//", "").strip()
+
+
+def _ensure_semicolon(line: str) -> str:
+    stripped = line.rstrip()
+    if stripped.endswith(";"):
+        return line
+    return f"{stripped};"
 
 
 def _generate_literal(node: LiteralNode) -> str:

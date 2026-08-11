@@ -43,7 +43,7 @@ class ExpressionGeneratorTest(unittest.TestCase):
 
         self.assertEqual(
             generate_expression(ast),
-            "/* load source */\ndef value = fetch_one(E_QUERY)\nvalue // return selected field",
+            "/* load source */\ndef value = fetch_one(E_QUERY);\nvalue // return selected field",
         )
 
     def test_generate_program_renders_multiline_comment_node_as_block(self):
@@ -94,9 +94,9 @@ class ExpressionGeneratorTest(unittest.TestCase):
         self.assertEqual(
             generate_expression(ast),
             "/* load primary record */\n"
-            "def primary = fetch_one(E_QUERY_PRIMARY)\n"
+            "def primary = fetch_one(E_QUERY_PRIMARY);\n"
             "/* load backup record */\n"
-            "def backup = fetch_one(E_QUERY_BACKUP)\n"
+            "def backup = fetch_one(E_QUERY_BACKUP);\n"
             "if($ctx$.usePrimary, primary, backup) // prefer primary",
         )
 
@@ -133,7 +133,7 @@ class ExpressionGeneratorTest(unittest.TestCase):
 
         self.assertEqual(
             generate_expression(ast),
-            "def oid = fetch_one(E_RT_QUERY_BY_OFFERINGID, pair(it.OFFERING_ID, $ctx$.offeringId))\noid",
+            "def oid = fetch_one(E_RT_QUERY_BY_OFFERINGID, pair(it.OFFERING_ID, $ctx$.offeringId));\noid",
         )
 
     def test_generate_select_compare_and_logical_with_stable_parentheses(self):

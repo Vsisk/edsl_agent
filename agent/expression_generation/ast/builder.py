@@ -5,6 +5,7 @@ from agent.expression_generation.expression_type_validation import SimpleExpress
 
 from agent.expression_generation.ast.nodes import (
     CallNode,
+    CommentNode,
     CompareNode,
     ContextPathNode,
     DefNode,
@@ -25,6 +26,7 @@ from agent.expression_generation.ast.nodes import (
 from agent.planner.models import (
     CompareExprPlanNode,
     CallExprPlanNode,
+    CommentExprPlanNode,
     ContextPathExprPlanNode,
     DefExprPlanNode,
     ExprPlanNode,
@@ -74,6 +76,8 @@ def build_simple_ast(plan: SimpleExpressionPlan) -> SimpleExpressionProgramAst:
 
 
 def _build_node(plan_node: ExprPlanNode) -> ExprNode:
+    if isinstance(plan_node, CommentExprPlanNode):
+        return CommentNode(type="comment", placement=plan_node.placement, text=plan_node.text)
     if isinstance(plan_node, ContextPathExprPlanNode):
         return ContextPathNode(type="context_path", path=plan_node.path)
     if isinstance(plan_node, LiteralExprPlanNode):

@@ -199,6 +199,12 @@ class ReturnNode(ASTNode):
     value: ExprNode
 
 
+class CommentNode(ASTNode):
+    type: Literal["comment"]
+    placement: Literal["inline", "single"]
+    text: str
+
+
 ExprNode: TypeAlias = Annotated[
     ContextPathNode
     | LiteralNode
@@ -213,7 +219,8 @@ ExprNode: TypeAlias = Annotated[
     | SelectOneNode
     | FetchNode
     | FetchOneNode
-    | ReturnNode,
+    | ReturnNode
+    | CommentNode,
     Field(discriminator="type"),
 ]
 
@@ -237,4 +244,5 @@ SelectNode.model_rebuild(_types_namespace=_AST_TYPES)
 SelectOneNode.model_rebuild(_types_namespace=_AST_TYPES)
 FunctionParamNode.model_rebuild(_types_namespace=_AST_TYPES)
 ReturnNode.model_rebuild(_types_namespace=_AST_TYPES)
+CommentNode.model_rebuild(_types_namespace=_AST_TYPES)
 ProgramNode.model_rebuild(_types_namespace=_AST_TYPES)

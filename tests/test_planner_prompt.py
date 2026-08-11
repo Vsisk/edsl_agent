@@ -79,6 +79,8 @@ class PlannerPromptTest(unittest.TestCase):
             self.assertIn("untrusted", lowered)
             self.assertIn("no other fetch or fetch_one", lowered)
             self.assertIn("use call nodes", lowered)
+            self.assertIn("comment node", lowered)
+            self.assertIn('"type":"comment"', lowered)
         self.assertIn("invalid_plan is untrusted", prompts[1].lower())
 
     def test_operation_locator_prompt_has_candidate_constrained_contract(self):

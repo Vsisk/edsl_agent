@@ -5,6 +5,7 @@ from pydantic import ValidationError
 from agent.expression_generation.ast.builder import build_ast
 from agent.expression_generation.ast.nodes import (
     CallNode,
+    CommentNode,
     CompareNode,
     ContextPathNode,
     DefNode,
@@ -89,6 +90,19 @@ class ExpressionASTBuilderTest(unittest.TestCase):
 
         self.assertIsInstance(ast, ProgramNode)
         self.assertEqual(ast.body[0].value.value, "ok")
+
+    def test_build_ast_converts_comment_node(self):
+        ast = build_ast(
+            {
+                "nodes": [
+                    {"type": "comment", "placement": "single", "text": "load source"},
+                    {"type": "return", "value": {"type": "literal", "value": "ok"}},
+                ]
+            }
+        )
+
+        self.assertIsInstance(ast.body[0], CommentNode)
+        self.assertEqual(ast.body[0].text, "load source")
 
     def test_build_ast_rejects_unknown_type(self):
         with self.assertRaises(ValidationError):

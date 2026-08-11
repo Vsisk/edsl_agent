@@ -102,6 +102,21 @@ class ExpressionValidatorTest(unittest.TestCase):
 
         self.assertIsNone(validate_ast(ast))
 
+    def test_validate_ignores_comment_nodes(self):
+        ast = build_ast(
+            {
+                "nodes": [
+                    {"type": "comment", "placement": "single", "text": "load source"},
+                    {"type": "return", "value": {"type": "literal", "value": "ok"}},
+                ]
+            }
+        )
+
+        result = validate_ast_with_result(ast)
+
+        self.assertTrue(result.is_valid)
+        self.assertEqual(result.return_type, TypeRef(kind="basic", name="String"))
+
     def test_select_filter_must_be_compare_or_logical(self):
         ast = ProgramNode(
             type="program",

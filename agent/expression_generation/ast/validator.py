@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 
 from agent.expression_generation.ast.nodes import (
     CallNode,
+    CommentNode,
     CompareNode,
     ContextPathNode,
     DefNode,
@@ -98,6 +99,8 @@ def infer_ast_return_type(
 
 def _validate_node(node, state: _ValidationState | None = None) -> TypeRef | None:
     state = state or _ValidationState(context=None)
+    if isinstance(node, CommentNode):
+        return None
     if isinstance(node, ContextPathNode):
         if not node.path.strip():
             raise ValueError("context path must not be empty")

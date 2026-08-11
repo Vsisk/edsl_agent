@@ -3,6 +3,7 @@ import json
 from agent.expression_generation.ast.nodes import ASTNode
 from agent.expression_generation.ast.nodes import (
     CallNode,
+    CommentNode,
     CompareNode,
     ContextPathNode,
     DefNode,
@@ -21,6 +22,19 @@ from agent.expression_generation.ast.nodes import (
 )
 
 
+def inject_expression_comment(expression: str, comment: str, *, style: str = "line") -> str:
+    """Prefix generated expression text with an EDSL line or block comment."""
+    if style == "line":
+        rendered_comment = "\n".join(f"// {line}" for line in comment.splitlines() or [""])
+    elif style == "block":
+        if "*/" in comment:
+            raise ValueError("block comment must not contain */")
+        rendered_comment = f"/* {comment} */"
+    else:
+        raise ValueError("comment style must be 'line' or 'block'")
+    return f"{rendered_comment}\n{expression}"
+
+
 def generate_expression(node: ASTNode) -> str:
     """Generate canonical EDSL text after comments have been handled by parsing.
 
@@ -29,6 +43,8 @@ def generate_expression(node: ASTNode) -> str:
     """
     if isinstance(node, ProgramNode):
         return _join_program_lines(node)
+    if isinstance(node, CommentNode):
+        return _generate_block_comment(node.text)
     if isinstance(node, ContextPathNode):
         return node.path
     if isinstance(node, LiteralNode):
@@ -70,7 +86,31 @@ def generate_expression(node: ASTNode) -> str:
 
 
 def _join_program_lines(node: ProgramNode) -> str:
-    return "\n".join(generate_expression(item) for item in node.body)
+    rendered_lines: list[str] = []
+    pending_inline_comments: list[str] = []
+    for item in node.body:
+        if isinstance(item, CommentNode):
+            if item.placement == "inline":
+                pending_inline_comments.append(_sanitize_comment_text(item.text))
+            else:
+                rendered_lines.append(_generate_block_comment(item.text))
+            continue
+        rendered = generate_expression(item)
+        if pending_inline_comments:
+            rendered = f"{rendered} // {'; '.join(pending_inline_comments)}"
+            pending_inline_comments = []
+        rendered_lines.append(rendered)
+    for comment in pending_inline_comments:
+        rendered_lines.append(_generate_block_comment(comment))
+    return "\n".join(rendered_lines)
+
+
+def _generate_block_comment(text: str) -> str:
+    return f"/* {_sanitize_comment_text(text)} */"
+
+
+def _sanitize_comment_text(text: str) -> str:
+    return str(text or "").replace("/*", "").replace("*/", "").replace("//", "").strip()
 
 
 def _generate_literal(node: LiteralNode) -> str:

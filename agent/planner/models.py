@@ -103,6 +103,12 @@ class ReturnExprPlanNode(_ExprPlanBaseModel):
     value: ExprPlanNode
 
 
+class CommentExprPlanNode(_ExprPlanBaseModel):
+    type: Literal["comment"]
+    placement: Literal["inline", "single"]
+    text: str
+
+
 class Plan(_ExprPlanBaseModel):
     nodes: list[ExprPlanNode] = Field(min_length=1)
 
@@ -121,7 +127,8 @@ ExprPlanNode: TypeAlias = Annotated[
     | SelectOneExprPlanNode
     | FetchExprPlanNode
     | FetchOneExprPlanNode
-    | ReturnExprPlanNode,
+    | ReturnExprPlanNode
+    | CommentExprPlanNode,
     Field(discriminator="type"),
 ]
 

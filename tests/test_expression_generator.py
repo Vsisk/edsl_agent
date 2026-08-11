@@ -1,11 +1,63 @@
 import unittest
 
 from agent.expression_generation.ast.builder import build_ast
-from agent.expression_generation.ast.generator import generate_expression
+from agent.expression_generation.ast.generator import (
+    generate_expression,
+    inject_expression_comment,
+)
 from agent.expression_generation.ast.nodes import LiteralNode
 
 
 class ExpressionGeneratorTest(unittest.TestCase):
+    def test_inject_expression_comment_as_line_comment(self):
+        self.assertEqual(
+            inject_expression_comment("value.FIELD", "selected field"),
+            "// selected field\nvalue.FIELD",
+        )
+
+    def test_inject_expression_comment_as_block_comment(self):
+        self.assertEqual(
+            inject_expression_comment("value.FIELD", "selected\nfield", style="block"),
+            "/* selected\nfield */\nvalue.FIELD",
+        )
+
+    def test_inject_expression_comment_rejects_invalid_style(self):
+        with self.assertRaises(ValueError):
+            inject_expression_comment("value.FIELD", "note", style="python")
+
+    def test_generate_program_renders_comment_nodes(self):
+        ast = build_ast(
+            {
+                "nodes": [
+                    {"type": "comment", "placement": "single", "text": "load source"},
+                    {
+                        "type": "def",
+                        "name": "value",
+                        "value": {"type": "fetch_one", "name": "E_QUERY", "params": []},
+                    },
+                    {"type": "comment", "placement": "inline", "text": "return selected field"},
+                    {"type": "return", "value": {"type": "variable_ref", "name": "value"}},
+                ]
+            }
+        )
+
+        self.assertEqual(
+            generate_expression(ast),
+            "/* load source */\ndef value = fetch_one(E_QUERY)\nvalue // return selected field",
+        )
+
+    def test_generate_program_renders_multiline_comment_node_as_block(self):
+        ast = build_ast(
+            {
+                "nodes": [
+                    {"type": "comment", "placement": "single", "text": "load\nsource"},
+                    {"type": "return", "value": {"type": "literal", "value": "ok"}},
+                ]
+            }
+        )
+
+        self.assertEqual(generate_expression(ast), '/* load\nsource */\n"ok"')
+
     def test_generate_literals(self):
         self.assertEqual(generate_expression(LiteralNode(type="literal", value="abc")), '"abc"')
         self.assertEqual(generate_expression(LiteralNode(type="literal", value=123)), "123")

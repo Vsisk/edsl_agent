@@ -4,6 +4,7 @@ from pydantic import TypeAdapter, ValidationError
 
 from agent.planner.models import (
     CallExprPlanNode,
+    CommentExprPlanNode,
     CompareExprPlanNode,
     DefExprPlanNode,
     EXPR_PLAN_NODE_SCHEMA,
@@ -94,6 +95,17 @@ class ExprPlanNodeModelsTest(unittest.TestCase):
 
     def test_planner_models_export_schema_dict(self):
         self.assertEqual(EXPR_PLAN_NODE_SCHEMA, TypeAdapter(ExprPlanNode).json_schema())
+
+    def test_comment_node_accepts_inline_and_single_placements(self):
+        inline = TypeAdapter(ExprPlanNode).validate_python(
+            {"type": "comment", "placement": "inline", "text": "return field"}
+        )
+        single = TypeAdapter(ExprPlanNode).validate_python(
+            {"type": "comment", "placement": "single", "text": "load source"}
+        )
+
+        self.assertIsInstance(inline, CommentExprPlanNode)
+        self.assertIsInstance(single, CommentExprPlanNode)
 
     def test_call_expr_plan_node_supports_recursive_args(self):
         node = TypeAdapter(ExprPlanNode).validate_python(

@@ -4,6 +4,7 @@ from agent.expression_generation.ast.builder import build_ast
 from agent.expression_generation.ast.generator import (
     generate_expression,
     inject_expression_comment,
+    inject_expression_comments,
 )
 from agent.expression_generation.ast.nodes import LiteralNode
 
@@ -24,6 +25,20 @@ class ExpressionGeneratorTest(unittest.TestCase):
     def test_inject_expression_comment_rejects_invalid_style(self):
         with self.assertRaises(ValueError):
             inject_expression_comment("value.FIELD", "note", style="python")
+
+    def test_inject_expression_comments_adds_block_and_inline_comments(self):
+        expression = "def value = fetch_one(E_QUERY);\nvalue.FIELD"
+
+        self.assertEqual(
+            inject_expression_comments(
+                expression,
+                [
+                    {"line": 1, "placement": "single", "text": "load source"},
+                    {"line": 2, "placement": "inline", "text": "return field"},
+                ],
+            ),
+            "/* load source */\ndef value = fetch_one(E_QUERY);\nvalue.FIELD // return field",
+        )
 
     def test_generate_program_renders_comment_nodes(self):
         ast = build_ast(

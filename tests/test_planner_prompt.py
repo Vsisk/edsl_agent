@@ -18,6 +18,22 @@ class PlannerPromptTest(unittest.TestCase):
         self.assertIn("/* */", prompt)
         self.assertIn("comment", prompt.lower())
 
+    def test_expression_comment_generator_prompt_outputs_comment_plan(self):
+        prompt = prompt_manager.render(
+            "expression_comment_generator",
+            expression="$ctx$.name",
+            user_requirement="use name",
+            node_info_json="{}",
+            typed_context_json="{}",
+            context_pack_json="{}",
+        )
+
+        lowered = prompt.lower()
+        self.assertIn('"comments"', lowered)
+        self.assertIn("inline", lowered)
+        self.assertIn("single", lowered)
+        self.assertIn("do not rewrite", lowered)
+
     def test_query_spec_clarity_prompt_requires_a_strict_boolean_decision(self):
         rendered = prompt_manager.render(
             "query_spec_clarity",

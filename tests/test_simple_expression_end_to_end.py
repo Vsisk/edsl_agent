@@ -33,6 +33,15 @@ class Planner:
     def plan(self, **kwargs): return self.result
 
 
+class Commenter:
+    def __init__(self):
+        self.calls = []
+
+    def generate_comments(self, **kwargs):
+        self.calls.append(kwargs)
+        return [{"line": 1, "placement": "inline", "text": "generated comment"}]
+
+
 class IterLoader:
     def __init__(self, tree):
         self.tree = tree
@@ -89,6 +98,25 @@ def test_context_method_end_to_end_with_debug():
     assert result.debug_info["ast_validation_result"]["return_type"]["kind"] == "basic"
     assert result.debug_info["ast_validation_result"]["return_type"]["name"] == "String"
     assert result.debug_info["return_type"] == {"kind": "basic", "name": "String", "element_type": None, "key_type": None, "value_type": None, "nullable": True}
+
+
+def test_expression_commenter_runs_after_expression_generation():
+    context = TypedExpressionContext(root_values=[
+        TypedRootValue(expr="$ctx$.name", source_type="context", return_type="basic.String")
+    ])
+    commenter = Commenter()
+    generator = ValueLogicGenerator(
+        resource_loader=Loader(),
+        resource_filter_target_generator=Targets(),
+        llm_planner=Planner(SimpleExpressionPlan(return_expr="$ctx$.name")),
+        typed_expression_context_builder=Builder(context),
+        expression_comment_generator=commenter,
+    )
+
+    result = generator.generate(request())
+
+    assert result.expression == "$ctx$.name // generated comment"
+    assert commenter.calls[0]["expression"] == "$ctx$.name"
 
 
 def test_list_iterator_field_end_to_end_uses_typed_context_without_generated_spec_skill():

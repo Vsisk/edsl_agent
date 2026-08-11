@@ -1,4 +1,5 @@
 import json
+from typing import Any
 
 from agent.expression_generation.ast.nodes import ASTNode
 from agent.expression_generation.ast.nodes import (
@@ -33,6 +34,34 @@ def inject_expression_comment(expression: str, comment: str, *, style: str = "li
     else:
         raise ValueError("comment style must be 'line' or 'block'")
     return f"{rendered_comment}\n{expression}"
+
+
+def inject_expression_comments(expression: str, comments: list[dict[str, Any]]) -> str:
+    lines = str(expression or "").splitlines() or [""]
+    single_comments: dict[int, list[str]] = {}
+    inline_comments: dict[int, list[str]] = {}
+    for item in comments:
+        if not isinstance(item, dict):
+            continue
+        text = _sanitize_comment_text(str(item.get("text") or item.get("comment") or ""))
+        if not text:
+            continue
+        line_number = _normalize_line_number(item.get("line"), len(lines))
+        placement = str(item.get("placement") or "single").strip().lower()
+        if placement == "inline":
+            inline_comments.setdefault(line_number, []).append(text)
+        elif placement == "single":
+            single_comments.setdefault(line_number, []).append(text)
+
+    rendered_lines: list[str] = []
+    for index, line in enumerate(lines, start=1):
+        for comment in single_comments.get(index, []):
+            rendered_lines.append(_generate_block_comment(comment))
+        suffixes = inline_comments.get(index, [])
+        if suffixes:
+            line = f"{line} // {'; '.join(suffixes)}"
+        rendered_lines.append(line)
+    return "\n".join(rendered_lines)
 
 
 def generate_expression(node: ASTNode) -> str:
@@ -120,6 +149,14 @@ def _ensure_semicolon(line: str) -> str:
     if stripped.endswith(";"):
         return line
     return f"{stripped};"
+
+
+def _normalize_line_number(value: Any, line_count: int) -> int:
+    try:
+        line_number = int(value)
+    except (TypeError, ValueError):
+        line_number = 1
+    return min(max(line_number, 1), line_count)
 
 
 def _generate_literal(node: LiteralNode) -> str:

@@ -15,7 +15,7 @@ from agent.environment.environment import (
 )
 from agent.environment.resource_filter import LLMResourceFilter, ResourceFilterTargetGenerator
 from agent.expression_generation.ast.builder import build_ast
-from agent.expression_generation.ast.generator import generate_expression
+from agent.expression_generation.ast.generator import generate_expression, inject_expression_comments
 from agent.expression_generation.ast.validator import (
     AstValidationContext,
     validate_ast,
@@ -30,6 +30,11 @@ from agent.expression_generation.type_system import (
 from agent.expression_generation.typed_context import (
     TypedExpressionContextBuildInput,
     TypedExpressionContextBuilder,
+)
+from agent.expression_generation.expression_comment_generator import (
+    ExpressionCommentGenerator,
+    LLMExpressionCommentGenerator,
+    NoOpExpressionCommentGenerator,
 )
 from agent.expression_generation.expression_type_validation import SimpleExpressionPlan
 from agent.expression_generation.expression_spec import ExpressionSpec
@@ -112,6 +117,7 @@ class ValueLogicGenerator:
         sql_bo_selector: Callable[..., str | None] | None = None,
         sql_param_binder: Callable[..., list[dict[str, Any]] | None] | None = None,
         sql_table_query_counter: Callable[..., int] | None = None,
+        expression_comment_generator: ExpressionCommentGenerator | None = None,
     ):
         if (
             not isinstance(generation_max_attempts, int)
@@ -155,6 +161,13 @@ class ValueLogicGenerator:
         self.sql_bo_selector = sql_bo_selector or SqlBranchBoSelector()
         self.sql_param_binder = sql_param_binder or SqlParamBinder()
         self.sql_table_query_counter = sql_table_query_counter or SqlTableQueryCounter()
+        self.expression_comment_generator = (
+            expression_comment_generator
+            if expression_comment_generator is not None
+            else LLMExpressionCommentGenerator()
+            if llm_planner is None
+            else NoOpExpressionCommentGenerator()
+        )
 
     def generate(self, request: ValueLogicRequest) -> ValueLogicResult:
         target = None
@@ -511,6 +524,15 @@ class ValueLogicGenerator:
             ast = build_ast(plan)
             validate_ast(ast)
             expression = generate_expression(ast)
+
+        comments = self.expression_comment_generator.generate_comments(
+            expression=expression,
+            user_query=request.query,
+            node_info=node_info,
+            typed_context=typed_context,
+            context_pack=ctx.context_pack,
+        )
+        expression = inject_expression_comments(expression, comments)
 
         return ValueLogicResult(
             node_id=self._node_id(request.node),

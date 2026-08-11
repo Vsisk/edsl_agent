@@ -27,10 +27,14 @@ class EDSLExpressionParser:
     def parse_plan(self, simple_plan: SimpleExpressionPlan) -> Plan:
         nodes: list[dict] = []
         for definition in simple_plan.definitions:
-            value = self.parse_expression(definition.expr)
+            comments, expr = _extract_expression_comments(definition.expr)
+            nodes.extend(comments)
+            value = self.parse_expression(expr)
             nodes.append({"type": "def", "name": definition.name, "value": value, "render_style": "simple"})
             self.variables.add(definition.name)
-        nodes.append({"type": "return", "value": self.parse_expression(simple_plan.return_expr)})
+        comments, return_expr = _extract_expression_comments(simple_plan.return_expr)
+        nodes.extend(comments)
+        nodes.append({"type": "return", "value": self.parse_expression(return_expr)})
         return Plan.model_validate({"nodes": nodes})
 
     def parse_expression(self, expr: str) -> dict:
@@ -199,3 +203,62 @@ class EDSLExpressionParser:
                 current = {"type": "method_call", "receiver": current, "name": token.name,
                            "args": [self.parse_expression(arg) for arg in token.args], "lambda_expr": None}
         return current
+
+
+def _extract_expression_comments(expr: str) -> tuple[list[dict], str]:
+    comments: list[dict] = []
+    result: list[str] = []
+    index = 0
+    quote: str | None = None
+    escaped = False
+    while index < len(expr):
+        char = expr[index]
+        if quote:
+            result.append(char)
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == quote:
+                quote = None
+            index += 1
+            continue
+        if char in {'"', "'"}:
+            quote = char
+            result.append(char)
+            index += 1
+            continue
+        if expr.startswith("//", index):
+            newline = expr.find("\n", index + 2)
+            end = len(expr) if newline == -1 else newline
+            line_start = expr.rfind("\n", 0, index) + 1
+            placement = "single" if not expr[line_start:index].strip() else "inline"
+            comments.append({
+                "type": "comment",
+                "placement": placement,
+                "text": _normalize_comment_text(expr[index + 2:end]),
+            })
+            if newline == -1:
+                break
+            result.append("\n")
+            index = newline + 1
+            continue
+        if expr.startswith("/*", index):
+            end = expr.find("*/", index + 2)
+            if end == -1:
+                raise ValueError("unclosed block comment")
+            comments.append({
+                "type": "comment",
+                "placement": "single",
+                "text": _normalize_comment_text(expr[index + 2:end]),
+            })
+            result.append(" ")
+            index = end + 2
+            continue
+        result.append(char)
+        index += 1
+    return comments, "".join(result).strip()
+
+
+def _normalize_comment_text(value: str) -> str:
+    return str(value or "").replace("/*", "").replace("*/", "").replace("//", "").strip()

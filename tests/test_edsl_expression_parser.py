@@ -6,6 +6,7 @@ from agent.expression_generation.edsl_expression_parser import EDSLExpressionPar
 from agent.expression_generation.expression_type_validation import SimpleDefinition, SimpleExpressionPlan
 from agent.expression_generation.typed_context import TypedExpressionContext, TypedRootValue
 from agent.planner.models import (
+    CommentExprPlanNode,
     CallExprPlanNode,
     CompareExprPlanNode,
     ContextPathExprPlanNode,
@@ -165,18 +166,79 @@ def test_parses_registered_iter_field_chain():
     assert value.field == "ID"
 
 
-@pytest.mark.parametrize("commented", [
-    "// source value\n$ctx$.name",
-    "$ctx$.name /* inline note */",
-    "/* multi\nline note */ $ctx$.name",
-    "$ctx$.name // trailing note",
+@pytest.mark.parametrize(("commented", "expected"), [
+    ("// source value\n$ctx$.name", "/* source value */\n$ctx$.name"),
+    ("$ctx$.name /* inline note */", "/* inline note */\n$ctx$.name"),
+    ("/* multi\nline note */ $ctx$.name", "/* multi\nline note */\n$ctx$.name"),
+    ("$ctx$.name // trailing note", "$ctx$.name // trailing note"),
 ])
-def test_ignores_line_and_block_comments_outside_string_literals(commented):
+def test_preserves_line_and_block_comments_outside_string_literals(commented, expected):
     context = TypedExpressionContext(root_values=[
         TypedRootValue(expr="$ctx$.name", source_type="context", return_type="basic.String"),
     ])
     parsed = EDSLExpressionParser(context).parse_plan(SimpleExpressionPlan(return_expr=commented))
-    assert generate_expression(build_ast(parsed)) == "$ctx$.name"
+    assert generate_expression(build_ast(parsed)) == expected
+
+
+def test_simple_plan_preserves_comments_as_comment_nodes():
+    context = TypedExpressionContext(root_values=[
+        TypedRootValue(expr="$ctx$.name", source_type="context", return_type="basic.String"),
+    ])
+    parsed = EDSLExpressionParser(context).parse_plan(
+        SimpleExpressionPlan(return_expr="/* select customer name */\n$ctx$.name // direct context")
+    )
+
+    assert isinstance(parsed.nodes[0], CommentExprPlanNode)
+    assert parsed.nodes[0].placement == "single"
+    assert parsed.nodes[0].text == "select customer name"
+    assert isinstance(parsed.nodes[1], CommentExprPlanNode)
+    assert parsed.nodes[1].placement == "inline"
+    assert parsed.nodes[1].text == "direct context"
+    assert generate_expression(build_ast(parsed)) == "/* select customer name */\n$ctx$.name // direct context"
+
+
+def test_simple_plan_preserves_comments_between_definitions():
+    parsed = EDSLExpressionParser(TypedExpressionContext()).parse_plan(
+        SimpleExpressionPlan(
+            definitions=[
+                SimpleDefinition(name="primary", expr="/* load primary */\nfetch_one(E_QUERY_PRIMARY)"),
+                SimpleDefinition(name="backup", expr="/* load backup */\nfetch_one(E_QUERY_BACKUP)"),
+            ],
+            return_expr="primary",
+        )
+    )
+
+    assert generate_expression(build_ast(parsed)) == (
+        "/* load primary */\n"
+        "def primary: fetch_one(E_QUERY_PRIMARY);\n"
+        "/* load backup */\n"
+        "def backup: fetch_one(E_QUERY_BACKUP);\n"
+        "primary"
+    )
+
+
+def test_simple_plan_preserves_inline_comments_on_definitions():
+    parsed = EDSLExpressionParser(TypedExpressionContext()).parse_plan(
+        SimpleExpressionPlan(
+            definitions=[
+                SimpleDefinition(
+                    name="primary",
+                    expr="fetch_one(E_QUERY_PRIMARY) // primary lookup",
+                ),
+                SimpleDefinition(
+                    name="backup",
+                    expr="fetch_one(E_QUERY_BACKUP) // fallback lookup",
+                ),
+            ],
+            return_expr="primary",
+        )
+    )
+
+    assert generate_expression(build_ast(parsed)) == (
+        "def primary: fetch_one(E_QUERY_PRIMARY); // primary lookup\n"
+        "def backup: fetch_one(E_QUERY_BACKUP); // fallback lookup\n"
+        "primary"
+    )
 
 
 def test_preserves_comment_markers_inside_string_literals():

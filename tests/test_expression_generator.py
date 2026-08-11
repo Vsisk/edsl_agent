@@ -58,6 +58,48 @@ class ExpressionGeneratorTest(unittest.TestCase):
 
         self.assertEqual(generate_expression(ast), '/* load\nsource */\n"ok"')
 
+    def test_generate_program_allows_comments_between_def_nodes(self):
+        ast = build_ast(
+            {
+                "nodes": [
+                    {"type": "comment", "placement": "single", "text": "load primary record"},
+                    {
+                        "type": "def",
+                        "name": "primary",
+                        "value": {"type": "fetch_one", "name": "E_QUERY_PRIMARY", "params": []},
+                    },
+                    {"type": "comment", "placement": "single", "text": "load backup record"},
+                    {
+                        "type": "def",
+                        "name": "backup",
+                        "value": {"type": "fetch_one", "name": "E_QUERY_BACKUP", "params": []},
+                    },
+                    {"type": "comment", "placement": "inline", "text": "prefer primary"},
+                    {
+                        "type": "return",
+                        "value": {
+                            "type": "call",
+                            "name": "if",
+                            "args": [
+                                {"type": "context_path", "path": "$ctx$.usePrimary"},
+                                {"type": "variable_ref", "name": "primary"},
+                                {"type": "variable_ref", "name": "backup"},
+                            ],
+                        },
+                    },
+                ]
+            }
+        )
+
+        self.assertEqual(
+            generate_expression(ast),
+            "/* load primary record */\n"
+            "def primary = fetch_one(E_QUERY_PRIMARY)\n"
+            "/* load backup record */\n"
+            "def backup = fetch_one(E_QUERY_BACKUP)\n"
+            "if($ctx$.usePrimary, primary, backup) // prefer primary",
+        )
+
     def test_generate_literals(self):
         self.assertEqual(generate_expression(LiteralNode(type="literal", value="abc")), '"abc"')
         self.assertEqual(generate_expression(LiteralNode(type="literal", value=123)), "123")

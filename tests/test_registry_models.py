@@ -12,6 +12,11 @@ from agent.resource_manager.loader.registry_models import (
 
 
 class RegistryModelsTest(unittest.TestCase):
+    def test_return_type_normalizes_key_to_basic(self):
+        return_type = ReturnType(data_type="key", data_type_name="long")
+
+        self.assertEqual(return_type.data_type, "basic")
+
     def test_models_are_exported_from_single_registry_module(self):
         self.assertIs(models.BoRegistry, BoRegistry)
         self.assertIs(models.ContextRegistry, ContextRegistry)

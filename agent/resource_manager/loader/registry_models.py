@@ -48,6 +48,12 @@ class ReturnType(BaseModel):
     data_type: str = Field(..., description="Return data type")
     data_type_name: Optional[str] = Field(default=None, description="Concrete type name")
 
+    @model_validator(mode="after")
+    def normalize_key_type(self):
+        if self.data_type == DataTypeEnum.key:
+            self.data_type = DataTypeEnum.basic.value
+        return self
+
 
 class BoReturnField(BaseModel):
     property_name: str = Field("", description="BO field name")
@@ -117,6 +123,12 @@ class ReturnTypeTerm(BaseModel):
     is_list: bool = Field(default=False, description="Whether the return value is a list")
     data_type: DataTypeEnum = Field(..., description="Data type")
     data_type_name: Optional[str] = Field(default=None, description="Concrete type name")
+
+    @model_validator(mode="after")
+    def normalize_key_type(self):
+        if self.data_type == DataTypeEnum.key:
+            self.data_type = DataTypeEnum.basic
+        return self
 
 
 class FunctionRegistry(BaseModel):

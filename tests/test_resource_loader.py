@@ -1027,6 +1027,19 @@ class ResourceLoaderTest(unittest.TestCase):
         self.assertIsInstance(property_list[0], PropertyTerm)
         self.assertEqual(property_list[0].field_name, "LOG_ID")
 
+    def test_collect_property_list_normalizes_key_to_basic_with_is_key(self):
+        property_list = _collect_property_list({
+            "property_list": [
+                {"field_name": "ID", "data_type": "key", "data_type_name": "long"},
+                {"field_name": "NAME", "data_type": "basic", "data_type_name": "string"},
+            ]
+        })
+
+        self.assertEqual(property_list[0].data_type, "basic")
+        self.assertTrue(property_list[0].is_key)
+        self.assertEqual(property_list[1].data_type, "basic")
+        self.assertFalse(property_list[1].is_key)
+
     def test_load_function_registry_from_json_flattens_script_and_native_functions(self):
         registry = load_function_registry_from_json(sample_function_payload())
         registry_by_name = load_function_registry_by_json(sample_function_payload())

@@ -2,7 +2,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class DataTypeEnum(str, Enum):
@@ -87,6 +87,14 @@ class PropertyTerm(BaseModel):
     is_list: bool = Field(default=False, description="Whether the return value is a list")
     data_type: DataTypeEnum = Field(..., description="Data type")
     data_type_name: str = Field(..., description="Concrete type name")
+    is_key: bool = Field(default=False, description="Whether this field is a primary key")
+
+    @model_validator(mode="after")
+    def normalize_key_type(self):
+        if self.data_type == DataTypeEnum.key:
+            self.data_type = DataTypeEnum.basic
+            self.is_key = True
+        return self
 
 
 class BoRegistry(BaseModel):

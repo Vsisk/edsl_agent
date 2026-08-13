@@ -161,7 +161,7 @@ class OrchestratorResourceSearch:
                             resource=bo,
                             bo_name=bo.bo_name,
                             field_name=field.field_name,
-                            is_key=field.data_type == DataTypeEnum.key,
+                            is_key=field.is_key,
                             return_type=_property_return_type(field),
                             evidence=["BO property name match"],
                             metadata={
@@ -196,7 +196,7 @@ class OrchestratorResourceSearch:
         ]
         condition_fields = explicit_fields or [
             field for field in target_bo.property_list
-            if field.data_type == DataTypeEnum.key and not field.is_list
+            if field.is_key and not field.is_list
         ]
         if not condition_fields:
             return []
@@ -436,9 +436,7 @@ class OrchestratorResourceSearch:
 
 def _property_return_type(field: Any) -> ReturnType:
     data_type = (
-        DataTypeEnum.basic.value
-        if field.data_type == DataTypeEnum.key
-        else field.data_type.value
+        field.data_type.value
     )
     return ReturnType(
         data_type=data_type,

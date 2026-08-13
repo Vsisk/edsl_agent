@@ -414,7 +414,35 @@ def test_bo_select_fallback_uses_primary_key_when_query_has_no_condition():
     assert [item.name for item in candidates[0].required_inputs] == [
         "CUST_GRP_ID"
     ]
-    assert candidates[0].required_inputs[0].return_type.data_type == "key"
+    assert candidates[0].required_inputs[0].return_type.data_type == "basic"
+
+
+def test_bo_select_fallback_uses_explicit_is_key_flag():
+    loaded = _loaded_resource()
+    bo = loaded.bo_registry["BB_DIC_CUSTGRP"]
+    bo.property_list[0].data_type = DataTypeEnum.basic
+    bo.property_list[0].is_key = True
+    search = OrchestratorResourceSearch(loaded)
+    request = GoalSearchRequest(
+        goal=ValueGoal(
+            goal_id="root::__bo__:BB_DIC_CUSTGRP",
+            semantic_name="BB_DIC_CUSTGRP",
+            role=GoalRole.INTERMEDIATE_VALUE,
+            expected_type=ReturnType(data_type="bo", data_type_name="BB_DIC_CUSTGRP", is_list=False),
+            target_bo_name="BB_DIC_CUSTGRP",
+            target_field_name="CUST_GRP_NAME",
+        ),
+        tier=ResourceTier.BO_SELECT,
+        keywords=[],
+        target_bo_name="BB_DIC_CUSTGRP",
+        target_field_name="CUST_GRP_NAME",
+        query="获取客户组名称",
+    )
+
+    candidates = search.search(request)
+
+    assert candidates[0].required_inputs[0].name == "CUST_GRP_ID"
+    assert candidates[0].required_inputs[0].return_type.data_type == "basic"
 
 
 def test_bo_select_uses_condition_field_explicitly_named_in_query():

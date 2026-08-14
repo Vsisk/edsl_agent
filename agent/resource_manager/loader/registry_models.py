@@ -76,6 +76,10 @@ class ParamTerm(BaseModel):
     is_list: bool = Field(default=False, description="Whether this parameter is a list")
     data_type: str = "basic"
     data_type_name: str = Field(..., description="Concrete type name")
+    linked_field_name: Optional[str] = Field(
+        default=None,
+        description="BO field name linked to this NamingSQL parameter",
+    )
 
 
 class NamingSqlDefTerm(BaseModel):

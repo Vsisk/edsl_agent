@@ -151,6 +151,46 @@ class ExpressionGeneratorTest(unittest.TestCase):
             "def oid = fetch_one(E_RT_QUERY_BY_OFFERINGID, pair(it.OFFERING_ID, $ctx$.offeringId));\noid",
         )
 
+    def test_generate_fetch_params_uses_type_aware_char_and_list_rendering(self):
+        ast = build_ast(
+            {
+                "nodes": [
+                    {
+                        "type": "def",
+                        "name": "customer",
+                        "value": {
+                            "type": "fetch_one",
+                            "name": "QUERY_CUSTOMER",
+                            "params": [
+                                {
+                                    "name": "CUST_CODE",
+                                    "data_type": "basic",
+                                    "data_type_name": "char",
+                                    "is_list": False,
+                                    "value": {"type": "literal", "value": "A001"},
+                                },
+                                {
+                                    "name": "STATUS",
+                                    "data_type": "basic",
+                                    "data_type_name": "String",
+                                    "is_list": True,
+                                    "value": {"type": "literal", "value": "ACTIVE"},
+                                },
+                            ],
+                        },
+                    },
+                    {"type": "return", "value": {"type": "variable_ref", "name": "customer"}},
+                ]
+            }
+        )
+
+        self.assertEqual(
+            generate_expression(ast),
+            "def statusList = ['ACTIVE'];\n"
+            "def customer = fetch_one(QUERY_CUSTOMER, pair(it.CUST_CODE, 'A001'), pair(it.STATUS, statusList));\n"
+            "customer",
+        )
+
     def test_generate_select_compare_and_logical_with_stable_parentheses(self):
         ast = build_ast(
             {

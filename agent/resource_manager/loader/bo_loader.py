@@ -15,7 +15,7 @@ def load_bo_registry_from_json(
 
     for bo_payload in _iter_bo_payloads(payload):
         property_list = _expand_property_list(_collect_property_list(bo_payload), expander)
-        naming_sql_list = _collect_naming_sql_list(bo_payload)
+        naming_sql_list = _collect_naming_sql_list(bo_payload, property_list)
         registry.append(
             BoRegistry(
                 resource_id=f"bo.{len(registry):04d}",
@@ -63,7 +63,10 @@ def _iter_bo_payloads(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
     return bo_payloads
 
 
-def _collect_naming_sql_list(bo_payload: Dict[str, Any]) -> List[NamingSqlDefTerm]:
+def _collect_naming_sql_list(
+    bo_payload: Dict[str, Any],
+    property_list: List[PropertyTerm] | None = None,
+) -> List[NamingSqlDefTerm]:
     naming_sql_list: List[NamingSqlDefTerm] = []
 
     for mapping in bo_payload.get("or_mapping_list") or []:
@@ -77,6 +80,11 @@ def _collect_naming_sql_list(bo_payload: Dict[str, Any]) -> List[NamingSqlDefTer
         if isinstance(naming_sql, dict):
             naming_sql_list.append(NamingSqlDefTerm(**naming_sql))
 
+    if property_list:
+        return [
+            _link_naming_sql_params_to_fields(naming_sql, property_list)
+            for naming_sql in naming_sql_list
+        ]
     return naming_sql_list
 
 
@@ -86,6 +94,42 @@ def _collect_property_list(bo_payload: Dict[str, Any]) -> List[PropertyTerm]:
         if isinstance(property_payload, dict):
             property_list.append(PropertyTerm(**property_payload))
     return property_list
+
+
+def _link_naming_sql_params_to_fields(
+    naming_sql: NamingSqlDefTerm,
+    property_list: List[PropertyTerm],
+) -> NamingSqlDefTerm:
+    fields_by_name = {
+        _normalize_field_link_name(field.field_name): field
+        for field in property_list
+    }
+    linked_params = []
+    changed = False
+    for param in naming_sql.param_list:
+        field = fields_by_name.get(_normalize_field_link_name(param.param_name))
+        if field is None:
+            linked_params.append(param)
+            continue
+        data_type = field.data_type.value if hasattr(field.data_type, "value") else str(field.data_type)
+        linked_params.append(
+            param.model_copy(
+                update={
+                    "data_type": data_type,
+                    "data_type_name": field.data_type_name,
+                    "is_list": field.is_list,
+                    "linked_field_name": field.field_name,
+                }
+            )
+        )
+        changed = True
+    if not changed:
+        return naming_sql
+    return naming_sql.model_copy(update={"param_list": linked_params})
+
+
+def _normalize_field_link_name(value: str) -> str:
+    return "".join(ch for ch in str(value or "").lower() if ch.isalnum())
 
 
 def _expand_property_list(

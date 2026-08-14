@@ -1018,6 +1018,61 @@ class ResourceLoaderTest(unittest.TestCase):
         self.assertIsInstance(naming_sql_list[0].param_list[0], ParamTerm)
         self.assertEqual(naming_sql_list[0].sql_name, "BB_BAK_TRANS_queryDataLoadData")
 
+    def test_bo_loader_links_naming_sql_params_to_bo_field_types(self):
+        payload = {
+            "sys_bo_list": [
+                {
+                    "bo_name": "CUSTOMER",
+                    "bo_desc": "Customer table",
+                    "property_list": [
+                        {
+                            "field_name": "CUST_CODE",
+                            "description": "Customer code",
+                            "is_list": False,
+                            "data_type": "basic",
+                            "data_type_name": "char",
+                        },
+                        {
+                            "field_name": "STATUS",
+                            "description": "Status list",
+                            "is_list": True,
+                            "data_type": "basic",
+                            "data_type_name": "String",
+                        },
+                    ],
+                    "naming_sql_list": [
+                        {
+                            "naming_sql_id": "sql.customer.by_code",
+                            "sql_name": "QUERY_CUSTOMER_BY_CODE",
+                            "param_list": [
+                                {
+                                    "param_name": "cust_code",
+                                    "is_list": False,
+                                    "data_type": "basic",
+                                    "data_type_name": "String",
+                                },
+                                {
+                                    "param_name": "STATUS",
+                                    "is_list": False,
+                                    "data_type": "basic",
+                                    "data_type_name": "String",
+                                },
+                            ],
+                        }
+                    ],
+                }
+            ]
+        }
+
+        registry = load_bo_registry_by_json(payload)
+        params = registry["CUSTOMER"].naming_sql_list[0].param_list
+
+        self.assertEqual(params[0].linked_field_name, "CUST_CODE")
+        self.assertEqual(params[0].data_type_name, "char")
+        self.assertFalse(params[0].is_list)
+        self.assertEqual(params[1].linked_field_name, "STATUS")
+        self.assertTrue(params[1].is_list)
+
     def test_collect_property_list_normalizes_terms(self):
         bo_payload = sample_bo_payload()["sys_bo_list"][0]
 

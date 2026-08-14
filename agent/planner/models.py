@@ -84,6 +84,9 @@ class SelectOneExprPlanNode(_ExprPlanBaseModel):
 class FetchParam(_ExprPlanBaseModel):
     name: str
     value: ExprPlanNode
+    data_type: str | None = None
+    data_type_name: str | None = None
+    is_list: bool = False
 
 
 class FetchExprPlanNode(_ExprPlanBaseModel):

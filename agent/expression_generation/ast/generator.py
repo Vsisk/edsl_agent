@@ -70,6 +70,10 @@ def generate_expression(node: ASTNode) -> str:
     Comments are intentionally not represented as executable AST nodes, so generated
     output cannot accidentally turn explanatory text into part of an expression.
     """
+    return _generate_expression(node, None)
+
+
+def _generate_expression(node: ASTNode, prepend_defs: list[str] | None) -> str:
     if isinstance(node, ProgramNode):
         return _join_program_lines(node)
     if isinstance(node, CommentNode):
@@ -82,35 +86,35 @@ def generate_expression(node: ASTNode) -> str:
         return node.name
     if isinstance(node, DefNode):
         if node.render_style == "simple":
-            return f"def {node.name}: {generate_expression(node.value)};"
-        return f"def {node.name} = {generate_expression(node.value)}"
+            return f"def {node.name}: {_generate_expression(node.value, prepend_defs)};"
+        return f"def {node.name} = {_generate_expression(node.value, prepend_defs)}"
     if isinstance(node, FieldAccessNode):
-        return f"{generate_expression(node.receiver)}.{node.field}"
+        return f"{_generate_expression(node.receiver, prepend_defs)}.{node.field}"
     if isinstance(node, MethodCallNode):
-        receiver = generate_expression(node.receiver)
+        receiver = _generate_expression(node.receiver, prepend_defs)
         if node.lambda_expr is not None:
-            return f"{receiver}.{node.name}{{{generate_expression(node.lambda_expr)}}}"
-        return f"{receiver}.{node.name}({', '.join(generate_expression(arg) for arg in node.args)})"
+            return f"{receiver}.{node.name}{{{_generate_expression(node.lambda_expr, prepend_defs)}}}"
+        return f"{receiver}.{node.name}({', '.join(_generate_expression(arg, prepend_defs) for arg in node.args)})"
     if isinstance(node, CompareNode):
-        return f"{generate_expression(node.left)} {node.op} {generate_expression(node.right)}"
+        return f"{_generate_expression(node.left, prepend_defs)} {node.op} {_generate_expression(node.right, prepend_defs)}"
     if isinstance(node, LogicalNode):
-        return f" {node.op} ".join(generate_expression(item) for item in node.items).join(("(", ")"))
+        return f" {node.op} ".join(_generate_expression(item, prepend_defs) for item in node.items).join(("(", ")"))
     if isinstance(node, CallNode):
         if node.name in {"+", "-", "*", "/"} and len(node.args) == 2:
-            return f"{generate_expression(node.args[0])} {node.name} {generate_expression(node.args[1])}"
+            return f"{_generate_expression(node.args[0], prepend_defs)} {node.name} {_generate_expression(node.args[1], prepend_defs)}"
         if node.name == "__trans_mapping" and len(node.args) == 2:
-            return f"[{generate_expression(node.args[0]).strip(chr(34))}, {generate_expression(node.args[1])}]"
-        return f"{node.name}({', '.join(generate_expression(arg) for arg in node.args)})"
+            return f"[{_generate_expression(node.args[0], prepend_defs).strip(chr(34))}, {_generate_expression(node.args[1], prepend_defs)}]"
+        return f"{node.name}({', '.join(_generate_expression(arg, prepend_defs) for arg in node.args)})"
     if isinstance(node, SelectNode):
-        return f"select({node.bo}, {generate_expression(node.filter)})"
+        return f"select({node.bo}, {_generate_expression(node.filter, prepend_defs)})"
     if isinstance(node, SelectOneNode):
-        return f"select_one({node.bo}, {generate_expression(node.filter)})"
+        return f"select_one({node.bo}, {_generate_expression(node.filter, prepend_defs)})"
     if isinstance(node, FetchNode):
-        return _generate_fetch("fetch", node.name, node.params)
+        return _generate_fetch("fetch", node.name, node.params, prepend_defs)
     if isinstance(node, FetchOneNode):
-        return _generate_fetch("fetch_one", node.name, node.params)
+        return _generate_fetch("fetch_one", node.name, node.params, prepend_defs)
     if isinstance(node, ReturnNode):
-        return generate_expression(node.value)
+        return _generate_expression(node.value, prepend_defs)
     raise TypeError(f"Unsupported AST node: {type(node).__name__}")
 
 
@@ -124,7 +128,9 @@ def _join_program_lines(node: ProgramNode) -> str:
             else:
                 rendered_lines.append(_generate_block_comment(item.text))
             continue
-        rendered = generate_expression(item)
+        prepend_defs: list[str] = []
+        rendered = _generate_expression(item, prepend_defs)
+        rendered_lines.extend(prepend_defs)
         if not isinstance(item, ReturnNode):
             rendered = _ensure_semicolon(rendered)
         if pending_inline_comments:
@@ -169,15 +175,60 @@ def _generate_literal(node: LiteralNode) -> str:
     return str(node.value)
 
 
-def _generate_fetch(function_name: str, name: str, params: list[FunctionParamNode]) -> str:
+def _generate_fetch(
+    function_name: str,
+    name: str,
+    params: list[FunctionParamNode],
+    prepend_defs: list[str] | None,
+) -> str:
     if not params:
         return f"{function_name}({name})"
-    rendered_params = ", ".join(_generate_param(param) for param in params)
+    rendered_params = ", ".join(_generate_param(param, prepend_defs) for param in params)
     return f"{function_name}({name}, {rendered_params})"
 
 
-def _generate_param(param: FunctionParamNode) -> str:
-    return f"pair({_normalize_param_name(param.name)}, {generate_expression(param.value)})"
+def _generate_param(
+    param: FunctionParamNode,
+    prepend_defs: list[str] | None,
+) -> str:
+    rendered_value = _generate_typed_param_value(param, prepend_defs)
+    return f"pair({_normalize_param_name(param.name)}, {rendered_value})"
+
+
+def _generate_typed_param_value(
+    param: FunctionParamNode,
+    prepend_defs: list[str] | None,
+) -> str:
+    rendered_value = _generate_param_value(param)
+    if not param.is_list:
+        return rendered_value
+    variable_name = _list_param_variable_name(param.name)
+    if prepend_defs is not None:
+        prepend_defs.append(f"def {variable_name} = [{rendered_value}];")
+        return variable_name
+    return f"[{rendered_value}]"
+
+
+def _generate_param_value(param: FunctionParamNode) -> str:
+    if isinstance(param.value, LiteralNode) and isinstance(param.value.value, str) and _is_char_type(param):
+        return _single_quoted_string(param.value.value)
+    return _generate_expression(param.value, None)
+
+
+def _is_char_type(param: FunctionParamNode) -> bool:
+    type_name = str(param.data_type_name or "").strip().lower()
+    return type_name in {"char", "character", "string", "str"}
+
+
+def _single_quoted_string(value: str) -> str:
+    return "'" + value.replace("\\", "\\\\").replace("'", "\\'") + "'"
+
+
+def _list_param_variable_name(name: str) -> str:
+    normalized = "".join(part.title() for part in str(name or "param").split("_") if part)
+    if not normalized:
+        normalized = "Param"
+    return f"{normalized[0].lower()}{normalized[1:]}List"
 
 
 def _normalize_param_name(name: str) -> str:

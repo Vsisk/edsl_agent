@@ -119,13 +119,31 @@ def _build_node(plan_node: ExprPlanNode) -> ExprNode:
         return FetchNode(
             type="fetch",
             name=plan_node.name,
-            params=[FunctionParamNode(name=param.name, value=_build_node(param.value)) for param in plan_node.params],
+            params=[
+                FunctionParamNode(
+                    name=param.name,
+                    value=_build_node(param.value),
+                    data_type=param.data_type,
+                    data_type_name=param.data_type_name,
+                    is_list=param.is_list,
+                )
+                for param in plan_node.params
+            ],
         )
     if isinstance(plan_node, FetchOneExprPlanNode):
         return FetchOneNode(
             type="fetch_one",
             name=plan_node.name,
-            params=[FunctionParamNode(name=param.name, value=_build_node(param.value)) for param in plan_node.params],
+            params=[
+                FunctionParamNode(
+                    name=param.name,
+                    value=_build_node(param.value),
+                    data_type=param.data_type,
+                    data_type_name=param.data_type_name,
+                    is_list=param.is_list,
+                )
+                for param in plan_node.params
+            ],
         )
     if isinstance(plan_node, ReturnExprPlanNode):
         return ReturnNode(type="return", value=_build_node(plan_node.value))

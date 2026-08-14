@@ -174,6 +174,9 @@ class FunctionParamNode(BaseModel):
 
     name: str
     value: ExprNode
+    data_type: str | None = None
+    data_type_name: str | None = None
+    is_list: bool = False
 
 
 class FetchNode(ASTNode):

@@ -85,8 +85,11 @@ def _generate_expression(node: ASTNode, prepend_defs: list[str] | None) -> str:
     if isinstance(node, VariableRefNode):
         return node.name
     if isinstance(node, DefNode):
+        params = f"({', '.join(node.params)})" if node.params else ""
         if node.render_style == "simple":
-            return f"def {node.name}: {_generate_expression(node.value, prepend_defs)};"
+            return f"def {node.name}{params}: {_generate_expression(node.value, prepend_defs)};"
+        if node.params:
+            return f"def {node.name}{params}: {_generate_expression(node.value, prepend_defs)}"
         return f"def {node.name} = {_generate_expression(node.value, prepend_defs)}"
     if isinstance(node, FieldAccessNode):
         return f"{_generate_expression(node.receiver, prepend_defs)}.{node.field}"
@@ -94,6 +97,8 @@ def _generate_expression(node: ASTNode, prepend_defs: list[str] | None) -> str:
         receiver = _generate_expression(node.receiver, prepend_defs)
         if node.lambda_expr is not None:
             return f"{receiver}.{node.name}{{{_generate_expression(node.lambda_expr, prepend_defs)}}}"
+        if node.name == "split":
+            return f"{receiver}.{node.name}.({', '.join(_generate_expression(arg, prepend_defs) for arg in node.args)})"
         return f"{receiver}.{node.name}({', '.join(_generate_expression(arg, prepend_defs) for arg in node.args)})"
     if isinstance(node, CompareNode):
         return f"{_generate_expression(node.left, prepend_defs)} {node.op} {_generate_expression(node.right, prepend_defs)}"
@@ -131,7 +136,7 @@ def _join_program_lines(node: ProgramNode) -> str:
         prepend_defs: list[str] = []
         rendered = _generate_expression(item, prepend_defs)
         rendered_lines.extend(prepend_defs)
-        if not isinstance(item, ReturnNode):
+        if not isinstance(item, CommentNode):
             rendered = _ensure_semicolon(rendered)
         if pending_inline_comments:
             rendered = f"{rendered} // {'; '.join(pending_inline_comments)}"

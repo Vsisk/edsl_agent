@@ -43,6 +43,7 @@ class DefExprPlanNode(_ExprPlanBaseModel):
     type: Literal["def"]
     name: str
     value: ExprPlanNode
+    params: list[str] = Field(default_factory=list)
     render_style: Literal["legacy", "simple"] = "legacy"
 
 

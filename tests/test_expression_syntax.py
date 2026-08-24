@@ -14,6 +14,7 @@ from agent.expression_generation.expression_syntax import (
         ("$ctx$.address.addr1", ["$ctx$", "address", "addr1"]),
         ('dateValue("yyyy.MM.dd").addDays(1)', ['dateValue("yyyy.MM.dd")', "addDays(1)"]),
         ("fn($ctx$.a.b).length()", ["fn($ctx$.a.b)", "length()"]),
+        ('"A；B".split.("；")', ['"A；B"', 'split.("；")']),
         ("1.23", ["1.23"]),
     ],
 )
@@ -30,3 +31,11 @@ def test_method_chain_parser_classifies_tokens_and_arguments():
     assert tokens[1].name == "find"
     assert tokens[1].lambda_expr == "it.CHARGE_AMT > 0"
     assert tokens[2].args == ['"a,b"', '"c"']
+
+
+def test_method_chain_parser_classifies_split_dot_call():
+    tokens = MethodChainParser().parse('"A；B".split.("；")')
+
+    assert [token.token_type for token in tokens] == ["root", "method_call"]
+    assert tokens[1].name == "split"
+    assert tokens[1].args == ['"；"']

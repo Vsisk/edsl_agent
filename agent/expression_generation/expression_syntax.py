@@ -87,6 +87,8 @@ class ExpressionTokenizer:
                 if separator == "." and index > 0 and index + 1 < len(expr):
                     if expr[index - 1].isdigit() and expr[index + 1].isdigit():
                         continue
+                    if expr[index + 1] == "(":
+                        continue
                 result.append(expr[start:index].strip())
                 start = index + 1
         result.append(expr[start:].strip())
@@ -126,7 +128,7 @@ class MethodChainParser:
             paren = raw.find("(")
             if paren > 0 and raw.endswith(")"):
                 result.append(ChainToken(
-                    token_type="method_call", raw=raw, name=raw[:paren].strip(),
+                    token_type="method_call", raw=raw, name=raw[:paren].strip().rstrip("."),
                     args=split_top_level_commas(raw[paren + 1:-1]),
                 ))
                 continue

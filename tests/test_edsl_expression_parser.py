@@ -10,6 +10,7 @@ from agent.planner.models import (
     CallExprPlanNode,
     CompareExprPlanNode,
     ContextPathExprPlanNode,
+    DefExprPlanNode,
     FieldAccessExprPlanNode,
     MethodCallExprPlanNode,
     VariableRefExprPlanNode,
@@ -18,11 +19,11 @@ from agent.planner.models import (
 
 @pytest.mark.parametrize("plan,expected", [
     (SimpleExpressionPlan(return_expr='if($ctx$.address.addr1.length() > 0, $ctx$.address.addr1, "")'),
-     'if($ctx$.address.addr1.length() > 0, $ctx$.address.addr1, "")'),
+     'if($ctx$.address.addr1.length() > 0, $ctx$.address.addr1, "");'),
     (SimpleExpressionPlan(definitions=[SimpleDefinition(name="charge", expr="fetch_one(E_QUERY_CHARGE, pair(it.ACCT_ID, $ctx$.acct.acctId))")], return_expr="charge.CHARGE_AMT.long2str()"),
-     "def charge: fetch_one(E_QUERY_CHARGE, pair(it.ACCT_ID, $ctx$.acct.acctId));\ncharge.CHARGE_AMT.long2str()"),
+     "def charge: fetch_one(E_QUERY_CHARGE, pair(it.ACCT_ID, $ctx$.acct.acctId));\ncharge.CHARGE_AMT.long2str();"),
     (SimpleExpressionPlan(definitions=[SimpleDefinition(name="charges", expr="fetch(E_QUERY_CHARGE)")], return_expr="charges.find{it.CHARGE_AMT > 0}.CHARGE_AMT"),
-     "def charges: fetch(E_QUERY_CHARGE);\ncharges.find{it.CHARGE_AMT > 0}.CHARGE_AMT"),
+     "def charges: fetch(E_QUERY_CHARGE);\ncharges.find{it.CHARGE_AMT > 0}.CHARGE_AMT;"),
 ])
 def test_parses_simple_plan_into_existing_plan_pipeline(plan, expected):
     context = TypedExpressionContext(root_values=[
@@ -104,7 +105,7 @@ def test_accepts_word_logical_operator_and_single_quoted_strings():
     )
 
     assert generate_expression(build_ast(parsed)) == (
-        'if((exists(prep_main) and prep_main.BEXT_ATTR.RE_BILL_GEN_FLAG == "1"), "Y", "N")'
+        'if((exists(prep_main) and prep_main.BEXT_ATTR.RE_BILL_GEN_FLAG == "1"), "Y", "N");'
     )
 
 
@@ -118,7 +119,7 @@ def test_accepts_or_but_does_not_split_operator_text_inside_identifiers():
         SimpleExpressionPlan(return_expr="brand == 'A' or order == 'B'")
     )
 
-    assert generate_expression(build_ast(parsed)) == '(brand == "A" or order == "B")'
+    assert generate_expression(build_ast(parsed)) == '(brand == "A" or order == "B");'
 
 
 @pytest.mark.parametrize("operator", ["+", "-", "*", "/"])
@@ -132,7 +133,7 @@ def test_preserves_arithmetic_as_infix_expression(operator):
         SimpleExpressionPlan(return_expr=f"A {operator} B")
     )
 
-    assert generate_expression(build_ast(parsed)) == f"A {operator} B"
+    assert generate_expression(build_ast(parsed)) == f"A {operator} B;"
 
 
 def test_parses_exact_iter_as_context_path_even_without_typed_fields():
@@ -177,7 +178,7 @@ def test_preserves_line_and_block_comments_outside_string_literals(commented, ex
         TypedRootValue(expr="$ctx$.name", source_type="context", return_type="basic.String"),
     ])
     parsed = EDSLExpressionParser(context).parse_plan(SimpleExpressionPlan(return_expr=commented))
-    assert generate_expression(build_ast(parsed)) == expected
+    assert generate_expression(build_ast(parsed)) == _semicolonize_expected(expected)
 
 
 def test_simple_plan_preserves_comments_as_comment_nodes():
@@ -194,7 +195,7 @@ def test_simple_plan_preserves_comments_as_comment_nodes():
     assert isinstance(parsed.nodes[1], CommentExprPlanNode)
     assert parsed.nodes[1].placement == "inline"
     assert parsed.nodes[1].text == "direct context"
-    assert generate_expression(build_ast(parsed)) == "/* select customer name */\n$ctx$.name // direct context"
+    assert generate_expression(build_ast(parsed)) == "/* select customer name */\n$ctx$.name; // direct context"
 
 
 def test_simple_plan_keeps_code_after_leading_block_comment():
@@ -202,7 +203,7 @@ def test_simple_plan_keeps_code_after_leading_block_comment():
         SimpleExpressionPlan(return_expr="/* note */ \n code")
     )
 
-    assert generate_expression(build_ast(parsed)) == "/* note */\ncode"
+    assert generate_expression(build_ast(parsed)) == "/* note */\ncode;"
 
 
 def test_simple_plan_preserves_comments_between_definitions():
@@ -221,7 +222,7 @@ def test_simple_plan_preserves_comments_between_definitions():
         "def primary: fetch_one(E_QUERY_PRIMARY);\n"
         "/* load backup */\n"
         "def backup: fetch_one(E_QUERY_BACKUP);\n"
-        "primary"
+        "primary;"
     )
 
 
@@ -245,7 +246,7 @@ def test_simple_plan_preserves_inline_comments_on_definitions():
     assert generate_expression(build_ast(parsed)) == (
         "def primary: fetch_one(E_QUERY_PRIMARY); // primary lookup\n"
         "def backup: fetch_one(E_QUERY_BACKUP); // fallback lookup\n"
-        "primary"
+        "primary;"
     )
 
 
@@ -253,7 +254,7 @@ def test_preserves_comment_markers_inside_string_literals():
     parsed = EDSLExpressionParser(TypedExpressionContext()).parse_plan(
         SimpleExpressionPlan(return_expr='"http://example/*not a comment*/"')
     )
-    assert generate_expression(build_ast(parsed)) == '"http://example/*not a comment*/"'
+    assert generate_expression(build_ast(parsed)) == '"http://example/*not a comment*/";'
 
 
 def test_rejects_unclosed_block_comment():
@@ -261,3 +262,39 @@ def test_rejects_unclosed_block_comment():
         EDSLExpressionParser(TypedExpressionContext()).parse_plan(
             SimpleExpressionPlan(return_expr="$iter$ /* missing end")
         )
+
+
+def test_parses_string_split_dot_method_call_with_delimiter():
+    parsed = EDSLExpressionParser(TypedExpressionContext()).parse_plan(
+        SimpleExpressionPlan(return_expr='"A；B".split.("；")')
+    )
+
+    value = parsed.nodes[-1].value
+    assert isinstance(value, MethodCallExprPlanNode)
+    assert value.name == "split"
+    assert len(value.args) == 1
+    assert generate_expression(build_ast(parsed)) == '"A；B".split.("；");'
+
+
+def test_parses_function_definition_and_user_defined_call():
+    parsed = EDSLExpressionParser(TypedExpressionContext()).parse_plan(
+        SimpleExpressionPlan(
+            definitions=[
+                SimpleDefinition(name="addText", params=["param1", "param2"], expr="param1 + param2"),
+            ],
+            return_expr='addText("A", "B");',
+        )
+    )
+
+    definition = parsed.nodes[0]
+    assert isinstance(definition, DefExprPlanNode)
+    assert definition.params == ["param1", "param2"]
+    assert isinstance(parsed.nodes[-1].value, CallExprPlanNode)
+    assert parsed.nodes[-1].value.name == "addText"
+    assert generate_expression(build_ast(parsed)) == 'def addText(param1, param2): param1 + param2;\naddText("A", "B");'
+
+
+def _semicolonize_expected(expected: str) -> str:
+    lines = expected.splitlines()
+    lines[-1] = lines[-1].replace(" //", "; //") if " //" in lines[-1] else lines[-1] + ";"
+    return "\n".join(lines)

@@ -23,27 +23,38 @@ class EDSLExpressionParser:
             reverse=True,
         )
         self.variables: set[str] = {"it"}
+        self.user_functions: set[str] = set()
 
     def parse_plan(self, simple_plan: SimpleExpressionPlan) -> Plan:
         nodes: list[dict] = []
+        self.user_functions.update(
+            definition.name
+            for definition in simple_plan.definitions
+            if definition.params
+        )
         for definition in simple_plan.definitions:
             comments, expr = _extract_expression_comments(definition.expr)
             nodes.extend(comments)
             value = self.parse_expression(expr)
-            nodes.append({"type": "def", "name": definition.name, "value": value, "render_style": "simple"})
-            self.variables.add(definition.name)
+            params = list(definition.params)
+            nodes.append({
+                "type": "def",
+                "name": definition.name,
+                "value": value,
+                "params": params,
+                "render_style": "simple",
+            })
+            if not params:
+                self.variables.add(definition.name)
         comments, return_expr = _extract_expression_comments(simple_plan.return_expr)
         nodes.extend(comments)
         nodes.append({"type": "return", "value": self.parse_expression(return_expr)})
         return Plan.model_validate({"nodes": nodes})
 
     def parse_expression(self, expr: str) -> dict:
-        expr = strip_comments(expr).strip()
+        expr = _strip_statement_semicolon(strip_comments(expr).strip())
         if len(expr) >= 2 and expr[0] == expr[-1] and expr[0] in {'"', "'"}:
-            try:
-                value = json.loads(expr) if expr[0] == '"' else ast.literal_eval(expr)
-            except (json.JSONDecodeError, SyntaxError, ValueError):
-                value = None
+            value = _parse_string_literal_value(expr)
             if isinstance(value, str):
                 return {"type": "literal", "value": value}
         if expr in {"true", "false"}:
@@ -69,6 +80,9 @@ class EDSLExpressionParser:
         builtin_call = self._parse_builtin_call(expr)
         if builtin_call is not None:
             return builtin_call
+        user_call = self._parse_user_defined_call(expr)
+        if user_call is not None:
+            return user_call
         fetch = re.match(r"^(fetch_one|fetch)\((.*)\)$", expr)
         if fetch:
             args = split_top_level_commas(fetch.group(2))
@@ -132,7 +146,10 @@ class EDSLExpressionParser:
         else:
             tokens = MethodChainParser().parse(expr)
             root = tokens.pop(0)
-            if root.name.startswith(("$ctx$", "$local$", "$iter$")):
+            literal_value = _parse_string_literal_value(root.name)
+            if isinstance(literal_value, str):
+                current = {"type": "literal", "value": literal_value}
+            elif root.name.startswith(("$ctx$", "$local$", "$iter$")):
                 current = {"type": "context_path", "path": root.name}
             else:
                 current = {"type": "variable_ref", "name": root.name}
@@ -166,6 +183,26 @@ class EDSLExpressionParser:
             raise ValueError(f"invalid native function call suffix: {suffix}")
         tokens = MethodChainParser().parse("root" + suffix)[1:]
         return self._append_chain(current, tokens)
+
+    def _parse_user_defined_call(self, expr: str) -> dict | None:
+        name = next((item for item in self.user_functions if expr.startswith(item + "(")), None)
+        if name is None:
+            return None
+        open_paren = len(name)
+        close_paren = self._find_matching_paren(expr, open_paren)
+        if close_paren is None:
+            raise ValueError(f"unclosed user function call: {name}")
+        if expr[close_paren + 1:].strip():
+            return None
+        return {
+            "type": "call",
+            "name": name,
+            "args": [
+                self.parse_expression(arg)
+                for arg in split_top_level_commas(expr[open_paren + 1:close_paren])
+                if arg.strip()
+            ],
+        }
 
     @staticmethod
     def _find_matching_paren(expr: str, open_paren: int) -> int | None:
@@ -262,3 +299,20 @@ def _extract_expression_comments(expr: str) -> tuple[list[dict], str]:
 
 def _normalize_comment_text(value: str) -> str:
     return str(value or "").replace("/*", "").replace("*/", "").replace("//", "").strip()
+
+
+def _parse_string_literal_value(expr: str) -> str | None:
+    if len(expr) < 2 or expr[0] != expr[-1] or expr[0] not in {'"', "'"}:
+        return None
+    try:
+        value = json.loads(expr) if expr[0] == '"' else ast.literal_eval(expr)
+    except (json.JSONDecodeError, SyntaxError, ValueError):
+        return None
+    return value if isinstance(value, str) else None
+
+
+def _strip_statement_semicolon(expr: str) -> str:
+    text = expr.rstrip()
+    if text.endswith(";"):
+        return text[:-1].rstrip()
+    return text

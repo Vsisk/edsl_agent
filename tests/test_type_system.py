@@ -114,6 +114,7 @@ def test_method_registry_registers_and_matches_basic_signature():
         (STRING, "substr", [INT, INT], STRING),
         (STRING, "dateValue", [STRING], DATE),
         (STRING, "replace", [STRING, STRING], STRING),
+        (STRING, "split", [STRING], list_of(STRING)),
         (DATE, "addDays", [INT], DATE),
         (DATE, "toString", [STRING], STRING),
         (INT, "int2str", [], STRING),
@@ -145,6 +146,7 @@ def test_key_type_uses_same_builtin_methods_as_basic_type():
         "substr",
         "dateValue",
         "replace",
+        "split",
     ]
 
 
@@ -185,6 +187,7 @@ def test_method_registry_lists_only_methods_for_concrete_owner():
         "substr",
         "dateValue",
         "replace",
+        "split",
     ]
     assert string_methods[1].arg_names == ["start", "length"]
 

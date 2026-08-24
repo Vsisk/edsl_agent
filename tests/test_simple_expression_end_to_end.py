@@ -87,7 +87,7 @@ def test_context_method_end_to_end_with_debug():
     context = TypedExpressionContext(root_values=[TypedRootValue(expr="$ctx$.address", source_type="context", return_type="logic.Address")])
     expr = 'if($ctx$.address.addr1.length() > 0, $ctx$.address.addr1, "")'
     result, _ = run(SimpleExpressionPlan(return_expr=expr), context, registry, True)
-    assert result.expression == expr
+    assert result.expression == expr + ";"
     assert result.return_type.model_dump() == {
         "is_list": False,
         "data_type": "basic",
@@ -115,8 +115,8 @@ def test_expression_commenter_runs_after_expression_generation():
 
     result = generator.generate(request())
 
-    assert result.expression == "$ctx$.name // generated comment"
-    assert commenter.calls[0]["expression"] == "$ctx$.name"
+    assert result.expression == "$ctx$.name; // generated comment"
+    assert commenter.calls[0]["expression"] == "$ctx$.name;"
 
 
 def test_list_iterator_field_end_to_end_uses_typed_context_without_generated_spec_skill():
@@ -164,7 +164,7 @@ def test_list_iterator_field_end_to_end_uses_typed_context_without_generated_spe
 
     result = generator.generate(request_value)
 
-    assert result.expression == "$iter$.ID"
+    assert result.expression == "$iter$.ID;"
     assert result.return_type.model_dump() == {
         "is_list": False,
         "data_type": "basic",
@@ -180,8 +180,8 @@ def test_list_iterator_field_end_to_end_uses_typed_context_without_generated_spe
 
 
 @pytest.mark.parametrize(("name", "fetch", "return_type", "return_expr", "expected"), [
-    ("charge", "fetch_one(E_QUERY_CHARGE)", "bo.BB_BILL_CHARGE", "charge.CHARGE_AMT.long2str()", "def charge: fetch_one(E_QUERY_CHARGE);\ncharge.CHARGE_AMT.long2str()"),
-    ("charges", "fetch(E_QUERY_CHARGE)", "List<bo.BB_BILL_CHARGE>", "charges.find{it.CHARGE_AMT > 0}.CHARGE_AMT", "def charges: fetch(E_QUERY_CHARGE);\ncharges.find{it.CHARGE_AMT > 0}.CHARGE_AMT"),
+    ("charge", "fetch_one(E_QUERY_CHARGE)", "bo.BB_BILL_CHARGE", "charge.CHARGE_AMT.long2str()", "def charge: fetch_one(E_QUERY_CHARGE);\ncharge.CHARGE_AMT.long2str();"),
+    ("charges", "fetch(E_QUERY_CHARGE)", "List<bo.BB_BILL_CHARGE>", "charges.find{it.CHARGE_AMT > 0}.CHARGE_AMT", "def charges: fetch(E_QUERY_CHARGE);\ncharges.find{it.CHARGE_AMT > 0}.CHARGE_AMT;"),
 ])
 def test_query_variable_and_list_find_end_to_end(name, fetch, return_type, return_expr, expected):
     charge = TypeRef(kind="bo", name="BB_BILL_CHARGE")
@@ -234,7 +234,7 @@ def test_value_result_return_type_comes_from_merge_list_expression():
         registry,
     )
 
-    assert result.expression == "def primary: fetch(E_QUERY_CHARGE);\ndef secondary: fetch(E_QUERY_CHARGE);\nmerge_list(primary, secondary)"
+    assert result.expression == "def primary: fetch(E_QUERY_CHARGE);\ndef secondary: fetch(E_QUERY_CHARGE);\nmerge_list(primary, secondary);"
     assert result.return_type.model_dump() == {
         "is_list": True,
         "data_type": "bo",
@@ -259,7 +259,7 @@ def test_value_result_return_type_comes_from_trans_list_expression_field():
         registry,
     )
 
-    assert result.expression == "def charges: fetch(E_QUERY_CHARGE);\ntrans_list(charges, [amountText, it.CHARGE_AMT.long2str()]).first().amountText"
+    assert result.expression == "def charges: fetch(E_QUERY_CHARGE);\ntrans_list(charges, [amountText, it.CHARGE_AMT.long2str()]).first().amountText;"
     assert result.return_type.model_dump() == {
         "is_list": False,
         "data_type": "basic",
@@ -329,7 +329,7 @@ def test_parse_validation_failure_retries_whole_pipeline_and_can_recover():
     result = generator.generate(request(debug=True))
 
     assert result.logic_type == "expression"
-    assert result.expression == '"ok"'
+    assert result.expression == '"ok";'
     assert planner.calls == 2
     assert planner.feedback[0] is None
     assert planner.feedback[1]["stage"] == "validation"
@@ -378,7 +378,7 @@ def test_native_function_call_round_trips_through_ast():
 
     result, _ = run(SimpleExpressionPlan(return_expr=expr), context)
 
-    assert result.expression == expr
+    assert result.expression == expr + ";"
 
 
 def test_debug_return_type_for_query_variable_method_chain():
@@ -398,7 +398,7 @@ def test_debug_return_type_for_query_variable_method_chain():
         debug=True,
     )
 
-    assert result.expression == "def charge: fetch_one(E_QUERY_CHARGE);\ncharge.CHARGE_AMT.long2str()"
+    assert result.expression == "def charge: fetch_one(E_QUERY_CHARGE);\ncharge.CHARGE_AMT.long2str();"
     assert result.return_type.model_dump() == {
         "is_list": False,
         "data_type": "basic",

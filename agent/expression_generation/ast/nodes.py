@@ -57,6 +57,7 @@ class DefNode(ASTNode):
     type: Literal["def"]
     name: str
     value: ExprNode
+    params: list[str] = Field(default_factory=list)
     render_style: Literal["legacy", "simple"] = "legacy"
 
 

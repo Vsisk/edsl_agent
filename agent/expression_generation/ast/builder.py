@@ -54,6 +54,7 @@ def build_ast(plan: Plan | dict[str, Any]) -> ProgramNode:
 
 class SimpleDefinitionAst(BaseModel):
     name: str
+    params: list[str] = Field(default_factory=list)
     expr: str
 
 
@@ -69,9 +70,12 @@ def build_simple_ast(plan: SimpleExpressionPlan) -> SimpleExpressionProgramAst:
     for definition in plan.definitions:
         if not definition.name.isidentifier():
             raise ValueError("invalid definition name")
+        for param in definition.params:
+            if not param.isidentifier():
+                raise ValueError("invalid definition parameter name")
         if not definition.expr.strip():
             raise ValueError("definition expression must not be blank")
-        definitions.append(SimpleDefinitionAst(name=definition.name, expr=definition.expr))
+        definitions.append(SimpleDefinitionAst(name=definition.name, params=definition.params, expr=definition.expr))
     return SimpleExpressionProgramAst(definitions=definitions, return_expr=plan.return_expr)
 
 
@@ -91,7 +95,13 @@ def _build_node(plan_node: ExprPlanNode) -> ExprNode:
                               args=[_build_node(arg) for arg in plan_node.args],
                               lambda_expr=_build_node(plan_node.lambda_expr) if plan_node.lambda_expr else None)
     if isinstance(plan_node, DefExprPlanNode):
-        return DefNode(type="def", name=plan_node.name, value=_build_node(plan_node.value), render_style=plan_node.render_style)
+        return DefNode(
+            type="def",
+            name=plan_node.name,
+            value=_build_node(plan_node.value),
+            params=plan_node.params,
+            render_style=plan_node.render_style,
+        )
     if isinstance(plan_node, CompareExprPlanNode):
         return CompareNode(
             type="compare",

@@ -58,7 +58,7 @@ class ExpressionGeneratorTest(unittest.TestCase):
 
         self.assertEqual(
             generate_expression(ast),
-            "/* load source */\ndef value = fetch_one(E_QUERY);\nvalue // return selected field",
+            "/* load source */\ndef value = fetch_one(E_QUERY);\nvalue; // return selected field",
         )
 
     def test_generate_program_renders_multiline_comment_node_as_block(self):
@@ -71,7 +71,7 @@ class ExpressionGeneratorTest(unittest.TestCase):
             }
         )
 
-        self.assertEqual(generate_expression(ast), '/* load\nsource */\n"ok"')
+        self.assertEqual(generate_expression(ast), '/* load\nsource */\n"ok";')
 
     def test_generate_program_allows_comments_between_def_nodes(self):
         ast = build_ast(
@@ -112,7 +112,7 @@ class ExpressionGeneratorTest(unittest.TestCase):
             "def primary = fetch_one(E_QUERY_PRIMARY);\n"
             "/* load backup record */\n"
             "def backup = fetch_one(E_QUERY_BACKUP);\n"
-            "if($ctx$.usePrimary, primary, backup) // prefer primary",
+            "if($ctx$.usePrimary, primary, backup); // prefer primary",
         )
 
     def test_generate_literals(self):
@@ -148,7 +148,7 @@ class ExpressionGeneratorTest(unittest.TestCase):
 
         self.assertEqual(
             generate_expression(ast),
-            "def oid = fetch_one(E_RT_QUERY_BY_OFFERINGID, pair(it.OFFERING_ID, $ctx$.offeringId));\noid",
+            "def oid = fetch_one(E_RT_QUERY_BY_OFFERINGID, pair(it.OFFERING_ID, $ctx$.offeringId));\noid;",
         )
 
     def test_generate_fetch_params_uses_type_aware_char_and_list_rendering(self):
@@ -188,7 +188,7 @@ class ExpressionGeneratorTest(unittest.TestCase):
             generate_expression(ast),
             "def statusList = ['ACTIVE'];\n"
             "def customer = fetch_one(QUERY_CUSTOMER, pair(it.CUST_CODE, 'A001'), pair(it.STATUS, statusList));\n"
-            "customer",
+            "customer;",
         )
 
     def test_generate_select_compare_and_logical_with_stable_parentheses(self):
@@ -226,7 +226,7 @@ class ExpressionGeneratorTest(unittest.TestCase):
 
         self.assertEqual(
             generate_expression(ast),
-            "select(BB_PREP_SUB, (it.A == 1 and it.B != 2))",
+            "select(BB_PREP_SUB, (it.A == 1 and it.B != 2));",
         )
 
     def test_generate_fetch_without_params_uses_no_trailing_comma(self):
@@ -241,7 +241,7 @@ class ExpressionGeneratorTest(unittest.TestCase):
             }
         )
 
-        self.assertEqual(generate_expression(ast), "fetch(E_RT_QUERY_ALL)")
+        self.assertEqual(generate_expression(ast), "fetch(E_RT_QUERY_ALL);")
 
     def test_function_param_keeps_existing_prefix(self):
         ast = build_ast(
@@ -266,7 +266,7 @@ class ExpressionGeneratorTest(unittest.TestCase):
 
         self.assertEqual(
             generate_expression(ast),
-            "fetch(E_RT_QUERY_BY_CTX, pair($ctx$.OFFERING_ID, oid))",
+            "fetch(E_RT_QUERY_BY_CTX, pair($ctx$.OFFERING_ID, oid));",
         )
 
     def test_generate_nested_call_expression(self):
@@ -296,7 +296,7 @@ class ExpressionGeneratorTest(unittest.TestCase):
 
         self.assertEqual(
             generate_expression(ast),
-            'IF($ctx$.a.b == 2, "", $ctx$.c.d)',
+            'IF($ctx$.a.b == 2, "", $ctx$.c.d);',
         )
 
     def test_generate_exists_call_for_bo_list(self):
@@ -328,7 +328,7 @@ class ExpressionGeneratorTest(unittest.TestCase):
 
         self.assertEqual(
             generate_expression(ast),
-            "exists(select(BB_PREP_SUB, it.ID == $ctx$.id))",
+            "exists(select(BB_PREP_SUB, it.ID == $ctx$.id));",
         )
 
 

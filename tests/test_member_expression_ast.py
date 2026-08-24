@@ -16,4 +16,4 @@ def test_builds_validates_and_renders_member_method_and_lambda_nodes():
     }}]})
     ast = build_ast(plan)
     validate_ast(ast)
-    assert generate_expression(ast) == "charges.find{it.CHARGE_AMT > 0}.CHARGE_AMT"
+    assert generate_expression(ast) == "charges.find{it.CHARGE_AMT > 0}.CHARGE_AMT;"

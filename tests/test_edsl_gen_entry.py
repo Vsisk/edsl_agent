@@ -74,7 +74,7 @@ class EDSLGenEntryTest(unittest.TestCase):
         )
 
         self.assertEqual(result.logic_type, "expression")
-        self.assertEqual(result.expression, "select_one(BB_PREP_SUB, it.ID == $ctx$.id)")
+        self.assertEqual(result.expression, "select_one(BB_PREP_SUB, it.ID == $ctx$.id);")
         self.assertEqual(result.source.source_type, "plan")
         self.assertEqual(planner.calls[0]["node_info"].node_id, "node-1")
         self.assertEqual(planner.calls[0]["user_query"], "query one prep sub by id")

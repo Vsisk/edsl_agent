@@ -181,6 +181,13 @@ def register_builtin_methods(registry: MethodRegistry) -> None:
             return_type=string,
         ),
         MethodSig(
+            owner_type=string,
+            name="split",
+            arg_types=[string],
+            arg_names=["delimiter"],
+            return_type=TypePattern(kind="list", element_type=string),
+        ),
+        MethodSig(
             owner_type=date,
             name="addDays",
             arg_types=[integer],

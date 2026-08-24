@@ -20,6 +20,7 @@ DECIMAL = TypeRef(kind="basic", name="decimal")
 
 class SimpleDefinition(BaseModel):
     name: str
+    params: list[str] = Field(default_factory=list)
     expr: str
 
 
@@ -80,7 +81,7 @@ class ExpressionTypeResolver:
         }
 
     def resolve(self, expr: str, scope: TypeScope) -> TypeRef | None:
-        expr = strip_comments(expr).strip()
+        expr = _strip_statement_semicolon(strip_comments(expr).strip())
         literal = _literal_type(expr)
         if literal is not None:
             return literal
@@ -220,7 +221,7 @@ class ExpressionTypeResolver:
             if root.name.startswith(("$ctx$", "$local$")):
                 self._error("UNKNOWN_CONTEXT_PATH", expr, root.raw, "unknown context path")
                 return None
-            current = self._resolve_builtin_function(root.name, scope) or scope.resolve(root.name)
+            current = _literal_type(root.name) or self._resolve_builtin_function(root.name, scope) or scope.resolve(root.name)
             if current is None:
                 code = "UNKNOWN_ROOT" if "(" in root.name else "UNKNOWN_VARIABLE"
                 self._error(code, expr, root.raw, "unknown expression root")
@@ -340,6 +341,13 @@ def _literal_type(expr: str) -> TypeRef | None:
     if re.fullmatch(r"-?\d+", expr): return INT
     if re.fullmatch(r"-?\d+\.\d+", expr): return DECIMAL
     return None
+
+
+def _strip_statement_semicolon(expr: str) -> str:
+    text = expr.rstrip()
+    if text.endswith(";"):
+        return text[:-1].rstrip()
+    return text
 
 
 def _find_binary(expr: str) -> tuple[str, str, str] | None:

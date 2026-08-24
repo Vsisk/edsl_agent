@@ -309,7 +309,7 @@ def test_expression_pipeline_retries_transient_stage_errors(monkeypatch, failing
 
     result = gen.generate(request(False))
 
-    assert result.expression == '"ok"'
+    assert result.expression == '"ok";'
     assert calls[failing_stage] == 2
     assert feedback_seen[failing_stage][1]["stage"] == failing_stage
     assert feedback_seen[failing_stage][1]["error_type"] == "RuntimeError"
@@ -363,7 +363,7 @@ def test_non_naming_sql_route_does_not_construct_factory_and_regresses_ordinary_
     planner = Planner(fetch=False)
     def fail(_): raise AssertionError("factory must not be called")
     result = generator(fail, planner).generate(request(False))
-    assert result.expression == '"ok"' and planner.calls[0]["filtered_env"].naming_sql_selection == []
+    assert result.expression == '"ok";' and planner.calls[0]["filtered_env"].naming_sql_selection == []
 
 
 def test_default_resource_pipeline_can_be_replaced_by_spec_orchestrator():
@@ -403,7 +403,7 @@ def test_default_resource_pipeline_can_be_replaced_by_spec_orchestrator():
 
     result = gen.generate(request(False))
 
-    assert result.expression == '"ok"'
+    assert result.expression == '"ok";'
     assert events == [("orchestrator", "ordinary")]
     assert planner.calls[0]["expression_spec"].nl == "ordinary"
 
@@ -441,7 +441,7 @@ def test_explicit_query_spec_bypasses_spec_generation_and_filters_resources_dire
 
     result = gen.generate(request(False))
 
-    assert result.expression == '"ok"'
+    assert result.expression == '"ok";'
     assert [event for event in events if event[0] == "clarity"] == [
         ("clarity", "ordinary")
     ]
@@ -485,7 +485,7 @@ def test_unclear_query_spec_runs_existing_spec_generation_path():
 
     result = gen.generate(request(False))
 
-    assert result.expression == '"ok"'
+    assert result.expression == '"ok";'
     assert events == [("clarity", "ordinary"), ("orchestrator", "ordinary")]
 
 
@@ -654,7 +654,7 @@ def test_empty_targets_keep_empty_environment_and_trace():
 def test_simple_leaf_renders_existing_select_plan():
     planner = SelectPlanner()
     result = generator(lambda loaded: (_ for _ in ()).throw(AssertionError()), planner).generate(request(False))
-    assert result.expression == "select_one(BB_PREP_SUB, it.ID == $ctx$.id)"
+    assert result.expression == "select_one(BB_PREP_SUB, it.ID == $ctx$.id);"
     assert result.source.source_type == "plan"
 
 

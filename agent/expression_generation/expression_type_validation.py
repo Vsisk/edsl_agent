@@ -4,7 +4,7 @@ import ast
 import re
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, computed_field
+from pydantic import BaseModel, ConfigDict, Field, computed_field, model_validator
 
 from agent.expression_generation.expression_syntax import MethodChainParser, split_top_level_commas, strip_comments
 from agent.expression_generation.type_system import MethodRegistry, TypeRef, TypeRegistry
@@ -22,6 +22,24 @@ class SimpleDefinition(BaseModel):
     name: str
     params: list[str] = Field(default_factory=list)
     expr: str
+
+    @model_validator(mode="before")
+    @classmethod
+    def split_signature_name(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        raw_name = value.get("name")
+        if not isinstance(raw_name, str):
+            return value
+        parsed = _parse_definition_signature(raw_name)
+        if parsed is None:
+            return value
+        name, params = parsed
+        normalized = dict(value)
+        normalized["name"] = name
+        if not normalized.get("params"):
+            normalized["params"] = params
+        return normalized
 
 
 class SimpleExpressionPlan(BaseModel):
@@ -316,6 +334,14 @@ def _top_level_call(expr: str) -> tuple[str, list[str]] | None:
     if not match:
         return None
     return match.group(1), split_top_level_commas(match.group(2))
+
+
+def _parse_definition_signature(value: str) -> tuple[str, list[str]] | None:
+    text = value.strip()
+    match = re.fullmatch(r"([A-Za-z_]\w*)\((.*)\)", text)
+    if not match:
+        return None
+    return match.group(1), [param.strip() for param in split_top_level_commas(match.group(2)) if param.strip()]
 
 
 def _parse_trans_mapping(expr: str) -> tuple[str, str] | None:

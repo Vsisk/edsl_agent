@@ -32,3 +32,17 @@ def test_renders_function_definition():
         'def addText(param1, param2): param1 + param2;\n'
         'addText("A", "B");'
     )
+
+
+def test_splits_function_signature_definition_name():
+    plan = SimpleExpressionPlan(
+        definitions=[SimpleDefinition(name="addText(param1, param2)", expr="param1 + param2")],
+        return_expr='addText("A", "B")',
+    )
+
+    assert plan.definitions[0].name == "addText"
+    assert plan.definitions[0].params == ["param1", "param2"]
+    assert EDSLRenderer().render_simple_plan(build_simple_ast(plan)) == (
+        'def addText(param1, param2): param1 + param2;\n'
+        'addText("A", "B");'
+    )

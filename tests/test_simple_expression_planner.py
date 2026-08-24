@@ -72,3 +72,26 @@ def test_simple_planner_normalizes_ast_style_def_to_simple_definition():
     assert result.definitions[0].name == "charge"
     assert result.definitions[0].params == []
     assert result.definitions[0].expr == "fetch_one(E_QUERY_CHARGE)"
+
+
+def test_simple_planner_splits_function_signature_def_name():
+    client = FakeClient([
+        (
+            '{"definitions":[{"type":"def","name":"addText(param1, param2)",'
+            '"value":{"type":"call","name":"+","args":['
+            '{"type":"variable_ref","name":"param1"},'
+            '{"type":"variable_ref","name":"param2"}]}}],'
+            '"return_expr":"addText(\\"A\\", \\"B\\")"}'
+        )
+    ])
+
+    result = SimpleExpressionPlanner(client=client).plan(
+        node_info=NodeDef(node_id="n", node_path="$.n", node_name="n"),
+        user_query="add text",
+        filtered_env=FilteredEnvironment(),
+        typed_context=TypedExpressionContext(),
+    )
+
+    assert result.definitions[0].name == "addText"
+    assert result.definitions[0].params == ["param1", "param2"]
+    assert result.definitions[0].expr == "param1 + param2"

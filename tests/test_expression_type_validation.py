@@ -73,15 +73,15 @@ def test_resolves_word_logical_operator_and_single_quoted_strings():
     assert result.return_type == STRING
 
 
-def test_resolves_string_split_dot_method_to_string_list():
-    result = validator().validate(plan('"A；B".split.("；")'))
+def test_resolves_string_split_method_to_string_list():
+    result = validator().validate(plan('"A;B".split(";")'))
 
     assert result.errors == []
     assert result.return_type == STRINGS
 
 
-def test_resolves_string_split_dot_method_chained_first_to_string():
-    result = validator().validate(plan('$ctx$.address.addr1.split.("；").first()'))
+def test_resolves_string_split_method_chained_first_to_string():
+    result = validator().validate(plan('$ctx$.address.addr1.split(";").first()'))
 
     assert result.errors == []
     assert result.return_type == STRING

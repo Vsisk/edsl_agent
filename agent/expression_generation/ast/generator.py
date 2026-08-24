@@ -97,8 +97,6 @@ def _generate_expression(node: ASTNode, prepend_defs: list[str] | None) -> str:
         receiver = _generate_expression(node.receiver, prepend_defs)
         if node.lambda_expr is not None:
             return f"{receiver}.{node.name}{{{_generate_expression(node.lambda_expr, prepend_defs)}}}"
-        if node.name == "split":
-            return f"{receiver}.{node.name}.({', '.join(_generate_expression(arg, prepend_defs) for arg in node.args)})"
         return f"{receiver}.{node.name}({', '.join(_generate_expression(arg, prepend_defs) for arg in node.args)})"
     if isinstance(node, CompareNode):
         return f"{_generate_expression(node.left, prepend_defs)} {node.op} {_generate_expression(node.right, prepend_defs)}"

@@ -264,16 +264,16 @@ def test_rejects_unclosed_block_comment():
         )
 
 
-def test_parses_string_split_dot_method_call_with_delimiter():
+def test_parses_string_split_method_call_with_delimiter():
     parsed = EDSLExpressionParser(TypedExpressionContext()).parse_plan(
-        SimpleExpressionPlan(return_expr='"A；B".split.("；")')
+        SimpleExpressionPlan(return_expr='"A;B".split(";")')
     )
 
     value = parsed.nodes[-1].value
     assert isinstance(value, MethodCallExprPlanNode)
     assert value.name == "split"
     assert len(value.args) == 1
-    assert generate_expression(build_ast(parsed)) == '"A；B".split.("；");'
+    assert generate_expression(build_ast(parsed)) == '"A;B".split(";");'
 
 
 def test_parses_function_definition_and_user_defined_call():

@@ -50,3 +50,25 @@ def test_simple_planner_returns_plan_and_includes_typed_context():
     assert "target_return_type" not in client.calls[0]["prompt"]
     assert '"inside_parent_list":true' in client.calls[0]["prompt"]
     assert "$iter$.FIELD" in client.calls[0]["prompt"]
+
+
+def test_simple_planner_normalizes_ast_style_def_to_simple_definition():
+    client = FakeClient([
+        (
+            '{"definitions":[{"type":"def","name":"charge",'
+            '"value":{"type":"fetch_one","name":"E_QUERY_CHARGE","params":[]}}],'
+            '"return_expr":"charge.CHARGE_AMT.long2str()"}'
+        )
+    ])
+
+    result = SimpleExpressionPlanner(client=client).plan(
+        node_info=NodeDef(node_id="n", node_path="$.n", node_name="n"),
+        user_query="charge amount",
+        filtered_env=FilteredEnvironment(),
+        typed_context=TypedExpressionContext(),
+    )
+
+    assert isinstance(result, SimpleExpressionPlan)
+    assert result.definitions[0].name == "charge"
+    assert result.definitions[0].params == []
+    assert result.definitions[0].expr == "fetch_one(E_QUERY_CHARGE)"

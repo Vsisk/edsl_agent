@@ -3,6 +3,8 @@ from typing import Any
 
 from agent.environment.environment import FilteredEnvironment
 from agent.context_pack import ContextPack, ContextPackPromptRenderer
+from agent.expression_generation.ast.builder import build_ast
+from agent.expression_generation.ast.generator import generate_expression
 from agent.expression_generation.expression_type_validation import SimpleExpressionPlan
 from agent.expression_generation.typed_context import TypedExpressionContext
 from agent.expression_generation.expression_spec import ExpressionSpec
@@ -51,4 +53,38 @@ class SimpleExpressionPlanner:
             expression_skills_json=_summarize_expression_skills_json(expression_spec),
             retry_feedback_json=json.dumps(retry_feedback or {}, ensure_ascii=False, separators=(",", ":")),
         )
-        return SimpleExpressionPlan.model_validate(response)
+        return SimpleExpressionPlan.model_validate(_normalize_simple_plan_response(response))
+
+
+def _normalize_simple_plan_response(response: Any) -> Any:
+    if not isinstance(response, dict):
+        return response
+    definitions = response.get("definitions")
+    if not isinstance(definitions, list):
+        return response
+    normalized = dict(response)
+    normalized["definitions"] = [_normalize_definition(item) for item in definitions]
+    return normalized
+
+
+def _normalize_definition(item: Any) -> Any:
+    if not isinstance(item, dict) or "expr" in item:
+        return item
+    if str(item.get("type") or "").lower() not in {"def", "vardefinition"}:
+        return item
+    value = item.get("value")
+    if not isinstance(value, dict):
+        return item
+    result = {
+        "name": item.get("name"),
+        "expr": _render_expr_node(value),
+    }
+    params = item.get("params")
+    if isinstance(params, list) and params:
+        result["params"] = params
+    return result
+
+
+def _render_expr_node(value: dict[str, Any]) -> str:
+    rendered = generate_expression(build_ast({"nodes": [{"type": "return", "value": value}]}))
+    return rendered[:-1].rstrip() if rendered.rstrip().endswith(";") else rendered

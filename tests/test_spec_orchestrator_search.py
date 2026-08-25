@@ -8,6 +8,7 @@ from agent.resource_manager.loader.registry_models import (
     DataTypeEnum,
     DomainRegistry,
     FunctionRegistry,
+    LocalContextRegistry,
     NamingSqlDefTerm,
     ParamTerm,
     ParamTypeTerm,
@@ -199,6 +200,82 @@ def test_context_search_matches_canonical_path_suffix_without_embedding():
     assert embedding.calls == []
 
 
+def test_context_search_uses_sklearn_token_cosine_for_keyword_approximation(monkeypatch):
+    loaded = _loaded_resource()
+    loaded.context_registry = {
+        "$ctx$.customer.custGrpName": ContextRegistry(
+            resource_id="ctx.cust_grp_name",
+            context_name="$ctx$.customer.custGrpName",
+            return_type=ReturnType(
+                data_type="basic",
+                data_type_name="string",
+                is_list=False,
+            ),
+            property_type=PropertyTypeEnum.system,
+            annotation="",
+        )
+    }
+    calls = []
+
+    def fake_cosine_similarity(left, right):
+        calls.append((left, right))
+        return [[0.88]]
+
+    monkeypatch.setattr(
+        search_module,
+        "sklearn_cosine_similarity",
+        fake_cosine_similarity,
+    )
+    embedding = FakeEmbeddingClient(failure=AssertionError("context must not embed"))
+    search = OrchestratorResourceSearch(loaded, embedding_client=embedding)
+    request = GoalSearchRequest(
+        goal=_goal("customer group name"),
+        tier=ResourceTier.VISIBLE_VALUE,
+        keywords=["customer group name"],
+    )
+
+    candidates = search.search(request)
+
+    assert [item.candidate_id for item in candidates] == ["ctx.cust_grp_name"]
+    assert calls
+    assert embedding.calls == []
+
+
+def test_local_context_search_uses_same_keyword_cosine_strategy(monkeypatch):
+    loaded = _loaded_resource()
+    local_context = LocalContextRegistry(
+        resource_id="local.cust_grp_name",
+        context_name="$local$.custGrpName",
+        return_type=ReturnType(
+            data_type="basic",
+            data_type_name="string",
+            is_list=False,
+        ),
+        annotation="",
+    )
+    monkeypatch.setattr(
+        LoadedResource,
+        "get_visible_local_context_registry",
+        lambda self, node_path: {local_context.context_name: local_context},
+    )
+    monkeypatch.setattr(
+        search_module,
+        "sklearn_cosine_similarity",
+        lambda left, right: [[0.9]],
+    )
+    search = OrchestratorResourceSearch(loaded)
+    request = GoalSearchRequest(
+        goal=_goal("customer group name"),
+        tier=ResourceTier.VISIBLE_VALUE,
+        keywords=["customer group name"],
+        node_path="root/customer",
+    )
+
+    candidates = search.search(request)
+
+    assert "local.cust_grp_name" in [item.candidate_id for item in candidates]
+
+
 def test_bo_field_search_marks_key_and_returns_matching_field():
     search = OrchestratorResourceSearch(_loaded_resource())
     request = GoalSearchRequest(
@@ -213,6 +290,41 @@ def test_bo_field_search_marks_key_and_returns_matching_field():
         ("BB_DIC_CUSTGRP", "CUST_GRP_NAME")
     ]
     assert candidates[0].is_key is False
+
+
+def test_bo_field_search_is_limited_by_selected_bo_domains():
+    loaded = _loaded_resource()
+    loaded.bo_registry["BB_BILL_CUSTGRP"].property_list.append(
+        PropertyTerm(
+            field_name="CUST_GRP_NAME",
+            description="bill customer group name",
+            data_type=DataTypeEnum.basic,
+            data_type_name="string",
+        )
+    )
+    selector_calls = []
+
+    def bo_domain_selector(*, query, bo_domains, request):
+        selector_calls.append((query, bo_domains, request))
+        return ["BB_BILL_CUSTGRP"]
+
+    search = OrchestratorResourceSearch(
+        loaded,
+        bo_domain_selector=bo_domain_selector,
+    )
+    request = GoalSearchRequest(
+        goal=_goal("customer group name"),
+        tier=ResourceTier.BO_FIELD,
+        keywords=["CUST_GRP_NAME"],
+    )
+
+    candidates = search.search(request)
+
+    assert selector_calls
+    assert set(selector_calls[0][1]) == {"BB_DIC_CUSTGRP", "BB_BILL_CUSTGRP"}
+    assert [(item.bo_name, item.field_name) for item in candidates] == [
+        ("BB_BILL_CUSTGRP", "CUST_GRP_NAME")
+    ]
 
 
 def test_bo_field_search_expands_logic_and_extattr_properties():
@@ -514,6 +626,59 @@ def test_naming_sql_and_function_candidates_expose_real_inputs():
     assert [item.name for item in function_candidates[0].required_inputs] == [
         "custGrpId"
     ]
+
+
+def test_function_search_delegates_all_compatible_function_summaries_to_selector():
+    loaded = _loaded_resource()
+    loaded.function_registry["BuildInvoiceName"] = FunctionRegistry(
+        resource_id="fn.invoice_name",
+        func_name="BuildInvoiceName",
+        func_desc="build invoice display name",
+        func_class="BillingDomain",
+        return_type=ReturnTypeTerm(
+            data_type=DataTypeEnum.basic,
+            data_type_name="string",
+            is_list=False,
+        ),
+    )
+    loaded.function_registry["BuildCustomerCount"] = FunctionRegistry(
+        resource_id="fn.customer_count",
+        func_name="BuildCustomerCount",
+        func_desc="count customers",
+        func_class="CustomerDomain",
+        return_type=ReturnTypeTerm(
+            data_type=DataTypeEnum.basic,
+            data_type_name="long",
+            is_list=False,
+        ),
+    )
+    selector_calls = []
+
+    def function_selector(*, query, functions, request):
+        selector_calls.append((query, functions, request))
+        return ["fn.invoice_name"]
+
+    search = OrchestratorResourceSearch(
+        loaded,
+        function_selector=function_selector,
+        embedding_client=FakeEmbeddingClient(failure=AssertionError("function must not embed")),
+    )
+    request = GoalSearchRequest(
+        goal=_goal("invoice display name", "string"),
+        tier=ResourceTier.FUNCTION,
+        keywords=["display name"],
+    )
+
+    candidates = search.search(request)
+
+    assert [item.candidate_id for item in candidates] == ["fn.invoice_name"]
+    assert [item["resource_id"] for item in selector_calls[0][1]] == [
+        "fn.cust_group_name",
+        "fn.invoice_name",
+    ]
+    assert selector_calls[0][1][1]["domain"] == "BillingDomain"
+    assert selector_calls[0][1][1]["name"] == "BuildInvoiceName"
+    assert selector_calls[0][1][1]["description"] == "build invoice display name"
 
 
 def test_function_filters_incompatible_return_type_before_embedding():

@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+import json
 import math
 import re
 from typing import Any
 
 from sklearn.metrics.pairwise import cosine_similarity as sklearn_cosine_similarity
 
+from agent.llm.generate_by_llm import generate_by_llm
 from agent.expression_generation.type_system import TypeDef, TypeRef
 from agent.resource_manager.loader.namingsql_profile_loader import NamingSqlProfileLoader
 from agent.resource_manager.loader.registry_models import (
@@ -31,6 +33,8 @@ class OrchestratorResourceSearch:
         *,
         naming_sql_retriever: Any = None,
         embedding_client: Any = None,
+        function_selector: Any = None,
+        bo_domain_selector: Any = None,
         embedding_batch_size: int | None = None,
         bo_search_batch_size: int = 64,
         bo_search_max_workers: int = 4,
@@ -38,6 +42,8 @@ class OrchestratorResourceSearch:
         self.loaded_resource = loaded_resource
         self.naming_sql_retriever = naming_sql_retriever
         self.embedding_client = embedding_client
+        self.function_selector = function_selector
+        self.bo_domain_selector = bo_domain_selector
         self.embedding_batch_size = _resolve_embedding_batch_size(
             embedding_client,
             embedding_batch_size,
@@ -92,7 +98,8 @@ class OrchestratorResourceSearch:
                 continue
             ranked.append(
                 (
-                    rank,
+                    rank[0],
+                    -rank[1],
                     index,
                     ResourceCandidate(
                         candidate_id=resource.resource_id,
@@ -103,15 +110,16 @@ class OrchestratorResourceSearch:
                     ),
                 )
             )
-        ranked.sort(key=lambda item: (item[0], item[1]))
-        return [item[2] for item in ranked[: request.limit]]
+        ranked.sort(key=lambda item: (item[0], item[1], item[2]))
+        return [item[3] for item in ranked[: request.limit]]
 
     def _search_bo_fields(self, request: GoalSearchRequest) -> list[ResourceCandidate]:
         positives = _unique_nonempty([*request.keywords, *request.aliases])
+        allowed_bo_names = self._select_bo_names_for_field_search(request)
         bo_entries = [
             (index, bo)
             for index, bo in enumerate(self.loaded_resource.bo_registry.values())
-            if not request.target_bo_name or bo.bo_name == request.target_bo_name
+            if bo.bo_name in allowed_bo_names
         ]
         ranked = []
         batches = list(_batches(bo_entries, self.bo_search_batch_size))
@@ -290,6 +298,11 @@ class OrchestratorResourceSearch:
                     sql.sql_name,
                     sql.sql_description or "",
                     sql.label_name or "",
+                    sql.sql_command or "",
+                    " ".join(
+                        item.linked_field_name or item.param_name
+                        for item in sql.param_list
+                    ),
                 ]
             )
             if request.keywords and not _matches(text, request):
@@ -329,6 +342,17 @@ class OrchestratorResourceSearch:
             if _contains_negative(text, request.negative_keywords):
                 continue
             entries.append((function, text))
+        selected = self._select_functions_with_llm(request, [item[0] for item in entries])
+        if selected:
+            by_id = {function.resource_id: function for function, _ in entries}
+            result = []
+            for resource_id in selected:
+                function = by_id.get(resource_id)
+                if function is None:
+                    continue
+                result.append(_function_candidate(function, evidence="function LLM selector match"))
+            if result:
+                return result[: min(request.limit, 20)]
         scores = self._semantic_scores(request, [item[1] for item in entries])
         ranked = []
         for index, (function, text) in enumerate(entries):
@@ -341,31 +365,13 @@ class OrchestratorResourceSearch:
                     0 if lexical else 1,
                     -(semantic_score if semantic_score is not None else -1.0),
                     index,
-                    ResourceCandidate(
-                        candidate_id=function.resource_id,
-                        kind="function",
-                        resource=function,
-                        return_type=ReturnType(
-                            data_type=function.return_type.data_type.value,
-                            data_type_name=function.return_type.data_type_name,
-                            is_list=function.return_type.is_list,
-                        ),
-                        required_inputs=[
-                            ResourceInput(
-                                name=param.param_name,
-                                return_type=ReturnType(
-                                    data_type=param.data_type.value,
-                                    data_type_name=param.data_type_name,
-                                    is_list=param.is_list,
-                                ),
-                            )
-                            for param in function.param_list
-                        ],
-                        evidence=[
+                    _function_candidate(
+                        function,
+                        evidence=(
                             "function lexical match"
                             if lexical
                             else "function semantic coarse match"
-                        ],
+                        ),
                         metadata=(
                             {"embedding_similarity": semantic_score}
                             if semantic_score is not None
@@ -376,6 +382,53 @@ class OrchestratorResourceSearch:
             )
         ranked.sort(key=lambda item: item[:3])
         return [item[3] for item in ranked[: min(request.limit, 20)]]
+
+    def _select_functions_with_llm(
+        self,
+        request: GoalSearchRequest,
+        functions: list[Any],
+    ) -> list[str]:
+        if self.function_selector is None or not functions:
+            return []
+        summaries = [_function_summary(function) for function in functions]
+        try:
+            selected = self.function_selector(
+                query=_selector_query(request),
+                functions=summaries,
+                request=request,
+            )
+        except Exception:
+            return []
+        if isinstance(selected, dict):
+            selected = selected.get("resource_ids") or selected.get("function_ids")
+        return [
+            str(item)
+            for item in (selected or [])
+            if isinstance(item, str) and item
+        ]
+
+    def _select_bo_names_for_field_search(self, request: GoalSearchRequest) -> set[str]:
+        if request.target_bo_name:
+            return {request.target_bo_name}
+        all_names = [bo.bo_name for bo in self.loaded_resource.bo_registry.values()]
+        if self.bo_domain_selector is None:
+            return set(all_names)
+        try:
+            selected = self.bo_domain_selector(
+                query=_selector_query(request),
+                bo_domains=list(self.loaded_resource.domain_registry.bo_domains or all_names),
+                request=request,
+            )
+        except Exception:
+            return set(all_names)
+        if isinstance(selected, dict):
+            selected = selected.get("bo_names") or selected.get("domains")
+        allowed = {
+            str(item)
+            for item in (selected or [])
+            if isinstance(item, str) and item in set(all_names)
+        }
+        return allowed or set(all_names)
 
     def _semantic_scores(
         self,
@@ -567,7 +620,7 @@ def _context_match_rank(
     *,
     annotation: str,
     tags: list[str],
-) -> int | None:
+) -> tuple[int, float] | None:
     name = _normalize_path(context_name)
     stripped = _strip_context_prefix(name)
     segments = [item for item in stripped.split(".") if item]
@@ -583,17 +636,31 @@ def _context_match_rank(
         query = _normalize_path(value)
         query_stripped = _strip_context_prefix(query)
         if query == name:
-            return 0
+            return 0, 1.0
         if query_stripped and query_stripped == stripped:
-            return 1
+            return 1, 1.0
         if query_stripped and stripped.endswith(f".{query_stripped}"):
-            return 2
+            return 2, 1.0
         if query_stripped and segments and query_stripped == segments[-1]:
-            return 3
+            return 3, 1.0
     annotation_text = " ".join([annotation, *tags])
     if _matches(annotation_text, request):
-        return 4
+        return 4, 1.0
+    score = _keyword_cosine_score(
+        " ".join([context_name, annotation, *tags]),
+        positives,
+    )
+    if score >= 0.75:
+        return 5, score
     return None
+
+
+def _keyword_cosine_score(text: str, keywords: list[str]) -> float:
+    left = _name_tokens(text)
+    right = _name_tokens(" ".join(keywords))
+    if not left or not right:
+        return 0.0
+    return _token_cosine(left, right)
 
 
 def _function_search_text(function: Any) -> str:
@@ -614,6 +681,153 @@ def _function_search_text(function: Any) -> str:
         f"类别：{function.func_class} 标签：{' '.join(function.tag)} "
         f"输入：{inputs} 输出：{output}"
     )
+
+
+def _function_summary(function: Any) -> dict[str, Any]:
+    return {
+        "resource_id": function.resource_id,
+        "domain": function.func_class,
+        "name": function.func_name,
+        "description": function.func_desc,
+        "tags": list(function.tag),
+        "params": [
+            {
+                "name": param.param_name,
+                "data_type": param.data_type.value,
+                "data_type_name": param.data_type_name,
+                "is_list": param.is_list,
+            }
+            for param in function.param_list
+        ],
+        "return_type": {
+            "data_type": function.return_type.data_type.value,
+            "data_type_name": function.return_type.data_type_name,
+            "is_list": function.return_type.is_list,
+        },
+    }
+
+
+def _function_candidate(
+    function: Any,
+    *,
+    evidence: str,
+    metadata: dict[str, Any] | None = None,
+) -> ResourceCandidate:
+    return ResourceCandidate(
+        candidate_id=function.resource_id,
+        kind="function",
+        resource=function,
+        return_type=ReturnType(
+            data_type=function.return_type.data_type.value,
+            data_type_name=function.return_type.data_type_name,
+            is_list=function.return_type.is_list,
+        ),
+        required_inputs=[
+            ResourceInput(
+                name=param.param_name,
+                return_type=ReturnType(
+                    data_type=param.data_type.value,
+                    data_type_name=param.data_type_name,
+                    is_list=param.is_list,
+                ),
+            )
+            for param in function.param_list
+        ],
+        evidence=[evidence],
+        metadata=metadata or {},
+    )
+
+
+def _selector_query(request: GoalSearchRequest) -> str:
+    return " ".join(
+        _unique_nonempty(
+            [
+                request.query,
+                request.goal.semantic_name,
+                request.target_bo_name or "",
+                request.target_field_name or "",
+                *request.keywords,
+                *request.aliases,
+            ]
+        )
+    )
+
+
+class LLMFunctionSelector:
+    def __init__(self, *, decision_fn: Any = generate_by_llm) -> None:
+        self.decision_fn = decision_fn
+
+    def __call__(
+        self,
+        *,
+        query: str,
+        functions: list[dict[str, Any]],
+        request: GoalSearchRequest,
+    ) -> list[str]:
+        raw = self.decision_fn(
+            prompt_template="spec_orchestrator_function_search",
+            llm_name="base",
+            lang="zh",
+            query=query[:4000],
+            goal_json=json.dumps(
+                request.goal.model_dump(mode="json"),
+                ensure_ascii=False,
+                default=str,
+            )[:4000],
+            functions_json=json.dumps(
+                functions,
+                ensure_ascii=False,
+                default=str,
+                separators=(",", ":"),
+            )[:20000],
+        )
+        return _selected_strings(raw, keys=("resource_ids", "function_ids"))
+
+
+class LLMBoDomainSelector:
+    def __init__(self, *, decision_fn: Any = generate_by_llm) -> None:
+        self.decision_fn = decision_fn
+
+    def __call__(
+        self,
+        *,
+        query: str,
+        bo_domains: list[str],
+        request: GoalSearchRequest,
+    ) -> list[str]:
+        raw = self.decision_fn(
+            prompt_template="spec_orchestrator_bo_domain_search",
+            llm_name="base",
+            lang="zh",
+            query=query[:4000],
+            goal_json=json.dumps(
+                request.goal.model_dump(mode="json"),
+                ensure_ascii=False,
+                default=str,
+            )[:4000],
+            bo_domains_json=json.dumps(
+                bo_domains,
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )[:12000],
+        )
+        return _selected_strings(raw, keys=("bo_names", "domains"))
+
+
+def _selected_strings(raw: Any, *, keys: tuple[str, ...]) -> list[str]:
+    if isinstance(raw, dict):
+        values = []
+        for key in keys:
+            if isinstance(raw.get(key), list):
+                values = raw[key]
+                break
+    else:
+        values = raw
+    return [
+        str(item)
+        for item in (values or [])
+        if isinstance(item, str) and item
+    ]
 
 
 def _property_name_match(

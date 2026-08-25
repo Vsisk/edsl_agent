@@ -435,6 +435,83 @@ def test_failed_candidate_dependency_rolls_back_and_tries_next_candidate():
     assert any(item["action"] == "rollback" for item in result.resolution_trace)
 
 
+def test_resolved_requirement_is_reused_as_resource_for_later_parameter():
+    shared_id = _candidate("ctx.customer_id", kind="context", type_name="long")
+    root_function = _candidate(
+        "fn.requires_same_id_twice",
+        kind="function",
+        inputs=[
+            ResourceInput(
+                name="CUSTOMER_ID",
+                return_type=ReturnType(
+                    data_type="basic", data_type_name="long", is_list=False
+                ),
+            ),
+            ResourceInput(
+                name="customer_id",
+                return_type=ReturnType(
+                    data_type="basic", data_type_name="long", is_list=False
+                ),
+            ),
+        ],
+    )
+    semantic = FakeSemantic(
+        _goal("customer display"),
+        {
+            ("customer display", ResourceTier.FUNCTION): CoverageDecision(
+                kind=CoverageKind.DEPENDENCY_COVER,
+                selected_candidate_id=root_function.candidate_id,
+                missing_inputs=["CUSTOMER_ID", "customer_id"],
+                reason="function needs customer id twice",
+            ),
+            ("CUSTOMER_ID", ResourceTier.VISIBLE_VALUE): CoverageDecision(
+                kind=CoverageKind.DIRECT_COVER,
+                selected_candidate_id=shared_id.candidate_id,
+                reason="context provides customer id",
+            ),
+            ("customer_id", ResourceTier.VISIBLE_VALUE): CoverageDecision(
+                kind=CoverageKind.DIRECT_COVER,
+                selected_candidate_id=shared_id.candidate_id,
+                reason="same semantic dependency",
+            ),
+        },
+    )
+    search = FakeSearch(
+        {
+            ("customer display", ResourceTier.FUNCTION): [root_function],
+            ("CUSTOMER_ID", ResourceTier.VISIBLE_VALUE): [shared_id],
+            ("customer_id", ResourceTier.VISIBLE_VALUE): [shared_id],
+        }
+    )
+
+    result = SpecOrchestrator(semantic=semantic, search=search).resolve(
+        node_info={"node_name": "customer display"},
+        query="generate customer display from customer id",
+        expected_type=_goal("x").expected_type,
+    )
+
+    assert [
+        goal_name
+        for goal_name, tier in search.calls
+        if goal_name.lower() == "customer_id"
+        and tier == ResourceTier.VISIBLE_VALUE
+    ] == ["CUSTOMER_ID"]
+    assert result.root_resolution.bindings == {
+        "CUSTOMER_ID": "root::CUSTOMER_ID",
+        "customer_id": "root::CUSTOMER_ID",
+    }
+    assert [
+        dependency.goal.goal_id
+        for dependency in result.root_resolution.dependencies
+    ] == ["root::CUSTOMER_ID", "root::CUSTOMER_ID"]
+    assert any(
+        item["action"] == "reuse"
+        and item["goal_id"] == "root::customer_id"
+        and item["reused_goal_id"] == "root::CUSTOMER_ID"
+        for item in result.resolution_trace
+    )
+
+
 def test_bo_field_creates_bo_access_dependency_before_commit():
     field = ResourceCandidate(
         candidate_id="bo.customer:field:NAME",

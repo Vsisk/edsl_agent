@@ -226,11 +226,21 @@ class SpecOrchestrator:
         tiers: tuple[ResourceTier, ...],
     ) -> ResolvedGoal | None:
         signature = _goal_signature(goal)
-        if (
-            depth > self.max_depth
-            or state.goal_count >= state.max_goals
-            or signature in stack
-        ):
+        if signature in stack:
+            state.failed_goal_ids.append(goal.goal_id)
+            state.trace.append({"goal_id": goal.goal_id, "action": "budget_or_cycle"})
+            return None
+        cached = state.resolved_by_signature.get(signature)
+        if cached is not None:
+            state.trace.append(
+                {
+                    "goal_id": goal.goal_id,
+                    "action": "reuse",
+                    "reused_goal_id": cached.goal.goal_id,
+                }
+            )
+            return cached
+        if depth > self.max_depth or state.goal_count >= state.max_goals:
             state.failed_goal_ids.append(goal.goal_id)
             state.trace.append({"goal_id": goal.goal_id, "action": "budget_or_cycle"})
             return None
@@ -301,6 +311,7 @@ class SpecOrchestrator:
                     goal.status = GoalStatus.RESOLVED
                     goal.selected_candidate_id = candidate.candidate_id
                     goal.candidate_resolutions = [candidate]
+                    state.resolved_by_signature.setdefault(signature, resolved)
                     state.trace.append(
                         {
                             "goal_id": goal.goal_id,
@@ -364,7 +375,8 @@ class SpecOrchestrator:
             if resolved_bo is None:
                 return None
             dependencies.append(resolved_bo)
-            bindings["__bo__"] = bo_goal.goal_id
+            goal.depends_on.append(resolved_bo.goal.goal_id)
+            bindings["__bo__"] = resolved_bo.goal.goal_id
         if not candidate.required_inputs:
             return ResolvedGoal(
                 goal=goal,
@@ -386,7 +398,6 @@ class SpecOrchestrator:
                 ),
                 expected_type=item.return_type.model_copy(deep=True),
             )
-            goal.depends_on.append(dependency.goal_id)
             resolved = self._resolve_goal(
                 dependency,
                 query=query,
@@ -399,7 +410,8 @@ class SpecOrchestrator:
             if resolved is None:
                 return None
             dependencies.append(resolved)
-            bindings[item.name] = dependency.goal_id
+            goal.depends_on.append(resolved.goal.goal_id)
+            bindings[item.name] = resolved.goal.goal_id
         return ResolvedGoal(
             goal=goal,
             candidate=candidate,
@@ -414,6 +426,7 @@ class _ResolutionState:
         self.goal_count = 0
         self.failed_goal_ids: list[str] = []
         self.trace: list[dict[str, Any]] = []
+        self.resolved_by_signature: dict[tuple[str, str, bool], ResolvedGoal] = {}
 
 
 def _literal_resolution(

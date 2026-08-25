@@ -55,7 +55,11 @@ from agent.resource_manager.loader.resource_loader import LoadedResource, Resour
 from agent.resource_manager.loader.registry_models import ReturnType as RegistryReturnType
 from agent.spec_orchestration.compiler import ResolutionCompiler
 from agent.spec_orchestration.orchestrator import SpecOrchestrator
-from agent.spec_orchestration.search import OrchestratorResourceSearch
+from agent.spec_orchestration.search import (
+    LLMBoDomainSelector,
+    LLMFunctionSelector,
+    OrchestratorResourceSearch,
+)
 from agent.spec_orchestration.semantic import SpecSemanticGateway
 from agent.spec_orchestration.spec_clarity import QuerySpecClarityAnalyzer
 from agent.value_logic_routing import ValueLogicTarget, classify_value_logic_target, is_summary_field
@@ -915,6 +919,8 @@ def _default_spec_orchestrator_factory(
             loaded_resource,
             naming_sql_retriever=NamingSqlSelector(),
             embedding_client=EmbeddingClient(),
+            function_selector=LLMFunctionSelector(),
+            bo_domain_selector=LLMBoDomainSelector(),
         ),
     )
 

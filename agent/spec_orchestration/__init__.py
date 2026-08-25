@@ -12,7 +12,7 @@ from .models import (
     QueryPlanKind,
     ValueGoal,
 )
-from .search import OrchestratorResourceSearch
+from .search import LLMBoDomainSelector, LLMFunctionSelector, OrchestratorResourceSearch
 from .spec_clarity import QuerySpecClarityAnalyzer
 
 __all__ = [
@@ -21,6 +21,8 @@ __all__ = [
     "GoalRole",
     "GoalSearchRequest",
     "GoalStatus",
+    "LLMBoDomainSelector",
+    "LLMFunctionSelector",
     "OrchestratorResourceSearch",
     "ResourceCandidate",
     "ResourceTier",

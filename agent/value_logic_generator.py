@@ -40,6 +40,7 @@ from agent.expression_generation.expression_type_validation import SimpleExpress
 from agent.expression_generation.expression_spec import ExpressionSpec
 from agent.expression_generation.edsl_expression_parser import EDSLExpressionParser
 from agent.models import NodeDef, ValueLogicRequest, ValueLogicResult, ValueLogicSource, ValueReturnType
+from agent.business_context import build_business_path_context
 from agent.environment.namingsql_seletor import NamingSqlSelector
 from agent.context_pack import (
     ContextPack, ContextPackRequest, FastContextResourceRouter, ProjectContext,
@@ -122,6 +123,7 @@ class ValueLogicGenerator:
         sql_param_binder: Callable[..., list[dict[str, Any]] | None] | None = None,
         sql_table_query_counter: Callable[..., int] | None = None,
         expression_comment_generator: ExpressionCommentGenerator | None = None,
+        business_scope_classifier: Any | None = None,
     ):
         if (
             not isinstance(generation_max_attempts, int)
@@ -172,8 +174,15 @@ class ValueLogicGenerator:
             if llm_planner is None
             else NoOpExpressionCommentGenerator()
         )
+        self.business_scope_classifier = business_scope_classifier
 
     def generate(self, request: ValueLogicRequest) -> ValueLogicResult:
+        system_context = build_business_path_context(
+            edsl_tree=request.edsl_tree,
+            node_path=request.node_path,
+            current_node=request.node,
+            scope_classifier=self.business_scope_classifier,
+        ).model_dump(mode="json")
         target = None
         if isinstance(request.node.get("tree_node_type"), str):
             target = classify_value_logic_target(request.node)
@@ -197,6 +206,7 @@ class ValueLogicGenerator:
                 node=request.node,
                 query=request.query,
                 resource_names=resource_names,
+                system_context=system_context,
             ),
             ProjectContext(
                 current_tree=request.edsl_tree,

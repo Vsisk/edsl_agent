@@ -18,7 +18,7 @@ from agent.context_pack.models import (
 )
 
 
-def test_request_has_only_three_fields_and_deduplicates_resources():
+def test_request_has_core_fields_and_deduplicates_resources():
     request = ContextPackRequest(
         node={"node_id": "n1"},
         query="  生成客户姓名  ",
@@ -27,7 +27,32 @@ def test_request_has_only_three_fields_and_deduplicates_resources():
 
     assert request.query == "生成客户姓名"
     assert request.resource_names == [ResourceName.DEV_SKILL, ResourceName.CURRENT_TREE]
-    assert set(request.model_dump()) == {"node", "query", "resource_names"}
+    assert set(request.model_dump()) == {"node", "query", "resource_names", "system_context"}
+    assert request.system_context == {}
+
+
+def test_request_and_pack_accept_system_context_for_downstream_generation():
+    system_context = {
+        "business_path": ["Bill", "AcctInfo"],
+        "business_path_text": "Bill/AcctInfo",
+        "business_level": "acct",
+    }
+
+    request = ContextPackRequest(
+        node={"node_id": "n1"},
+        query="account balance",
+        resource_names=["dev_skill"],
+        system_context=system_context,
+    )
+    pack = ContextPack(
+        status=PackStatus.COMPLETE,
+        request_summary={"query": request.query},
+        current_node=request.node,
+        system_context=request.system_context,
+    )
+
+    assert request.system_context == system_context
+    assert pack.system_context == system_context
 
 
 @pytest.mark.parametrize(

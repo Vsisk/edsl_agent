@@ -13,6 +13,19 @@ def request(resources=("dev_skill", "current_tree")):
     return ContextPackRequest(node={"node_id": "n"}, query="q", resource_names=list(resources))
 
 
+def request_with_system_context(resources=("dev_skill", "current_tree")):
+    return ContextPackRequest(
+        node={"node_id": "n"},
+        query="q",
+        resource_names=list(resources),
+        system_context={
+            "business_path": ["Bill", "AcctInfo"],
+            "business_path_text": "Bill/AcctInfo",
+            "business_level": "acct",
+        },
+    )
+
+
 def item(item_id, resource, authority, *, fact_value=None, exact=False, size=10, rank=1):
     facts = [] if fact_value is None else [ContextFact(key="customer.name.type", value=fact_value)]
     evidence = [RetrievalEvidence(
@@ -88,3 +101,17 @@ def test_builder_rejects_item_from_wrong_resource():
         assert "resource mismatch" in str(error)
     else:
         raise AssertionError("expected resource mismatch")
+
+
+def test_builder_preserves_request_system_context():
+    pack = ContextPackBuilder().build(
+        request_with_system_context(("dev_skill",)),
+        [section("dev_skill", items=[item("rule", "dev_skill", "normative")])],
+    )
+
+    assert pack.system_context == {
+        "business_path": ["Bill", "AcctInfo"],
+        "business_path_text": "Bill/AcctInfo",
+        "business_level": "acct",
+    }
+    assert pack.request_summary["system_context"]["business_level"] == "acct"

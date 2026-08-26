@@ -88,11 +88,12 @@ def request(route=True):
         structured_spec={"requires_naming_sql": route, "bo_name": "BB_BAK_TRANS"}, edsl_tree=sample_edsl_tree_payload())
 
 
-def generator(factory, planner, context_pack_manager=None, context_resource_router=None):
+def generator(factory, planner, context_pack_manager=None, context_resource_router=None, business_scope_classifier=None):
     return ValueLogicGenerator(resource_loader=ResourceLoader(), llm_planner=planner,
         naming_sql_selector_factory=factory,
         resource_filter_target_generator=Targets(), context_pack_manager=context_pack_manager,
-        context_resource_router=context_resource_router)
+        context_resource_router=context_resource_router,
+        business_scope_classifier=business_scope_classifier)
 
 
 class BranchSpyGenerator(ValueLogicGenerator):
@@ -331,7 +332,8 @@ class CapturingPacks:
     def build(self, pack_request, project_context):
         self.calls.append((pack_request, project_context))
         self.pack = ContextPack(status="complete", request_summary={"query": pack_request.query},
-                                current_node=pack_request.node)
+                                current_node=pack_request.node,
+                                system_context=pack_request.system_context)
         return self.pack
 
 
@@ -345,6 +347,57 @@ def test_context_pack_is_built_once_and_fixed_resources_are_always_used():
     assert packs.calls[0][0].resource_names == ["dev_skill", "ootb_edsl"]
     assert packs.pack is not None
     assert planner.calls[0]["context_pack"] is packs.pack
+
+
+def test_generator_builds_business_path_system_context_from_request_node_path():
+    class ScopeClassifier:
+        def __init__(self): self.calls = []
+        def classify(self, **kwargs):
+            self.calls.append(kwargs)
+            return "sub"
+
+    tree = {
+        "mapping_content": {
+            "xml_name_property": {"xml_name": "Bill"},
+            "children": [
+                {
+                    "xml_name_property": {"xml_name": "AcctInfo"},
+                    "children": [
+                        {
+                            "xml_name_property": {"xml_name": "Subscriber"},
+                            "children": [
+                                {
+                                    "node_id": "service-no",
+                                    "name": "service-no",
+                                    "xml_name_property": {"xml_name": "ServiceNo"},
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ],
+        }
+    }
+    node = tree["mapping_content"]["children"][0]["children"][0]["children"][0]
+    value_request = request(False).model_copy(update={
+        "node_path": "$.mapping_content.children[0].children[0].children[0]",
+        "node": node,
+        "edsl_tree": tree,
+    })
+    packs = CapturingPacks()
+    planner = Planner(fetch=False)
+    scope_classifier = ScopeClassifier()
+
+    generator(lambda loaded: (_ for _ in ()).throw(AssertionError()), planner,
+              packs, ContextRoute(False), scope_classifier).generate(value_request)
+
+    system_context = packs.calls[0][0].system_context
+    assert system_context["business_path"] == ["Bill", "AcctInfo", "Subscriber", "ServiceNo"]
+    assert system_context["business_path_text"] == "Bill/AcctInfo/Subscriber/ServiceNo"
+    assert system_context["business_level"] == "sub"
+    assert system_context["business_scope"] == "sub"
+    assert scope_classifier.calls[0]["node_path"] == "$.mapping_content.children[0].children[0].children[0]"
+    assert planner.calls[0]["context_pack"].system_context == system_context
 
 
 @pytest.mark.skip(reason="obsolete ContextPack selector request contract removed")

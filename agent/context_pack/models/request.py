@@ -1,7 +1,7 @@
 from enum import Enum
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class ResourceName(str, Enum):
@@ -16,6 +16,7 @@ class ContextPackRequest(BaseModel):
     node: dict[str, Any]
     query: str
     resource_names: list[ResourceName]
+    system_context: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("node")
     @classmethod

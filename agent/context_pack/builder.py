@@ -41,8 +41,10 @@ class ContextPackBuilder:
             request_summary={
                 "query": request.query,
                 "resource_names": [name.value for name in request.resource_names],
+                "system_context": request.system_context,
             },
             current_node=request.node,
+            system_context=request.system_context,
             sections=bounded,
             conflicts=conflicts,
             warnings=[warning for section in bounded for warning in section.warnings],

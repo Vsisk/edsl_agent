@@ -107,6 +107,7 @@ class ContextPack(StrictModel):
     status: PackStatus
     request_summary: dict[str, Any]
     current_node: dict[str, Any]
+    system_context: dict[str, Any] = Field(default_factory=dict)
     sections: list[ContextSection] = Field(default_factory=list)
     conflicts: list[ContextConflict] = Field(default_factory=list)
     warnings: list[ContextWarning] = Field(default_factory=list)

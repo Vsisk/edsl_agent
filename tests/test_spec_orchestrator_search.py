@@ -156,6 +156,50 @@ def _loaded_resource():
     )
 
 
+def _loaded_charge_resource(sql_command: str, *, param_name: str = "CATEGORY", metadata_is_list: bool = False):
+    return LoadedResource(
+        context_registry={},
+        bo_registry={
+            "BB_BILL_CHARGE": BoRegistry(
+                resource_id="bo.charge",
+                bo_name="BB_BILL_CHARGE",
+                bo_desc="账单费用",
+                property_list=[
+                    PropertyTerm(
+                        field_name="CATEGORY",
+                        description="C01表示租费，C02表示一次性费用",
+                        data_type=DataTypeEnum.basic,
+                        data_type_name="string",
+                    ),
+                    PropertyTerm(
+                        field_name="AMOUNT",
+                        description="费用金额",
+                        data_type=DataTypeEnum.basic,
+                        data_type_name="long",
+                    ),
+                ],
+                naming_sql_list=[
+                    NamingSqlDefTerm(
+                        naming_sql_id="sql.charge",
+                        sql_name="QUERY_CHARGE",
+                        sql_command=sql_command,
+                        param_list=[
+                            ParamTerm(
+                                param_name=param_name,
+                                data_type_name="string",
+                                is_list=metadata_is_list,
+                            )
+                        ],
+                    )
+                ],
+            )
+        },
+        function_registry={},
+        edsl_tree={},
+        domain_registry=DomainRegistry(),
+    )
+
+
 def _goal(name="客户组名称", type_name="string"):
     return ValueGoal(
         goal_id="root",
@@ -182,6 +226,106 @@ def test_context_search_only_returns_canonical_matching_context():
     assert [item.candidate_id for item in candidates] == ["ctx.invoice_id"]
     assert candidates[0].resource is loaded.context_registry["$ctx$.invoice.invoiceId"]
     assert embedding.calls == []
+
+
+def test_naming_sql_search_infers_list_param_from_template_in_and_not_in():
+    for template in ["${in,:CATEGORY}", "${not_in,:CATEGORY}"]:
+        loaded = _loaded_charge_resource(
+            f"SELECT CATEGORY FROM BB_BILL_CHARGE WHERE CATEGORY {template}"
+        )
+        search = OrchestratorResourceSearch(loaded)
+
+        candidates = search.search(
+            GoalSearchRequest(
+                goal=_goal("账单费用", "BB_BILL_CHARGE"),
+                tier=ResourceTier.BO_ACCESS,
+                target_bo_name="BB_BILL_CHARGE",
+                keywords=["QUERY_CHARGE"],
+            )
+        )
+
+        param = candidates[0].resource.param_list[0]
+        assert param.is_list is True
+        assert candidates[0].required_inputs[0].return_type.is_list is True
+
+
+def test_naming_sql_search_logs_metadata_cardinality_conflict(caplog):
+    loaded = _loaded_charge_resource(
+        "SELECT CATEGORY FROM BB_BILL_CHARGE WHERE CATEGORY ${in,:CATEGORY}",
+        metadata_is_list=False,
+    )
+
+    OrchestratorResourceSearch(loaded).search(
+        GoalSearchRequest(
+            goal=_goal("账单费用", "BB_BILL_CHARGE"),
+            tier=ResourceTier.BO_ACCESS,
+            target_bo_name="BB_BILL_CHARGE",
+            keywords=["QUERY_CHARGE"],
+        )
+    )
+
+    assert "metadata conflicts with SQL usage" in caplog.text
+
+
+def test_naming_sql_search_infers_single_param_from_comparison():
+    for operator in ["=", "<>", ">", ">=", "<", "<="]:
+        loaded = _loaded_charge_resource(
+            f"SELECT CATEGORY FROM BB_BILL_CHARGE WHERE CATEGORY {operator} :CATEGORY",
+            metadata_is_list=True,
+        )
+        candidates = OrchestratorResourceSearch(loaded).search(
+            GoalSearchRequest(
+                goal=_goal("账单费用", "BB_BILL_CHARGE"),
+                tier=ResourceTier.BO_ACCESS,
+                target_bo_name="BB_BILL_CHARGE",
+                keywords=["QUERY_CHARGE"],
+            )
+        )
+
+        assert candidates[0].resource.param_list[0].is_list is False
+        assert candidates[0].required_inputs[0].return_type.is_list is False
+
+
+def test_naming_sql_search_binds_param_to_sql_left_field_when_names_differ():
+    loaded = _loaded_charge_resource(
+        "SELECT CATEGORY FROM BB_BILL_CHARGE WHERE CATEGORY ${in,:CHARGE_TYPE}",
+        param_name="CHARGE_TYPE",
+    )
+
+    candidates = OrchestratorResourceSearch(loaded).search(
+        GoalSearchRequest(
+            goal=_goal("账单费用", "BB_BILL_CHARGE"),
+            tier=ResourceTier.BO_ACCESS,
+            target_bo_name="BB_BILL_CHARGE",
+            keywords=["QUERY_CHARGE"],
+        )
+    )
+
+    param = candidates[0].resource.param_list[0]
+    assert param.is_list is True
+    assert param.linked_field_name == "CATEGORY"
+    assert candidates[0].metadata["param_field_contexts"]["CHARGE_TYPE"] == {
+        "field_name": "CATEGORY",
+        "description": "C01表示租费，C02表示一次性费用",
+    }
+
+
+def test_naming_sql_search_leaves_linked_field_empty_for_unsupported_usage():
+    loaded = _loaded_charge_resource(
+        "SELECT CATEGORY FROM BB_BILL_CHARGE WHERE NVL(CATEGORY, 'X') = :CATEGORY"
+    )
+
+    candidates = OrchestratorResourceSearch(loaded).search(
+        GoalSearchRequest(
+            goal=_goal("账单费用", "BB_BILL_CHARGE"),
+            tier=ResourceTier.BO_ACCESS,
+            target_bo_name="BB_BILL_CHARGE",
+            keywords=["QUERY_CHARGE"],
+        )
+    )
+
+    assert candidates[0].resource.param_list[0].linked_field_name is None
+    assert candidates[0].metadata["param_field_contexts"] == {}
 
 
 def test_context_search_matches_canonical_path_suffix_without_embedding():

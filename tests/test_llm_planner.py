@@ -266,6 +266,47 @@ class LLMPlannerTest(unittest.TestCase):
         for forbidden in ("internal-candidate", "confidence", "reason", "fallback_candidates", "rejected_candidates", "sql_command"):
             self.assertNotIn(forbidden, client.calls[0]["prompt"])
 
+    def test_plan_with_naming_sql_selection_does_not_expose_field_context_description(self):
+        client = FakeClient(['{"nodes":[{"type":"return","value":{"type":"literal","value":null}}]}'])
+        env = FilteredEnvironment(
+            selected_bos=[
+                Resource(
+                    resource_id="bo.1",
+                    bo_name="Charge",
+                    bo_desc="",
+                    property_list=[
+                        Resource(
+                            field_name="CATEGORY",
+                            description="C02表示一次性费用",
+                            data_type_name="String",
+                        )
+                    ],
+                    naming_sql_list=[
+                        Resource(
+                            sql_name="FindCharge",
+                            sql_description="",
+                            param_list=[
+                                Resource(
+                                    param_name="CATEGORY",
+                                    data_type_name="String",
+                                    field_context={
+                                        "field_name": "CATEGORY",
+                                        "description": "C02表示一次性费用",
+                                    },
+                                )
+                            ],
+                        )
+                    ],
+                )
+            ],
+            naming_sql_selection=_selection(),
+        )
+
+        LLMPlanner(client=client).plan(node_info=_node_info(), user_query="find", filtered_env=env)
+
+        self.assertNotIn("C02表示一次性费用", client.calls[0]["prompt"])
+        self.assertNotIn("field_context", client.calls[0]["prompt"])
+
     def test_plan_without_selection_omits_selection_summary(self):
         client = FakeClient(['{"nodes":[{"type":"return","value":{"type":"literal","value":null}}]}'])
         LLMPlanner(client=client).plan(node_info=_node_info(), user_query="x", filtered_env=FilteredEnvironment())

@@ -10,7 +10,11 @@ from sklearn.metrics.pairwise import cosine_similarity as sklearn_cosine_similar
 
 from agent.llm.generate_by_llm import generate_by_llm
 from agent.expression_generation.type_system import TypeDef, TypeRef
-from agent.resource_manager.loader.namingsql_profile_loader import NamingSqlProfileLoader
+from agent.resource_manager.loader.namingsql_profile_loader import (
+    NamingSqlProfileLoader,
+    enrich_naming_sql_definition,
+    naming_sql_param_field_contexts,
+)
 from agent.resource_manager.loader.registry_models import (
     DataTypeEnum,
     PropertyTerm,
@@ -292,16 +296,18 @@ class OrchestratorResourceSearch:
             sql_defs = [item for item in sql_defs if item.sql_name in selected_names]
         result = []
         for sql in sql_defs:
+            effective_sql = enrich_naming_sql_definition(sql, bo)
+            param_field_contexts = naming_sql_param_field_contexts(effective_sql, bo)
             text = " ".join(
                 [
-                    sql.naming_sql_id,
-                    sql.sql_name,
-                    sql.sql_description or "",
-                    sql.label_name or "",
-                    sql.sql_command or "",
+                    effective_sql.naming_sql_id,
+                    effective_sql.sql_name,
+                    effective_sql.sql_description or "",
+                    effective_sql.label_name or "",
+                    effective_sql.sql_command or "",
                     " ".join(
                         item.linked_field_name or item.param_name
-                        for item in sql.param_list
+                        for item in effective_sql.param_list
                     ),
                 ]
             )
@@ -311,7 +317,7 @@ class OrchestratorResourceSearch:
                 ResourceCandidate(
                     candidate_id=f"naming_sql:{bo.bo_name}:{sql.naming_sql_id}",
                     kind="naming_sql",
-                    resource=sql,
+                    resource=effective_sql,
                     bo_name=bo.bo_name,
                     return_type=ReturnType(
                         data_type="bo", data_type_name=bo.bo_name, is_list=False
@@ -325,10 +331,10 @@ class OrchestratorResourceSearch:
                                 is_list=param.is_list,
                             ),
                         )
-                        for param in sql.param_list
+                        for param in effective_sql.param_list
                     ],
                     evidence=["canonical NamingSQL match"],
-                    metadata={"bo": bo},
+                    metadata={"bo": bo, "param_field_contexts": param_field_contexts},
                 )
             )
         return result

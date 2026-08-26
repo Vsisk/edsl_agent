@@ -55,3 +55,17 @@ def test_loader_excludes_full_scan_where_one_equals_one_profile():
     )
 
     assert profiles == []
+
+
+def test_loader_ignores_select_optimizer_hint_in_return_fields():
+    profile = NamingSqlProfileLoader().load_bo(
+        _bo(
+            "SELECT /*+ INDEX(ORDERS IDX_ORDER_ID) */ ORDER_ID, STATUS "
+            "FROM ORDERS WHERE ORDER_ID = :id"
+        )
+    )[0]
+
+    assert profile.return_fields == ["ORDER_ID", "STATUS"]
+    assert "INDEX" not in profile.return_fields
+    assert "IDX_ORDER_ID" not in profile.return_fields
+    assert "*/" not in profile.return_fields

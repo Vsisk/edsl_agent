@@ -1,5 +1,13 @@
 from agent.environment.environment import FilteredEnvironment
-from agent.resource_manager.loader.registry_models import BoRegistry
+from agent.resource_manager.loader.registry_models import (
+    BoRegistry,
+    ContextRegistry,
+    DataTypeEnum,
+    LocalContextRegistry,
+    ParamTerm,
+    PropertyTypeEnum,
+    ReturnType,
+)
 from agent.value_logic_sql import SqlBranchBoSelector, SqlBranchResolver, SqlParamBinder
 from agent.resource_manager.loader.resource_loader import ResourceLoader
 from tests.test_environment import StaticResourceLoader, bill_statement_context_payload, sample_edsl_tree_payload
@@ -128,3 +136,131 @@ def test_sql_param_binder_accepts_sql_condition_param_shape():
         "param_value": "$ctx$.billStatement.END_DATE",
     }
     assert len(bindings) == len(sql_def.param_list)
+
+
+def test_sql_param_binder_exposes_field_context_description_to_decision_fn():
+    calls = []
+    param = ParamTerm(
+        param_name="CATEGORY",
+        data_type_name="string",
+        linked_field_name="CATEGORY",
+    )
+
+    def decide(**kwargs):
+        calls.append(kwargs)
+        return {"sql_condition": [{"param_name": "CATEGORY", "param_value": "C02"}]}
+
+    bindings = SqlParamBinder(decision_fn=decide).bind(
+        query="获取一次性费用",
+        node={"node_id": "ab"},
+        sql_name="QUERY_CHARGE",
+        params=[param],
+        param_field_contexts={
+            "CATEGORY": {
+                "field_name": "CATEGORY",
+                "description": "C01表示租费，C02表示一次性费用",
+            }
+        },
+        filtered_env=FilteredEnvironment(),
+    )
+
+    assert bindings == [{"param_name": "CATEGORY", "param_value": "C02"}]
+    assert "C02表示一次性费用" in calls[0]["params_json"]
+
+
+def test_sql_param_binder_wraps_single_literal_for_list_param():
+    param = ParamTerm(param_name="CATEGORY", data_type_name="string", is_list=True)
+
+    def decide(**kwargs):
+        return {"sql_condition": [{"param_name": "CATEGORY", "param_value": "C01"}]}
+
+    bindings = SqlParamBinder(decision_fn=decide).bind(
+        query="租费",
+        node={"node_id": "ab"},
+        sql_name="QUERY_CHARGE",
+        params=[param],
+        filtered_env=FilteredEnvironment(),
+    )
+
+    assert bindings == [{"param_name": "CATEGORY", "param_value": ["C01"]}]
+
+
+def test_sql_param_binder_rejects_multiple_literals_for_single_param():
+    param = ParamTerm(param_name="CATEGORY", data_type_name="string", is_list=False)
+
+    def decide(**kwargs):
+        return {"sql_condition": [{"param_name": "CATEGORY", "param_value": ["C01", "C02"]}]}
+
+    bindings = SqlParamBinder(decision_fn=decide).bind(
+        query="费用",
+        node={"node_id": "ab"},
+        sql_name="QUERY_CHARGE",
+        params=[param],
+        filtered_env=FilteredEnvironment(),
+    )
+
+    assert bindings is None
+
+
+def test_sql_param_binder_validates_resource_cardinality():
+    list_param = ParamTerm(param_name="ACCT_ID", data_type_name="string", is_list=True)
+    scalar_context = ContextRegistry(
+        resource_id="ctx.acct_id",
+        context_name="$ctx$.acct.acctId",
+        return_type=ReturnType(data_type="basic", data_type_name="string", is_list=False),
+        property_type=PropertyTypeEnum.system,
+        annotation="账户ID",
+    )
+    list_context = ContextRegistry(
+        resource_id="ctx.acct_ids",
+        context_name="$ctx$.acct.acctIdList",
+        return_type=ReturnType(data_type="basic", data_type_name="string", is_list=True),
+        property_type=PropertyTypeEnum.system,
+        annotation="账户ID列表",
+    )
+
+    def decide_scalar(**kwargs):
+        return {"sql_condition": [{"param_name": "ACCT_ID", "param_value": "$ctx$.acct.acctId"}]}
+
+    def decide_list(**kwargs):
+        return {"sql_condition": [{"param_name": "ACCT_ID", "param_value": "$ctx$.acct.acctIdList"}]}
+
+    assert SqlParamBinder(decision_fn=decide_scalar).bind(
+        query="账户",
+        node={"node_id": "ab"},
+        sql_name="QUERY_ACCT",
+        params=[list_param],
+        filtered_env=FilteredEnvironment(selected_global_contexts=[scalar_context, list_context]),
+    ) is None
+
+    assert SqlParamBinder(decision_fn=decide_list).bind(
+        query="账户",
+        node={"node_id": "ab"},
+        sql_name="QUERY_ACCT",
+        params=[list_param],
+        filtered_env=FilteredEnvironment(selected_global_contexts=[scalar_context, list_context]),
+    ) == [{"param_name": "ACCT_ID", "param_value": "$ctx$.acct.acctIdList"}]
+
+
+def test_sql_param_binder_leaves_unknown_cardinality_resource_empty(caplog):
+    list_param = ParamTerm(param_name="ACCT_ID", data_type_name="string", is_list=True)
+    unknown_context = LocalContextRegistry(
+        resource_id="local.acct_ids",
+        context_name="$local$.acctIds",
+        return_type=None,
+        annotation="账户ID列表",
+    )
+
+    def decide(**kwargs):
+        return {"sql_condition": [{"param_name": "ACCT_ID", "param_value": "$local$.acctIds"}]}
+
+    bindings = SqlParamBinder(decision_fn=decide).bind(
+        query="账户",
+        node={"node_id": "ab"},
+        sql_name="QUERY_ACCT",
+        params=[list_param],
+        filtered_env=FilteredEnvironment(visible_local_context=[unknown_context]),
+    )
+
+    assert bindings == [{"param_name": "ACCT_ID", "param_value": ""}]
+    assert "resource cardinality is unknown" in caplog.text

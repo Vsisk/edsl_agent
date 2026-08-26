@@ -166,6 +166,7 @@ def _summarize_filtered_environment(filtered_env: FilteredEnvironment) -> dict[s
             item = summarize(resource)
             if selection and group_name == "bo":
                 item.pop("naming_sql", None)
+                item.pop("properties", None)
             summary[group_name].append(item)
             if len(_dump_json(summary)) > MAX_RESOURCES_JSON_CHARS:
                 summary[group_name].pop()

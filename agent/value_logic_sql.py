@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from difflib import SequenceMatcher
 from collections.abc import Callable
 from typing import Any
@@ -10,9 +11,17 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from agent.environment.environment import FilteredEnvironment, build_filtered_environment
 from agent.llm.generate_by_llm import generate_by_llm
 from agent.models import NodeDef, ValueLogicResult, ValueLogicSource, ValueReturnType
-from agent.resource_manager.loader.namingsql_profile_loader import NamingSqlProfile, NamingSqlProfileLoader
+from agent.resource_manager.loader.namingsql_profile_loader import (
+    NamingSqlProfile,
+    NamingSqlProfileLoader,
+    enrich_naming_sql_definition,
+    naming_sql_param_field_contexts,
+)
 from agent.resource_manager.loader.resource_loader import LoadedResource
 from agent.resource_manager.loader.registry_models import BoRegistry
+
+
+logger = logging.getLogger(__name__)
 
 
 class SqlBoSelection(BaseModel):
@@ -138,6 +147,7 @@ class SqlParamBinder:
         sql_name: str,
         params: list[Any],
         filtered_env: FilteredEnvironment,
+        param_field_contexts: dict[str, dict[str, Any]] | None = None,
     ) -> list[dict[str, Any]] | None:
         if not params:
             return []
@@ -148,7 +158,7 @@ class SqlParamBinder:
             query=str(query or "")[:4000],
             node_json=_dump(node),
             sql_name=sql_name,
-            params_json=_dump(_param_summaries(params)),
+            params_json=_dump(_param_summaries(params, param_field_contexts)),
             available_context_json=_dump(_available_context(filtered_env)),
         )
         try:
@@ -212,6 +222,7 @@ class SqlBranchResolver:
         sql_def = _find_sql_definition(bo, profile)
         if sql_def is None:
             return None
+        sql_def = enrich_naming_sql_definition(sql_def, bo)
         filtered_env = build_filtered_environment(
             NodeDef(
                 node_id=_node_id(node) or "",
@@ -238,6 +249,7 @@ class SqlBranchResolver:
             query=query,
             node=node,
             sql_def=sql_def,
+            param_field_contexts=naming_sql_param_field_contexts(sql_def, bo),
             filtered_env=filtered_env,
         )
         if sql_params is None:
@@ -299,6 +311,7 @@ class SqlBranchResolver:
         query: str,
         node: dict[str, Any],
         sql_def: Any,
+        param_field_contexts: dict[str, dict[str, Any]] | None,
         filtered_env: FilteredEnvironment,
     ) -> list[dict[str, Any]] | None:
         kwargs = {
@@ -307,7 +320,7 @@ class SqlBranchResolver:
             "sql_name": sql_def.sql_name,
             "params": list(sql_def.param_list or []),
             "filtered_env": filtered_env,
-            "params_json": _dump(_param_summaries(sql_def.param_list or [])),
+            "params_json": _dump(_param_summaries(sql_def.param_list or [], param_field_contexts)),
             "available_context_json": _dump(_available_context(filtered_env)),
         }
         if hasattr(self.param_binder, "bind"):
@@ -317,6 +330,7 @@ class SqlBranchResolver:
                 sql_name=sql_def.sql_name,
                 params=list(sql_def.param_list or []),
                 filtered_env=filtered_env,
+                param_field_contexts=param_field_contexts,
             )
         else:
             raw_bindings = self.param_binder(**kwargs)
@@ -413,15 +427,12 @@ def _normalize_param_bindings(
     filtered_env: FilteredEnvironment,
 ) -> list[dict[str, Any]] | None:
     required = [param.param_name for param in params]
+    params_by_name = {param.param_name: param for param in params}
     by_param = {binding.param_name: binding for binding in bindings}
-    available_values = {
-        item.context_name for item in [
-            *filtered_env.selected_global_contexts,
-            *filtered_env.visible_local_context,
-        ]
-    }
+    available_contexts = _available_context_by_name(filtered_env)
     result: list[dict[str, Any]] = []
     for param_name in required:
+        param = params_by_name[param_name]
         binding = by_param.get(param_name)
         if binding is None:
             result.append(_default_param_binding(param_name))
@@ -429,10 +440,51 @@ def _normalize_param_bindings(
         if binding.param_value is None:
             result.append(_default_param_binding(param_name))
             continue
-        if _looks_like_context(binding.param_value) and binding.param_value not in available_values:
-            result.append(_default_param_binding(param_name))
+        if _looks_like_context(binding.param_value):
+            context = available_contexts.get(str(binding.param_value))
+            if context is None:
+                result.append(_default_param_binding(param_name))
+                continue
+            return_type = getattr(context, "return_type", None)
+            if return_type is None or getattr(return_type, "is_list", None) is None:
+                logger.warning(
+                    "NamingSQL param resource cardinality is unknown: param_name=%s resource=%s",
+                    param_name,
+                    binding.param_value,
+                )
+                result.append(_default_param_binding(param_name))
+                continue
+            if bool(return_type.is_list) != bool(param.is_list):
+                logger.warning(
+                    "PARAM_CARDINALITY_MISMATCH: param_name=%s param_is_list=%s resource=%s resource_is_list=%s",
+                    param_name,
+                    param.is_list,
+                    binding.param_value,
+                    return_type.is_list,
+                )
+                return None
+            result.append({"param_name": param_name, "param_value": binding.param_value})
+            logger.debug(
+                "NamingSQL param final value: param_name=%s param_value=%s",
+                param_name,
+                binding.param_value,
+            )
             continue
-        result.append({"param_name": param_name, "param_value": binding.param_value})
+        normalized = _normalize_literal_cardinality(param, binding.param_value)
+        if normalized is _CARDINALITY_MISMATCH:
+            logger.warning(
+                "PARAM_CARDINALITY_MISMATCH: param_name=%s param_is_list=%s value=%s",
+                param_name,
+                param.is_list,
+                binding.param_value,
+            )
+            return None
+        result.append({"param_name": param_name, "param_value": normalized})
+        logger.debug(
+            "NamingSQL param final value: param_name=%s param_value=%s",
+            param_name,
+            normalized,
+        )
     return result
 
 
@@ -450,16 +502,43 @@ def _param_binding_query(query: str, sql_def: Any) -> str:
     return " ".join(part for part in (query, sql_def.sql_name, param_names) if part)
 
 
-def _param_summaries(params: list[Any]) -> list[dict[str, Any]]:
+def _param_summaries(
+    params: list[Any],
+    param_field_contexts: dict[str, dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    contexts = param_field_contexts or {}
     return [
         {
             "param_name": param.param_name,
             "data_type": getattr(param, "data_type", None),
             "data_type_name": param.data_type_name,
             "is_list": param.is_list,
+            "linked_field_name": getattr(param, "linked_field_name", None),
+            "field_context": contexts.get(param.param_name),
         }
         for param in params
     ]
+
+
+_CARDINALITY_MISMATCH = object()
+
+
+def _normalize_literal_cardinality(param: Any, value: Any) -> Any:
+    if bool(getattr(param, "is_list", False)):
+        return value if isinstance(value, list) else [value]
+    if isinstance(value, list):
+        return _CARDINALITY_MISMATCH
+    return value
+
+
+def _available_context_by_name(filtered_env: FilteredEnvironment) -> dict[str, Any]:
+    return {
+        item.context_name: item
+        for item in [
+            *filtered_env.selected_global_contexts,
+            *filtered_env.visible_local_context,
+        ]
+    }
 
 
 def _available_context(filtered_env: FilteredEnvironment) -> dict[str, list[dict[str, Any]]]:

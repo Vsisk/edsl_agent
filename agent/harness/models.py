@@ -62,6 +62,7 @@ class WorkflowMetadata:
     description: str
     input_schema: dict[str, Any] = field(default_factory=dict)
     output_schema: dict[str, Any] = field(default_factory=dict)
+    visibility: str = "public"
     legacy: bool = False
     tags: tuple[str, ...] = ()
 
@@ -79,4 +80,3 @@ class OperationResult:
 class HarnessRunResult:
     plan: OperationPlan
     results: dict[str, OperationResult]
-

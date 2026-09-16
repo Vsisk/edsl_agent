@@ -49,7 +49,7 @@ from agent.workflows.expression import (
     ExpressionWorkflowResultAdapter,
     create_expression_capability_registries,
 )
-from agent.workflows.value_logic import (
+from agent.workflow.value_logic import (
     ValueLogicExecutionEnvironment,
     ValueLogicWorkflowFactory,
     ValueLogicWorkflowHandler,
@@ -116,6 +116,15 @@ class GenerationContext:
 
 
 class ValueLogicGenerator:
+    """Deprecated legacy adapter.
+
+    The primary execution path is Harness -> WorkflowRegistry -> WorkflowRuntime
+    -> ValueLogicWorkflow. Keep this class only for legacy callers that have not
+    migrated to the Harness workflow entrypoint yet.
+    """
+
+    deprecated = True
+
     def __init__(
         self,
         *,

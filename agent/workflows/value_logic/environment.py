@@ -1,10 +1,3 @@
-from __future__ import annotations
+from agent.workflow.value_logic.models import ValueLogicExecutionEnvironment
 
-from dataclasses import dataclass, field
-from typing import Any
-
-
-@dataclass(frozen=True, slots=True)
-class ValueLogicExecutionEnvironment:
-    request: Any
-    child_run_states: list[Any] = field(default_factory=list)
+__all__ = ["ValueLogicExecutionEnvironment"]

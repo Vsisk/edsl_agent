@@ -2,6 +2,7 @@ from agent.harness.adapters import (
     ExpressionWorkflowAdapter,
     LegacyWorkflowAdapter,
     UnsupportedWorkflowError,
+    WorkflowRuntimeAdapter,
 )
 from agent.harness.models import (
     HarnessContext,
@@ -33,6 +34,7 @@ __all__ = [
     "WorkflowMetadata",
     "WorkflowRegistry",
     "WorkflowRegistration",
+    "WorkflowRuntimeAdapter",
     "RequirementAnalysis",
     "RequirementAnalyzer",
     "WorkflowRouter",

@@ -41,14 +41,19 @@ from agent.expression_generate_op.type_system import TypeRegistry, create_builti
     normalize_return_type
 from agent.expression_generate_op.typed_context import TypedExpressionContextBuilder, TypedExpressionContextBuildInput, \
     TypedExpressionContext
-from agent.expression_workflow import (
+from agent.workflow.core import StageExecutionError
+from agent.workflows.expression import (
     ExpressionExecutionEnvironment,
     ExpressionWorkflowFactory,
     ExpressionWorkflowHandler,
+    ExpressionWorkflowResultAdapter,
+    create_expression_capability_registries,
 )
-from agent.expression_workflow.core import StageExecutionError
-from agent.expression_workflow.expression_capabilities import create_expression_capability_registries
-from agent.expression_workflow.result_adapter import ExpressionWorkflowResultAdapter
+from agent.workflows.value_logic import (
+    ValueLogicExecutionEnvironment,
+    ValueLogicWorkflowFactory,
+    ValueLogicWorkflowHandler,
+)
 from agent.resource_manager.resource_loader import LoadedResource, ResourceLoader
 from agent.resource_manager.registry_models import BoRegistry
 from agent.common.schema_manager.schema_data_class import ReturnType, TreeNodeTerm, DataTypeEnum
@@ -167,6 +172,15 @@ class ValueLogicGenerator:
                 logger=self._logger.logger,
             ),
         )
+        self.value_logic_workflow_handler = ValueLogicWorkflowHandler(
+            workflow_factory=ValueLogicWorkflowFactory(
+                prepare_context_fn=self._prepare_generation_context,
+                resolve_sql_fn=self._resolve_sql_branch,
+                resolve_bo_field_fn=self._resolve_normal_field_logic,
+                summary_fn=self._generate_summary_field_logic,
+                expression_fn=self._generate_expression_by_plan,
+            )
+        )
 
     def _report_progress(self, content: str) -> None:
         """通过 reporter 向前端推送进度信息"""
@@ -229,6 +243,15 @@ class ValueLogicGenerator:
         return ""
 
     def generate(self, request: ValueLogicRequest) -> ValueLogicResult:
+        return self.value_logic_workflow_handler.execute(
+            request=request,
+            environment=ValueLogicExecutionEnvironment(request=request),
+        )
+
+    def _prepare_generation_context(
+        self,
+        request: ValueLogicRequest,
+    ) -> tuple[GenerationContext, ValueLogicTarget | None]:
         # 调用方（intent_router op）已推导 business_scope/business_path_text 时直接复用，
         # 避免重复走 build_business_path_context（含 LLM scope 分类）
         if request.business_path_text or request.business_scope:
@@ -292,13 +315,7 @@ class ValueLogicGenerator:
             context_pack=context_pack,
             target=target,
         )
-
-        # 1) 确定执行分支
-        if target is not None:
-            return self._generate_target_logic(request, ctx, target)
-        if not request.is_ab and (target is None or target.kind == "generic"):
-            return self._generate_expression_by_plan(request, ctx)
-        return self._generate_expression_by_plan(request, ctx)
+        return ctx, target
 
     def _generate_target_logic(
         self,
@@ -306,15 +323,21 @@ class ValueLogicGenerator:
         ctx: GenerationContext,
         target: ValueLogicTarget,
     ) -> ValueLogicResult:
-        if target.primary_branch == "sql":
-            return self._generate_sql_branch(request, ctx)
-        if target.primary_branch == "table_field":
-            return self._generate_normal_field_logic(request, ctx)
-        if target.primary_branch == "summary":
-            return self._generate_summary_field_logic(request, ctx)
-        return self._generate_expression_by_plan(request, ctx)
+        return self.value_logic_workflow_handler.execute(
+            request=request,
+            environment=ValueLogicExecutionEnvironment(request=request),
+        )
 
     def _generate_sql_branch(self, request: ValueLogicRequest, ctx: GenerationContext) -> ValueLogicResult:
+        result = self._resolve_sql_branch(request, ctx)
+        if result is not None:
+            return result
+        return self.value_logic_workflow_handler.execute(
+            request=request,
+            environment=ValueLogicExecutionEnvironment(request=request),
+        )
+
+    def _resolve_sql_branch(self, request: ValueLogicRequest, ctx: GenerationContext) -> ValueLogicResult | None:
         resolver = SqlBranchResolver()
         result = resolver.resolve(
             query=request.query,
@@ -334,7 +357,7 @@ class ValueLogicGenerator:
             }, deep=True)
         if resolver.filtered_env is not None:
             ctx.filtered_env = resolver.filtered_env
-        return self._generate_expression_by_plan(request, ctx)
+        return None
 
     def _generate_summary_field_logic(self, request: ValueLogicRequest, ctx: GenerationContext) -> ValueLogicResult:
         node_name = self._node_name(request.node)
@@ -374,20 +397,29 @@ class ValueLogicGenerator:
         )
 
     def _generate_normal_field_logic(self, request: ValueLogicRequest, ctx: GenerationContext) -> ValueLogicResult:
+        result = self._resolve_normal_field_logic(request, ctx)
+        if result is not None:
+            return result
+        return self.value_logic_workflow_handler.execute(
+            request=request,
+            environment=ValueLogicExecutionEnvironment(request=request),
+        )
+
+    def _resolve_normal_field_logic(self, request: ValueLogicRequest, ctx: GenerationContext) -> ValueLogicResult | None:
         node_name = self._node_name(request.node)
         if not request.node.get("field_id"):
-            return self._generate_expression_by_plan(request, ctx)
+            return None
         self._logger.logger.info(f"[ValueLogicGenerator] Generating normal field logic, node={node_name}")
         if not request.parent_node:
             self._logger.logger.info(f"[ValueLogicGenerator] No parent node, fallthrough to expression by plan")
-            return self._generate_expression_by_plan(request, ctx)
+            return None
 
         parent_node = TreeNodeTerm(**request.parent_node)
         return_type = parent_node.get_return_type()
 
         if not return_type:
             self._logger.logger.info(f"[ValueLogicGenerator] No BO mapping found, fallthrough to expression by plan")
-            return self._generate_expression_by_plan(request, ctx)
+            return None
 
         self._logger.logger.info(f"[ValueLogicGenerator] Resource mapping found: bo_name={return_type.data_type_name}")
         if return_type.data_type == "bo":
@@ -405,7 +437,7 @@ class ValueLogicGenerator:
         if response.get("data_source_type", "") == "expression":
             ctx.bo_field_list = fields_list
             self._logger.logger.info(f"[ValueLogicGenerator] LLM chose expression, proceeding to expression by plan")
-            return self._generate_expression_by_plan(request, ctx)
+            return None
 
         target_field_id = min(int(response.get("table_field_id", 0)), len(fields_list))
         target_field_name = fields_list[target_field_id]["name"]

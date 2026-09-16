@@ -4,13 +4,13 @@ from dataclasses import dataclass, field
 import inspect
 from typing import Any
 
-from agent.expression_workflow.capabilities import (
+from agent.workflow.capabilities import (
     CapabilityRegistries,
     KnowledgeDocument,
     SkillDefinition,
     ToolDefinition,
 )
-from agent.expression_workflow.core import Stage, WorkflowDefinition, WorkflowRunState
+from agent.workflow.core import Stage, WorkflowDefinition, WorkflowRunState
 
 
 @dataclass(frozen=True, slots=True)
@@ -34,6 +34,7 @@ class HarnessContext:
             for name in dir(environment)
             if not name.startswith("_") and not callable(getattr(environment, name))
         }
+        facts["environment"] = environment
         request = facts.get("request")
         return cls(
             site_id=getattr(request, "site_id", None),

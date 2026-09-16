@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Callable
 
-from agent.expression_workflow.capabilities import (
+from agent.workflow.capabilities import (
     CapabilityRegistries,
     KnowledgeDefinition,
     SkillDefinition,
@@ -12,7 +12,7 @@ from agent.expression_workflow.capabilities import (
 
 
 EXPRESSION_WORKFLOW_NAME = "expression_generation"
-_KNOWLEDGE_ROOT = Path(__file__).resolve().parents[2] / "docs" / "knowledge" / "expression"
+_KNOWLEDGE_ROOT = Path(__file__).resolve().parents[3] / "docs" / "knowledge" / "expression"
 
 
 def create_expression_capability_registries(

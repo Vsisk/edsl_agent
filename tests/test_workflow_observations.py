@@ -2,15 +2,17 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from agent.expression_workflow import (
-    ExpressionFailureClassifier,
-    ExpressionObservationCode,
+from agent.workflow import (
     HarnessContext,
     Observation,
     WorkflowDefinition,
     WorkflowRuntime,
 )
-from agent.expression_workflow.core import Stage, StageResult, WorkflowRunState, WorkflowStatus
+from agent.workflow.core import Stage, StageResult, WorkflowRunState, WorkflowStatus
+from agent.workflows.expression import (
+    ExpressionFailureClassifier,
+    ExpressionObservationCode,
+)
 
 
 @dataclass

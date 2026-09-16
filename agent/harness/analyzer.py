@@ -26,13 +26,14 @@ class RequirementAnalyzer:
             token in normalized
             for token in ("取值逻辑", "表达式", "value logic", "expression", "生成对应的取值")
         )
+        value_logic_workflow = "value_logic_generation"
         if wants_node and wants_expression:
             return RequirementAnalysis(
                 query=query,
-                workflows=("node_generation", "expression_generation"),
+                workflows=("node_generation", value_logic_workflow),
                 inputs={
                     "node_generation": {"query": query},
-                    "expression_generation": {"query": query},
+                    value_logic_workflow: {"query": query},
                 },
             )
         if wants_node:
@@ -43,7 +44,6 @@ class RequirementAnalyzer:
             )
         return RequirementAnalysis(
             query=query,
-            workflows=("expression_generation",),
-            inputs={"expression_generation": {"query": query}},
+            workflows=(value_logic_workflow,),
+            inputs={value_logic_workflow: {"query": query}},
         )
-

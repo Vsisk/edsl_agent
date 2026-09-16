@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Literal
+from uuid import uuid4
 
 
 class WorkflowStatus(str, Enum):
@@ -81,6 +82,8 @@ class StageResult:
 class WorkflowRunState:
     workflow_name: str
     workflow_input: dict[str, Any]
+    run_id: str = field(default_factory=lambda: str(uuid4()))
+    parent_run_id: str | None = None
     status: WorkflowStatus = WorkflowStatus.RUNNING
     terminal_reason: str | None = None
     current_stage: str | None = None

@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from agent.expression_workflow.context import ContextPolicy
-from agent.expression_workflow.core import WorkflowDefinition
-from agent.expression_workflow.failure_classifier import ExpressionFailureClassifier
-from agent.expression_workflow.transition import RetryPolicy, TransitionPolicy, TransitionRule
+from agent.workflow.context import ContextPolicy
+from agent.workflow.core import WorkflowDefinition
+from agent.workflow.transition import RetryPolicy, TransitionPolicy, TransitionRule
+from agent.workflows.expression.failure_classifier import ExpressionFailureClassifier
 
 
 class ExpressionWorkflowFactory:

@@ -5,7 +5,7 @@ import hashlib
 import json
 from typing import Any
 
-from agent.expression_workflow.core import StageResult, WorkflowDefinition, WorkflowRunState
+from agent.workflow.core import StageResult, WorkflowDefinition, WorkflowRunState
 
 
 @dataclass(frozen=True, slots=True)
@@ -14,12 +14,16 @@ class TransitionRule:
     to_stage: str | None
     observation_codes: tuple[str, ...] = ()
     result_status: str | None = "failed"
+    output_equals: dict[str, Any] = field(default_factory=dict)
 
     def matches(self, *, stage_name: str, result: StageResult) -> bool:
         if self.from_stage != stage_name:
             return False
         if self.result_status is not None and self.result_status != result.status:
             return False
+        for key, expected in self.output_equals.items():
+            if result.outputs.get(key) != expected:
+                return False
         if self.observation_codes:
             if result.observation is None:
                 return False
@@ -116,14 +120,15 @@ class LoopGuard:
                     failure_fingerprint=failure_fingerprint,
                     artifact_fingerprint=artifact_fingerprint,
                 )
-        artifact_count = state.artifact_fingerprints.get(artifact_fingerprint, 0) + 1
-        if artifact_count > self.retry_policy.max_same_artifact_fingerprint:
-            return LoopGuardDecision(
-                allowed=False,
-                reason="same_artifact_fingerprint",
-                failure_fingerprint=failure_fingerprint,
-                artifact_fingerprint=artifact_fingerprint,
-            )
+        if state.stage_attempts.get(next_stage, 0) > 0:
+            artifact_count = state.artifact_fingerprints.get(artifact_fingerprint, 0) + 1
+            if artifact_count > self.retry_policy.max_same_artifact_fingerprint:
+                return LoopGuardDecision(
+                    allowed=False,
+                    reason="same_artifact_fingerprint",
+                    failure_fingerprint=failure_fingerprint,
+                    artifact_fingerprint=artifact_fingerprint,
+                )
         return LoopGuardDecision(
             allowed=True,
             failure_fingerprint=failure_fingerprint,

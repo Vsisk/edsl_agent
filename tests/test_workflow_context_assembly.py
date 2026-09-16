@@ -4,14 +4,14 @@ from dataclasses import dataclass
 
 import pytest
 
-from agent.expression_workflow import (
+from agent.workflow import (
     ContextAssembler,
     ContextPolicy,
     HarnessContext,
     WorkflowDefinition,
     WorkflowRuntime,
 )
-from agent.expression_workflow.core import Stage, StageResult, WorkflowRunState
+from agent.workflow.core import Stage, StageResult, WorkflowRunState
 
 
 @dataclass

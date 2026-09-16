@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from agent.expression_workflow import (
+from agent.workflow import (
     ContextPolicy,
     HarnessContext,
     Observation,
@@ -13,7 +13,7 @@ from agent.expression_workflow import (
     WorkflowDefinition,
     WorkflowRuntime,
 )
-from agent.expression_workflow.core import Stage, StageResult, WorkflowRunState, WorkflowStatus
+from agent.workflow.core import Stage, StageResult, WorkflowRunState, WorkflowStatus
 
 
 @dataclass

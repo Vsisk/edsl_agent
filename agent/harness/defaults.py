@@ -9,6 +9,7 @@ from agent.harness.registry import WorkflowRegistry
 
 def create_default_workflow_registry(
     *,
+    value_logic_execute: Callable[..., Any] | None = None,
     expression_execute: Callable[..., Any] | None = None,
     legacy_adapters: dict[str, Callable[..., Any]] | None = None,
 ) -> WorkflowRegistry:
@@ -16,11 +17,21 @@ def create_default_workflow_registry(
     legacy_adapters = legacy_adapters or {}
     registry.register(
         WorkflowMetadata(
-            name="expression_generation",
-            description="Generate value logic expression for an existing or newly created node.",
+            name="value_logic_generation",
+            description="Generate value logic using SQL, BO field, summary, or expression branches.",
             input_schema={"type": "object"},
             output_schema={"type": "object"},
-            tags=("expression", "value_logic"),
+            tags=("value_logic",),
+        ),
+        ExpressionWorkflowAdapter(value_logic_execute or expression_execute or _unsupported_value_logic_execute),
+    )
+    registry.register(
+        WorkflowMetadata(
+            name="expression_generation",
+            description="Internal expression generation workflow used by value logic generation.",
+            input_schema={"type": "object"},
+            output_schema={"type": "object"},
+            tags=("expression", "internal"),
         ),
         ExpressionWorkflowAdapter(expression_execute or _unsupported_expression_execute),
     )
@@ -48,3 +59,6 @@ def create_default_workflow_registry(
 def _unsupported_expression_execute(*args: Any, **kwargs: Any) -> Any:
     raise RuntimeError("expression_generation workflow requires an expression_execute adapter")
 
+
+def _unsupported_value_logic_execute(*args: Any, **kwargs: Any) -> Any:
+    raise RuntimeError("value_logic_generation workflow requires a value_logic_execute adapter")

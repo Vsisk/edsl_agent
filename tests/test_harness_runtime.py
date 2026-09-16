@@ -28,11 +28,12 @@ def test_workflow_registry_registers_metadata_and_rejects_duplicates() -> None:
 
 
 def test_default_registry_exposes_workflow_level_capabilities_only() -> None:
-    registry = create_default_workflow_registry(expression_execute=lambda *_: {"expression": "x"})
+    registry = create_default_workflow_registry(value_logic_execute=lambda *_: {"expression": "x"})
 
     names = {metadata.name for metadata in registry.metadata()}
 
     assert {
+        "value_logic_generation",
         "expression_generation",
         "node_generation",
         "node_modify",
@@ -45,20 +46,20 @@ def test_default_registry_exposes_workflow_level_capabilities_only() -> None:
     assert "ast_validation" not in names
 
 
-def test_single_expression_request_routes_to_expression_workflow() -> None:
+def test_single_expression_request_routes_to_value_logic_workflow() -> None:
     calls = []
 
-    def expression_execute(expression_input, context):
-        calls.append((expression_input, context))
+    def value_logic_execute(value_logic_input, context):
+        calls.append((value_logic_input, context))
         return {"logic_type": "expression", "expression": "customer.name"}
 
     result = handle_harness_request(
         query="生成客户名称取值逻辑",
         context=HarnessContext(site_id="site1", project_id="project1"),
-        expression_execute=expression_execute,
+        value_logic_execute=value_logic_execute,
     )
 
-    assert [operation.workflow for operation in result.plan.operations] == ["expression_generation"]
+    assert [operation.workflow for operation in result.plan.operations] == ["value_logic_generation"]
     assert result.results["op_1"].status == OperationStatus.COMPLETED
     assert result.results["op_1"].output["expression"] == "customer.name"
     assert calls[0][0]["query"] == "生成客户名称取值逻辑"
@@ -72,15 +73,15 @@ def test_multi_workflow_request_builds_dependency_plan_and_executes_in_order() -
         execution_order.append(kwargs["operation"].workflow)
         return {"node_ref": "node-1"}
 
-    def expression_execute(expression_input, context):
-        execution_order.append("expression_generation")
-        dependency_results = expression_input["dependency_results"]
+    def value_logic_execute(value_logic_input, context):
+        execution_order.append("value_logic_generation")
+        dependency_results = value_logic_input["dependency_results"]
         assert dependency_results["op_1"].output == {"node_ref": "node-1"}
         return {"expression": "customer.groupName"}
 
     runtime = HarnessRuntime(
         registry=create_default_workflow_registry(
-            expression_execute=expression_execute,
+            value_logic_execute=value_logic_execute,
             legacy_adapters={"node_generation": node_generation},
         )
     )
@@ -92,9 +93,9 @@ def test_multi_workflow_request_builds_dependency_plan_and_executes_in_order() -
 
     assert [(operation.op_id, operation.workflow, operation.depends_on) for operation in result.plan.operations] == [
         ("op_1", "node_generation", []),
-        ("op_2", "expression_generation", ["op_1"]),
+        ("op_2", "value_logic_generation", ["op_1"]),
     ]
-    assert execution_order == ["node_generation", "expression_generation"]
+    assert execution_order == ["node_generation", "value_logic_generation"]
     assert result.results["op_2"].output == {"expression": "customer.groupName"}
 
 
@@ -104,7 +105,7 @@ def test_harness_skips_dependent_operations_when_dependency_fails() -> None:
 
     result = handle_harness_request(
         query="新增客户组名称字段，并生成对应的取值逻辑",
-        expression_execute=lambda *_: {"should_not_run": True},
+        value_logic_execute=lambda *_: {"should_not_run": True},
         legacy_adapters={"node_generation": failing_node_generation},
     )
 

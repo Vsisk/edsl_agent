@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 import pytest
 
-from agent.expression_workflow import (
+from agent.workflow import (
     CapabilityRegistries,
     ContextAssembler,
     ContextPolicy,
@@ -14,8 +14,8 @@ from agent.expression_workflow import (
     ToolDefinition,
     WorkflowDefinition,
 )
-from agent.expression_workflow.core import Stage, StageResult, WorkflowRunState
-from agent.expression_workflow.expression_capabilities import (
+from agent.workflow.core import Stage, StageResult, WorkflowRunState
+from agent.workflows.expression.capabilities import (
     create_expression_capability_registries,
 )
 

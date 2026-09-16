@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-from agent.expression_workflow.binder import StageInputBinder
-from agent.expression_workflow.context import ContextAssembler
-from agent.expression_workflow.core import (
+from agent.workflow.context import ContextAssembler
+from agent.workflow.core import (
     StageExecutionError,
     StageResult,
     WorkflowDefinition,
@@ -10,8 +9,22 @@ from agent.expression_workflow.core import (
     WorkflowStatus,
     execute_stage,
 )
-from agent.expression_workflow.transition import LoopGuard, RetryPolicy, TransitionPolicy
+from agent.workflow.transition import LoopGuard, RetryPolicy, TransitionPolicy
+from dataclasses import dataclass
 from typing import Any
+
+
+@dataclass(frozen=True, slots=True)
+class SubWorkflowRequest:
+    workflow_name: str
+    parent_run_id: str
+    workflow_input: dict[str, Any]
+    inherited_artifacts: dict[str, Any] | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class SubWorkflowResult:
+    state: WorkflowRunState
 
 
 class WorkflowRuntime:
@@ -19,12 +32,10 @@ class WorkflowRuntime:
         self,
         *,
         context_assembler: ContextAssembler | None = None,
-        binder: StageInputBinder | None = None,
         transition_policy: TransitionPolicy | None = None,
         retry_policy: RetryPolicy | None = None,
     ) -> None:
         self.context_assembler = context_assembler or ContextAssembler()
-        self.binder = binder or StageInputBinder(self.context_assembler)
         self.transition_policy = transition_policy or TransitionPolicy()
         self.retry_policy = retry_policy or RetryPolicy()
 
@@ -65,6 +76,32 @@ class WorkflowRuntime:
             state.status = WorkflowStatus.COMPLETED
         return state
 
+    def run_child(
+        self,
+        *,
+        definition: WorkflowDefinition,
+        parent_state: WorkflowRunState,
+        workflow_input: dict[str, Any],
+        environment: Any,
+        inherited_artifacts: dict[str, Any] | None = None,
+    ) -> SubWorkflowResult:
+        child_state = WorkflowRunState(
+            workflow_name=definition.name,
+            workflow_input=workflow_input,
+            parent_run_id=parent_state.run_id,
+        )
+        for key, value in (inherited_artifacts or {}).items():
+            child_state.set_artifact(key, value)
+        final_state = self.run(
+            definition=definition,
+            state=child_state,
+            environment=environment,
+        )
+        recorder = getattr(environment, "child_run_states", None)
+        if isinstance(recorder, list):
+            recorder.append(final_state)
+        return SubWorkflowResult(state=final_state)
+
     def run_stage(
         self,
         *,
@@ -76,12 +113,13 @@ class WorkflowRuntime:
         state.current_stage = stage_name
         stage = definition.get_stage(stage_name)
         try:
-            stage_input = self.binder.bind(
-                definition=definition,
+            stage_context = self.context_assembler.build(
+                harness_context=environment,
+                workflow_definition=definition,
+                workflow_state=state,
                 stage=stage,
-                state=state,
-                environment=environment,
             )
+            stage_input = stage_context.to_stage_input()
             return execute_stage(
                 stage=stage,
                 context=stage_input,

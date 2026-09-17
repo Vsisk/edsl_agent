@@ -1,4 +1,4 @@
-from agent.workflow.value_logic.definition import (
+from agent.workflows.value_logic.definition import (
     ValueLogicWorkflowDefinitionFactory,
     ValueLogicWorkflowFactory,
 )

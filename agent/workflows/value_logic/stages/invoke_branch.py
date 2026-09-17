@@ -7,7 +7,7 @@ from agent.workflow.runtime.run_state import WorkflowRunState
 from agent.workflow.runtime.runtime import WorkflowRuntime
 from agent.workflow.runtime.stage import Stage
 from agent.workflow.runtime.stage_result import Observation, ObservationSeverity, StageResult
-from agent.workflow.value_logic.result import ValueLogicBranchOutcome
+from agent.workflows.value_logic.result import ValueLogicBranchOutcome
 
 
 @dataclass

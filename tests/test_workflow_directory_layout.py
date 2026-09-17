@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+from pathlib import Path
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
 
 def test_runtime_directory_exports_core_workflow_types() -> None:
     from agent.workflow.runtime.definition import WorkflowDefinition
@@ -23,20 +28,28 @@ def test_runtime_directory_exports_core_workflow_types() -> None:
     assert SubWorkflowRequest.__module__.startswith("agent.workflow.runtime")
 
 
-def test_value_logic_directory_exports_parent_and_child_workflows() -> None:
-    from agent.workflow.value_logic.definition import ValueLogicWorkflowFactory
-    from agent.workflow.value_logic.input import ValueLogicWorkflowInput
-    from agent.workflow.value_logic.result import ValueLogicBranchOutcome
-    from agent.workflow.value_logic.branches.bo_field.definition import BoFieldWorkflowFactory
-    from agent.workflow.value_logic.branches.expression.definition import ExpressionWorkflowFactory
-    from agent.workflow.value_logic.branches.sql.definition import SqlValueLogicWorkflowFactory
+def test_concrete_workflows_directory_exports_value_logic_parent_and_children() -> None:
+    from agent.workflows.value_logic.definition import ValueLogicWorkflowFactory
+    from agent.workflows.value_logic.input import ValueLogicWorkflowInput
+    from agent.workflows.value_logic.result import ValueLogicBranchOutcome
+    from agent.workflows.value_logic.branches.bo_field.definition import BoFieldWorkflowFactory
+    from agent.workflows.value_logic.branches.expression.definition import ExpressionWorkflowFactory
+    from agent.workflows.value_logic.branches.sql.definition import SqlValueLogicWorkflowFactory
 
     assert ValueLogicWorkflowFactory.__name__ == "ValueLogicWorkflowFactory"
-    assert ValueLogicWorkflowFactory.__module__.startswith("agent.workflow.value_logic")
+    assert ValueLogicWorkflowFactory.__module__.startswith("agent.workflows.value_logic")
     assert ValueLogicWorkflowInput(query="q").query == "q"
     assert ValueLogicBranchOutcome(status="success", branch_type="expression").status == "success"
     assert callable(SqlValueLogicWorkflowFactory)
-    assert SqlValueLogicWorkflowFactory.__module__.startswith("agent.workflow.value_logic")
+    assert SqlValueLogicWorkflowFactory.__module__.startswith("agent.workflows.value_logic")
     assert callable(BoFieldWorkflowFactory)
-    assert BoFieldWorkflowFactory.__module__.startswith("agent.workflow.value_logic")
+    assert BoFieldWorkflowFactory.__module__.startswith("agent.workflows.value_logic")
     assert ExpressionWorkflowFactory.__name__ == "ExpressionWorkflowFactory"
+
+
+def test_generic_workflow_layer_contains_no_concrete_workflow_dependencies() -> None:
+    generic_workflow_root = PROJECT_ROOT / "agent" / "workflow"
+
+    assert not list((generic_workflow_root / "value_logic").rglob("*.py"))
+    for source_path in generic_workflow_root.rglob("*.py"):
+        assert "agent.workflows" not in source_path.read_text(encoding="utf-8")

@@ -1,4 +1,4 @@
-from agent.workflow.value_logic.branches.sql.input import BranchWorkflowInput
+from agent.workflows.value_logic.branches.sql.input import BranchWorkflowInput
 
 BoFieldWorkflowInput = BranchWorkflowInput
 

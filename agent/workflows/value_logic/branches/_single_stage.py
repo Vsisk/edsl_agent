@@ -3,7 +3,7 @@ from __future__ import annotations
 from agent.workflow.context import ContextPolicy
 from agent.workflow.runtime.definition import WorkflowDefinition
 from agent.workflow.runtime.stage import Stage
-from agent.workflow.value_logic.branches.sql.input import BranchWorkflowInput
+from agent.workflows.value_logic.branches.sql.input import BranchWorkflowInput
 
 
 class SingleStageBranchWorkflowFactory:

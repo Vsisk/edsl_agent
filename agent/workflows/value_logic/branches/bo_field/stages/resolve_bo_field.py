@@ -4,8 +4,8 @@ from typing import Any, Callable
 
 from agent.workflow.runtime.stage import Stage
 from agent.workflow.runtime.stage_result import StageResult
-from agent.workflow.value_logic.branches.bo_field.input import BoFieldWorkflowInput
-from agent.workflow.value_logic.result import ValueLogicBranchOutcome
+from agent.workflows.value_logic.branches.bo_field.input import BoFieldWorkflowInput
+from agent.workflows.value_logic.result import ValueLogicBranchOutcome
 
 
 class BoFieldWorkflowStage(Stage):

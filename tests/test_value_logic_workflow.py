@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from agent.workflow.value_logic import (
+from agent.workflows.value_logic import (
     ValueLogicBranchOutcome,
     ValueLogicExecutionEnvironment,
     ValueLogicWorkflowFactory,

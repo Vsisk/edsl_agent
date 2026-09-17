@@ -49,7 +49,7 @@ from agent.workflows.expression import (
     ExpressionWorkflowResultAdapter,
     create_expression_capability_registries,
 )
-from agent.workflow.value_logic import (
+from agent.workflows.value_logic import (
     ValueLogicExecutionEnvironment,
     ValueLogicWorkflowFactory,
     ValueLogicWorkflowHandler,

@@ -4,9 +4,9 @@ from typing import Any, Callable
 
 from agent.workflow.runtime.stage import Stage
 from agent.workflow.runtime.stage_result import Observation, ObservationSeverity, StageResult
-from agent.workflow.value_logic.branches._single_stage import SingleStageBranchWorkflowFactory
-from agent.workflow.value_logic.branches.sql.input import BranchWorkflowInput
-from agent.workflow.value_logic.result import ValueLogicBranchOutcome
+from agent.workflows.value_logic.branches._single_stage import SingleStageBranchWorkflowFactory
+from agent.workflows.value_logic.branches.sql.input import BranchWorkflowInput
+from agent.workflows.value_logic.result import ValueLogicBranchOutcome
 from agent.workflows.expression.definition import ExpressionWorkflowFactory
 
 

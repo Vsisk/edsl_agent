@@ -1,4 +1,4 @@
-from agent.workflow.value_logic.result import ValueLogicBranchOutcome
+from agent.workflows.value_logic.result import ValueLogicBranchOutcome
 
 ExpressionWorkflowResult = ValueLogicBranchOutcome
 

@@ -13,7 +13,7 @@ from agent.harness import (
 )
 from agent.harness.adapters import LegacyCallableWorkflowAdapter, LegacyWorkflowAdapter
 from agent.harness.adapters import WorkflowRuntimeAdapter
-from agent.workflow.value_logic import ValueLogicExecutionEnvironment, ValueLogicWorkflowFactory
+from agent.workflows.value_logic import ValueLogicExecutionEnvironment, ValueLogicWorkflowFactory
 
 
 class _Target:

@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
-from agent.workflow.value_logic.branches._single_stage import SingleStageBranchWorkflowFactory
-from agent.workflow.value_logic.branches.bo_field.stages.resolve_bo_field import BoFieldWorkflowStage
+from agent.workflows.value_logic.branches._single_stage import SingleStageBranchWorkflowFactory
+from agent.workflows.value_logic.branches.bo_field.stages.resolve_bo_field import BoFieldWorkflowStage
 
 
 def create_bo_field_workflow_factory(

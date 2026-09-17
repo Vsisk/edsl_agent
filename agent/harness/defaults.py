@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
-from agent.harness.adapters import ExpressionWorkflowAdapter, LegacyWorkflowAdapter, WorkflowRuntimeAdapter
+from agent.harness.adapters import LegacyCallableWorkflowAdapter, LegacyWorkflowAdapter, WorkflowRuntimeAdapter
 from agent.harness.models import WorkflowMetadata
 from agent.harness.registry import WorkflowRegistry
 
@@ -23,7 +23,7 @@ def create_default_workflow_registry(
             environment_builder=value_logic_environment_builder,
         )
         if value_logic_workflow_factory is not None
-        else ExpressionWorkflowAdapter(value_logic_execute or expression_execute or _unsupported_value_logic_execute)
+        else LegacyCallableWorkflowAdapter(value_logic_execute or expression_execute or _unsupported_value_logic_execute)
     )
     registry.register(
         WorkflowMetadata(
@@ -45,7 +45,7 @@ def create_default_workflow_registry(
             visibility="internal",
             tags=("expression", "internal"),
         ),
-        ExpressionWorkflowAdapter(expression_execute or _unsupported_expression_execute),
+        LegacyCallableWorkflowAdapter(expression_execute or _unsupported_expression_execute),
     )
     registry.register(
         WorkflowMetadata(

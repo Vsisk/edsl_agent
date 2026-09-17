@@ -10,7 +10,9 @@ from agent.workflow.capabilities import (
     SkillDefinition,
     ToolDefinition,
 )
-from agent.workflow.core import Stage, WorkflowDefinition, WorkflowRunState
+from agent.workflow.runtime.definition import WorkflowDefinition
+from agent.workflow.runtime.run_state import WorkflowRunState
+from agent.workflow.runtime.stage import Stage
 
 
 @dataclass(frozen=True, slots=True)

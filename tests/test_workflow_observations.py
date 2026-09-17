@@ -8,7 +8,9 @@ from agent.workflow import (
     WorkflowDefinition,
     WorkflowRuntime,
 )
-from agent.workflow.core import Stage, StageResult, WorkflowRunState, WorkflowStatus
+from agent.workflow.runtime.run_state import WorkflowRunState, WorkflowStatus
+from agent.workflow.runtime.stage import Stage
+from agent.workflow.runtime.stage_result import StageResult
 from agent.workflows.expression import (
     ExpressionFailureClassifier,
     ExpressionObservationCode,

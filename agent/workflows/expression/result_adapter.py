@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
-from agent.workflow.core import WorkflowRunState, WorkflowStatus
+from agent.workflow.runtime.run_state import WorkflowRunState, WorkflowStatus
 
 
 class ExpressionWorkflowResultAdapter:

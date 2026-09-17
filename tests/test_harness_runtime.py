@@ -11,7 +11,7 @@ from agent.harness import (
     create_default_workflow_registry,
     handle_harness_request,
 )
-from agent.harness.adapters import LegacyWorkflowAdapter
+from agent.harness.adapters import LegacyCallableWorkflowAdapter, LegacyWorkflowAdapter
 from agent.harness.adapters import WorkflowRuntimeAdapter
 from agent.workflow.value_logic import ValueLogicExecutionEnvironment, ValueLogicWorkflowFactory
 
@@ -50,6 +50,12 @@ def test_workflow_registry_registers_metadata_and_rejects_duplicates() -> None:
     assert registry.get("expression_generation").metadata.description == "Generate expression"
     with pytest.raises(ValueError, match="workflow already registered"):
         registry.register(metadata, LegacyWorkflowAdapter(lambda **_: {"ok": True}))
+
+
+def test_legacy_callable_workflow_adapter_is_the_callback_adapter_name() -> None:
+    adapter = LegacyCallableWorkflowAdapter(lambda workflow_input, context: workflow_input)
+
+    assert adapter is not None
 
 
 def test_default_registry_exposes_workflow_level_capabilities_only() -> None:

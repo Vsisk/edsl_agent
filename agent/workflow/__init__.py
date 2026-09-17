@@ -16,18 +16,16 @@ from agent.workflow.context import (
     StageContext,
     WorkflowContext,
 )
-from agent.workflow.core import (
+from agent.workflow.runtime.definition import WorkflowDefinition
+from agent.workflow.runtime.run_state import WorkflowRunState, WorkflowStatus
+from agent.workflow.runtime.runtime import WorkflowRuntime
+from agent.workflow.runtime.stage import Stage, StageExecutionError
+from agent.workflow.runtime.stage_result import (
     Observation,
     ObservationSeverity,
-    Stage,
-    StageExecutionError,
     StageResult,
     StageSignal,
-    WorkflowDefinition,
-    WorkflowRunState,
-    WorkflowStatus,
 )
-from agent.workflow.executor import WorkflowRuntime
 from agent.workflow.transition import (
     LoopGuard,
     RetryPolicy,

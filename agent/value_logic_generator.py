@@ -41,7 +41,7 @@ from agent.expression_generate_op.type_system import TypeRegistry, create_builti
     normalize_return_type
 from agent.expression_generate_op.typed_context import TypedExpressionContextBuilder, TypedExpressionContextBuildInput, \
     TypedExpressionContext
-from agent.workflow.core import StageExecutionError
+from agent.workflow.runtime.stage import StageExecutionError
 from agent.workflows.expression import (
     ExpressionExecutionEnvironment,
     ExpressionWorkflowFactory,

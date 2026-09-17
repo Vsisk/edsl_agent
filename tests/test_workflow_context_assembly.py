@@ -11,7 +11,9 @@ from agent.workflow import (
     WorkflowDefinition,
     WorkflowRuntime,
 )
-from agent.workflow.core import Stage, StageResult, WorkflowRunState
+from agent.workflow.runtime.run_state import WorkflowRunState
+from agent.workflow.runtime.stage import Stage
+from agent.workflow.runtime.stage_result import StageResult
 
 
 @dataclass

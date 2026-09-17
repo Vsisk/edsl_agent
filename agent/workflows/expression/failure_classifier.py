@@ -3,7 +3,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import Any
 
-from agent.workflow.core import Observation, ObservationSeverity
+from agent.workflow.runtime.stage_result import Observation, ObservationSeverity
 
 
 class ExpressionObservationCode(str, Enum):

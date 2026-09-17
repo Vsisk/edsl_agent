@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from agent.workflow.context import ContextPolicy
-from agent.workflow.core import WorkflowDefinition
+from agent.workflow.runtime.definition import WorkflowDefinition
 from agent.workflow.transition import RetryPolicy, TransitionPolicy, TransitionRule
 from agent.workflows.expression.failure_classifier import ExpressionFailureClassifier
 

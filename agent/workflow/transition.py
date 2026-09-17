@@ -5,7 +5,9 @@ import hashlib
 import json
 from typing import Any
 
-from agent.workflow.core import StageResult, WorkflowDefinition, WorkflowRunState
+from agent.workflow.runtime.definition import WorkflowDefinition
+from agent.workflow.runtime.run_state import WorkflowRunState
+from agent.workflow.runtime.stage_result import StageResult
 
 
 @dataclass(frozen=True, slots=True)

@@ -3,8 +3,8 @@ from __future__ import annotations
 from typing import Any, Callable
 
 from agent.harness.models import HarnessContext, Operation, OperationResult
-from agent.workflow.core import WorkflowRunState
-from agent.workflow.executor import WorkflowRuntime
+from agent.workflow.runtime.run_state import WorkflowRunState
+from agent.workflow.runtime.runtime import WorkflowRuntime
 
 
 class UnsupportedWorkflowError(RuntimeError):
@@ -31,7 +31,7 @@ class LegacyWorkflowAdapter:
         )
 
 
-class ExpressionWorkflowAdapter:
+class LegacyCallableWorkflowAdapter:
     def __init__(self, execute: Callable[..., Any]) -> None:
         self._execute = execute
 

@@ -1,5 +1,5 @@
 from agent.harness.adapters import (
-    ExpressionWorkflowAdapter,
+    LegacyCallableWorkflowAdapter,
     LegacyWorkflowAdapter,
     UnsupportedWorkflowError,
     WorkflowRuntimeAdapter,
@@ -21,9 +21,9 @@ from agent.harness.router import WorkflowRouter
 from agent.harness.runtime import HarnessRuntime
 
 __all__ = [
-    "ExpressionWorkflowAdapter",
     "HarnessContext",
     "HarnessRunResult",
+    "LegacyCallableWorkflowAdapter",
     "LegacyWorkflowAdapter",
     "Operation",
     "OperationPlan",

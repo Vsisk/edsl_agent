@@ -14,7 +14,9 @@ from agent.workflow import (
     ToolDefinition,
     WorkflowDefinition,
 )
-from agent.workflow.core import Stage, StageResult, WorkflowRunState
+from agent.workflow.runtime.run_state import WorkflowRunState
+from agent.workflow.runtime.stage import Stage
+from agent.workflow.runtime.stage_result import StageResult
 from agent.workflows.expression.capabilities import (
     create_expression_capability_registries,
 )
